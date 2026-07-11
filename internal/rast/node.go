@@ -132,6 +132,8 @@ const (
 	TQuery     Kind = 116 // typeof-type; Kids = [expr]
 	TParam     Kind = 117 // type-parameter binder; Kids = [constraint|KNone, default|KNone]
 	TReadonly  Kind = 118 // readonly array/tuple operator; Kids = [type]
+	TMapped    Kind = 119 // U bits0-1 readonly none/+/-, bits2-3 question none/+/-; Kids = [TParam, srcType, asType|KNone, valueType]
+	TTemplLit  Kind = 120 // template-literal type; Kids = [KList of alternating KStrPart and types]
 
 	kindMax = 200
 )

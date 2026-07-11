@@ -112,6 +112,8 @@ var schema = func() [kindMax]fieldSchema {
 	set(TQuery, false, false, false)
 	set(TParam, false, false, false)
 	set(TReadonly, false, false, false)
+	set(TMapped, false, true, false)
+	set(TTemplLit, false, false, false)
 
 	return s
 }()
@@ -145,5 +147,5 @@ var allKinds = []Kind{
 	KTypeAlias, KInterface, KNativeBody,
 	TKeyword, TLiteral, TArray, TTuple, TUnion, TInter, TRef, TLocal, TCatRef,
 	TObject, TPropSig, TIndexSig, TFunc, TCond, TKeyof, TIndexed, TQuery,
-	TParam, TReadonly,
+	TParam, TReadonly, TMapped, TTemplLit,
 }

@@ -515,9 +515,19 @@ func (p *printer) propKey(n *Node, computed bool) string {
 func (p *printer) expr(n *Node) string {
 	switch n.Kind {
 	case KNum:
-		return numLit(n.U)
+		// Negative literals (folded unary minus, incl. -0) are parenthesized so
+		// contexts like `x ** -2` re-parse unambiguously; parens are trivia.
+		s := numLit(n.U)
+		if strings.HasPrefix(s, "-") {
+			return "(" + s + ")"
+		}
+		return s
 	case KBigInt:
-		return bigLit(n) + "n"
+		s := bigLit(n) + "n"
+		if strings.HasPrefix(s, "-") {
+			return "(" + s + ")"
+		}
+		return s
 	case KStr:
 		return quoteStr(n.Str)
 	case KBool:
@@ -740,9 +750,58 @@ func (p *printer) typ(n *Node) string {
 		return p.typ(n.Kids[0]) + "[" + p.typ(n.Kids[1]) + "]"
 	case TQuery:
 		return "(typeof " + p.expr(n.Kids[0]) + ")"
+	case TMapped:
+		return p.mappedType(n)
+	case TTemplLit:
+		return p.templLitType(n)
+	case KSelfRef:
+		// Self-reference in type position (recursive type alias/interface).
+		return safeName(p.selfName) + p.typeArgList(n)
 	default:
 		return "/*type?" + kindName(n.Kind) + "*/"
 	}
+}
+
+// mappedType prints `{ ±readonly [K in Src as As]±?: V }` (TMapped).
+func (p *printer) mappedType(n *Node) string {
+	tp, src, as, val := n.Kids[0], n.Kids[1], n.Kids[2], n.Kids[3]
+	p.tbind = append(p.tbind, tp)
+	var sb strings.Builder
+	sb.WriteString("{ ")
+	switch n.U & 3 {
+	case 1:
+		sb.WriteString("readonly ")
+	case 2:
+		sb.WriteString("-readonly ")
+	}
+	sb.WriteString("[" + safeName(p.tname[tp]) + " in " + p.typ(src))
+	if !as.IsNone() {
+		sb.WriteString(" as " + p.typ(as))
+	}
+	sb.WriteString("]")
+	switch (n.U >> 2) & 3 {
+	case 1:
+		sb.WriteString("?")
+	case 2:
+		sb.WriteString("-?")
+	}
+	sb.WriteString(": " + p.typ(val) + " }")
+	p.tbind = p.tbind[:len(p.tbind)-1]
+	return sb.String()
+}
+
+func (p *printer) templLitType(n *Node) string {
+	var sb strings.Builder
+	sb.WriteString("`")
+	for _, part := range n.Kids[0].Kids {
+		if part.Kind == KStrPart {
+			sb.WriteString(escapeTemplate(part.Str))
+		} else {
+			sb.WriteString("${" + p.typ(part) + "}")
+		}
+	}
+	sb.WriteString("`")
+	return sb.String()
 }
 
 // typeMembers prints a KList of TPropSig/TIndexSig as an object-type body.

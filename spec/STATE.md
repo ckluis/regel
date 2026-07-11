@@ -6,7 +6,8 @@
 - Phase 2 (LUMINARY): DONE — verdict REVISE. P0×2, P1×17, P2×29, P3×6; all P0/P1 citations grep-verified; 14 mandated revisions in spec/luminary/REPORT.md (with targeted re-review map). Runbook v2.1 fetched live, 12-expert locked roster, clashes C1-C3 all COMPROMISE.
 - Phase 3 iter 1/2 — ARCH-R1: DONE. 14/14 revisions applied + fable integration pass (5 cross-ADR contradictions fixed). ADR-13-observability created. Ledger: spec/architecture/REVISIONS-R1.md (incl. 4 documented deviations: R1-07 M1-not-M0 tsgo budget; R1-08 patch_id optional/enum 7; R1-12 SQL literal kept; R1-13 restart-authority disable). Markers: R1-<nn> + R1-INT grep-verified.
 - Phase 3 iter 1/2 — LUMINARY-R1 re-review: DONE — **VERDICT: GO** (spec/luminary/REPORT-R1.md). 14/14 SATISFIED; both P0 red flags CLEARED (Celko, Bach); Allspaw+Karpathy stay withdrawn; all 4 deviations ACCEPTED. New findings 0 P0/P1, 7 P2, 16 P3 → tracked backlog with expert owners; 8 out-of-scope carries. No iteration 2 needed.
-- GATE 1: IN PROGRESS — opus agent writing spec/GATE-1.md; operator GO/revise/stop decision pending. **No build before operator GO.**
+- GATE 1: **OPERATOR GO (Stage A only)** 2026-07-10 — spec/GATE-1.md; design corpus committed (1cde410). Re-decide at Stage A gate before Stage B.
+- Phase 4 Stage A (walking skeleton, =M0, est. 2 sessions): IN PROGRESS — fable build sub-orchestrator.
 
 ## Facts
 - Project root: /Users/clank/Desktop/projects/regel (git initialized 2026-07-09).

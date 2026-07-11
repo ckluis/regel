@@ -1,0 +1,5 @@
+# binaries
+/regel
+/dist/
+# vendored tsgo fork node artifacts
+third_party/typescript-go/node_modules/

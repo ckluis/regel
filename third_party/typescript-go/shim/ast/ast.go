@@ -51,3 +51,22 @@ var (
 	IsArrowFunction        = ast.IsArrowFunction
 	IsExpressionStatement  = ast.IsExpressionStatement
 )
+
+// --- additions for regel.dev/regel/internal/lower (pure aliases, zero logic) ---
+
+// Node flags the lowering pass needs to distinguish let/const/var declaration
+// lists and modifier flags for export/async/declare/readonly detection.
+const (
+	NodeFlagsNone  = ast.NodeFlagsNone
+	NodeFlagsLet   = ast.NodeFlagsLet
+	NodeFlagsConst = ast.NodeFlagsConst
+)
+
+// Comment extraction surface (ADR-02 §2 comment/docstring sidecar).
+type (
+	CommentRange     = ast.CommentRange
+	NodeFactory      = ast.NodeFactory
+	NodeFactoryHooks = ast.NodeFactoryHooks
+)
+
+var NewNodeFactory = ast.NewNodeFactory

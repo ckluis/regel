@@ -7,3 +7,8 @@ import "github.com/microsoft/typescript-go/internal/scanner"
 // GetECMALineAndUTF16CharacterOfPosition returns the 0-based line and UTF-16
 // character offset for a byte position in a source file.
 var GetECMALineAndUTF16CharacterOfPosition = scanner.GetECMALineAndUTF16CharacterOfPosition
+
+// GetLeadingCommentRanges iterates the comment ranges in text following pos —
+// used by internal/lower to strip comments/docstrings into the ADR-02 §2
+// sidecar. Pure re-export.
+var GetLeadingCommentRanges = scanner.GetLeadingCommentRanges

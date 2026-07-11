@@ -1,0 +1,20 @@
+github.com/microsoft/typescript-go@v0.0.0-20260709225601-168e7015edf9  (vendored 2026-07-10)
+
+Source: Go module cache copy of the pinned pseudo-version above.
+Wired into the root module (regel.dev/regel) via a `replace` directive; the fork
+keeps its own module path `github.com/microsoft/typescript-go` so its internal/*
+packages remain importable from the added public shim/ packages inside this module.
+
+Pruned dead weight (nothing under internal/ that the shim needs was touched):
+  _extension, _extension-nightly, _packages, _build, _scripts, _submodules,
+  cmd/, all testdata/ dirs, node_modules, .git, .github, .devcontainer, .vscode,
+  every *_test.go, and the JS build metadata (Herebyfile.mjs, package.json,
+  package-lock.json, .gulp.js).
+Kept: go.mod, go.sum, LICENSE, NOTICE.txt, and all of internal/ (bundled/libs
+  lib.d.ts files are embedded and required — kept verbatim).
+
+Edits to fork internal/ source: NONE. The tree compiles as-is (`go build ./...`
+green inside third_party/typescript-go). All regel-facing surface is added under
+shim/ as pure re-export aliases; zero logic, zero edits to upstream code.
+
+Checker version reported by internal/core.Version(): 7.1.0-dev (TS7.x).

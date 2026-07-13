@@ -69,11 +69,11 @@ func (s *Server) StartReactor(ctx context.Context, cfg ReactorConfig) *Reactor {
 	rctx, cancel := context.WithCancel(ctx)
 	r := &Reactor{srv: s, cfg: cfg.withDefaults(), cancel: cancel, wake: make(chan struct{}, 1)}
 	r.wg.Add(5)
-	go r.loop(rctx, r.cfg.PollInterval, r.drainOnce, true)      // 2. DRAIN
-	go r.loop(rctx, r.cfg.PollInterval, r.timerOnce, false)     // 1. TIMER SCANNER
+	go r.loop(rctx, r.cfg.PollInterval, r.drainOnce, true)        // 2. DRAIN
+	go r.loop(rctx, r.cfg.PollInterval, r.timerOnce, false)       // 1. TIMER SCANNER
 	go r.loop(rctx, r.cfg.HeartbeatEvery, r.heartbeatOnce, false) // 3. HEARTBEAT
-	go r.loop(rctx, r.cfg.ReapEvery, r.reaperOnce, false)      // 4. REAPER
-	go r.listenLoop(rctx)                                       // 5. LISTEN
+	go r.loop(rctx, r.cfg.ReapEvery, r.reaperOnce, false)         // 4. REAPER
+	go r.listenLoop(rctx)                                         // 5. LISTEN
 	return r
 }
 
@@ -145,7 +145,34 @@ func (r *Reactor) trip(fence cfr.ErrEpochFence) {
 // --- 1. TIMER SCANNER --------------------------------------------------------
 
 func (r *Reactor) timerOnce(ctx context.Context) error {
-	return nil // RED stub
+	conn, err := r.srv.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.srv.pool.Release(conn)
+	res, err := conn.Exec(ctx, `
+WITH due AS (
+  SELECT id FROM continuation
+  WHERE status='sleeping' AND wake->>'kind'='timer'
+    AND wake->>'due' <= to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+  ORDER BY wake->>'due' LIMIT $1 FOR UPDATE SKIP LOCKED
+), up AS (
+  UPDATE continuation c SET status='ready', updated_at=now()
+  FROM due WHERE c.id=due.id
+  RETURNING c.id, c.step_seq
+)
+INSERT INTO task (id, kind, run_at, payload)
+SELECT gen_random_uuid(), 'resume', now(),
+  jsonb_build_object('continuation_id', id::text, 'step_seq', step_seq)
+FROM up`, r.cfg.TimerBatch)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected > 0 {
+		_, _ = conn.Exec(ctx, `NOTIFY task`)
+		r.signalDrain()
+	}
+	return nil
 }
 
 // --- 2. DRAIN ----------------------------------------------------------------
@@ -158,7 +185,22 @@ type claimedTask struct {
 }
 
 func (r *Reactor) drainOnce(ctx context.Context) error {
-	return nil // RED stub
+	tasks, err := r.claimTasks(ctx)
+	if err != nil {
+		return err
+	}
+	for _, t := range tasks {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		if err := r.runTask(ctx, t); err != nil {
+			return err // epoch fence bubbles up to trip
+		}
+	}
+	if len(tasks) == r.cfg.DrainBatch {
+		r.signalDrain() // batch was full — keep draining
+	}
+	return nil
 }
 
 func (r *Reactor) claimTasks(ctx context.Context) ([]claimedTask, error) {
@@ -266,13 +308,69 @@ func (r *Reactor) deadTask(ctx context.Context, t claimedTask, cause error) erro
 // --- 3. HEARTBEAT ------------------------------------------------------------
 
 func (r *Reactor) heartbeatOnce(ctx context.Context) error {
-	return nil // RED stub
+	conn, err := r.srv.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.srv.pool.Release(conn)
+	secs := r.cfg.LeaseSeconds
+	if _, err := conn.Exec(ctx, `
+UPDATE task SET lease_until=now()+make_interval(secs=>$1)
+ WHERE lease_owner=$2::uuid AND status='running'`, secs, r.srv.kernelID); err != nil {
+		return err
+	}
+	_, err = conn.Exec(ctx, `
+UPDATE continuation SET lease_until=now()+make_interval(secs=>$1)
+ WHERE lease_owner=$2::uuid AND status='running'`, secs, r.srv.kernelID)
+	return err
 }
 
 // --- 4. REAPER ---------------------------------------------------------------
 
 func (r *Reactor) reaperOnce(ctx context.Context) error {
-	return nil // RED stub
+	conn, err := r.srv.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.srv.pool.Release(conn)
+
+	// Expired running tasks → re-offer (ready).
+	res, err := conn.Exec(ctx, `
+UPDATE task SET status='ready', lease_owner=NULL
+ WHERE id IN (
+   SELECT id FROM task WHERE status='running' AND lease_until<now()
+   ORDER BY lease_until LIMIT $1 FOR UPDATE SKIP LOCKED)`, r.cfg.ReapBatch)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected > 0 {
+		cfr.IncReoffers(res.RowsAffected)
+	}
+
+	// Expired running continuations → ready + fresh resume task with CURRENT
+	// step_seq (the old task's payload seq is stale by design).
+	res2, err := conn.Exec(ctx, `
+WITH exp AS (
+  SELECT id, step_seq FROM continuation WHERE status='running' AND lease_until<now()
+  ORDER BY lease_until LIMIT $1 FOR UPDATE SKIP LOCKED
+), up AS (
+  UPDATE continuation c SET status='ready', lease_owner=NULL, updated_at=now()
+  FROM exp WHERE c.id=exp.id
+  RETURNING c.id, c.step_seq
+)
+INSERT INTO task (id, kind, run_at, payload)
+SELECT gen_random_uuid(), 'resume', now(),
+  jsonb_build_object('continuation_id', id::text, 'step_seq', step_seq)
+FROM up`, r.cfg.ReapBatch)
+	if err != nil {
+		return err
+	}
+	if res2.RowsAffected > 0 {
+		cfr.IncReoffers(res2.RowsAffected)
+		_, _ = conn.Exec(ctx, `NOTIFY task`)
+		r.signalDrain()
+	}
+	return nil
 }
 
 // --- 5. LISTEN ---------------------------------------------------------------

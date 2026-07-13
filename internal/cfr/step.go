@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"sync/atomic"
+	"time"
 
 	"regel.dev/regel/internal/cek"
+	"regel.dev/regel/internal/pgwire"
 )
 
 // StepEnv threads the claiming kernel's identity, pinned epoch, and lease length
@@ -77,10 +80,10 @@ func MetricsSnapshot() Metrics {
 
 // IncCASLoss / IncReoffer / IncTaskDrained let the reactor record its counters
 // through the same registry the store publishes.
-func IncCASLoss()     { atomic.AddInt64(&mCASLosses, 1) }
-func IncReoffer()     { atomic.AddInt64(&mReoffers, 1) }
+func IncCASLoss()         { atomic.AddInt64(&mCASLosses, 1) }
+func IncReoffer()         { atomic.AddInt64(&mReoffers, 1) }
 func IncReoffers(n int64) { atomic.AddInt64(&mReoffers, n) }
-func IncTaskDrained() { atomic.AddInt64(&mTasksDrained, 1) }
+func IncTaskDrained()     { atomic.AddInt64(&mTasksDrained, 1) }
 
 // RetrySerializable runs fn under the ADR-05 §7 retry-on-40001 policy: up to 5
 // attempts, capped exponential backoff (base 10ms, factor 2, cap 500ms) with full
@@ -88,7 +91,37 @@ func IncTaskDrained() { atomic.AddInt64(&mTasksDrained, 1) }
 // Each retry re-runs the WHOLE step from the claim — safe because nothing escaped
 // before COMMIT. Aborts and exhaustion feed the abort-rate budget counters.
 func RetrySerializable(ctx context.Context, label string, fn func(attempt int) error) error {
-	return fn(0) // RED stub — no retry, no counters
+	const (
+		maxAttempts = 5
+		base        = 10 * time.Millisecond
+		cap         = 500 * time.Millisecond
+	)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err := fn(attempt)
+		if err == nil {
+			return nil
+		}
+		if !pgwire.IsCode(err, "40001") && !pgwire.IsCode(err, "40P01") {
+			return err
+		}
+		atomic.AddInt64(&mSerializationAborts, 1)
+		if attempt == maxAttempts-1 {
+			atomic.AddInt64(&mRetryExhausted, 1)
+			return err
+		}
+		// capped exponential backoff, full jitter
+		d := base << attempt
+		if d > cap {
+			d = cap
+		}
+		sleep := time.Duration(rand.Int63n(int64(d) + 1))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sleep):
+		}
+	}
+	return nil
 }
 
 // --- LoadResult --------------------------------------------------------------
@@ -127,7 +160,54 @@ func LoadResult(ctx context.Context, db DB, id string) (cek.Value, bool, error) 
 // step. wake={"kind":"timer","due":now} satisfies wake_kind_shape without arming
 // the sleeping-timer scanner (that scans status='sleeping' only).
 func StartWorkflow(ctx context.Context, db DB, env StepEnv, in ChildStater, rootHash string, args []cek.Value, principal map[string]any, tier cek.Tier) (string, error) {
-	return "", fmt.Errorf("cfr: StartWorkflow unimplemented (RED)")
+	st, err := in.InitialState(rootHash, nil, args, tier, defaultFuel(tier), defaultAlloc(tier))
+	if err != nil {
+		return "", err
+	}
+	frames, err := Encode(st)
+	if err != nil {
+		return "", err
+	}
+	principalJSON, err := jsonOrEmpty(principal)
+	if err != nil {
+		return "", err
+	}
+	contID := uuid4()
+	err = RetrySerializable(ctx, "start-workflow", func(int) error {
+		if e := db.BeginSerializable(ctx); e != nil {
+			return e
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = db.Rollback(ctx)
+			}
+		}()
+		if _, e := db.Exec(ctx, `
+INSERT INTO continuation (id, kind, root_def_hash, epoch, format_ver, frames, wake, status, principal, step_seq)
+VALUES ($1,'workflow',$2,$3,$4,$5::bytea,
+  jsonb_build_object('kind','timer','due',
+    to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),
+  'ready',$6::jsonb,0)`,
+			contID, rootHash, epochOrOne(env), FormatVersion, byteaLiteral(frames), principalJSON); e != nil {
+			return e
+		}
+		if e := insertResumeTask(ctx, db, contID, 0); e != nil {
+			return e
+		}
+		if e := notifyTask(ctx, db); e != nil {
+			return e
+		}
+		if e := db.Commit(ctx); e != nil {
+			return e
+		}
+		committed = true
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return contID, nil
 }
 
 // --- SendChannel -------------------------------------------------------------
@@ -138,7 +218,43 @@ func StartWorkflow(ctx context.Context, db DB, env StepEnv, in ChildStater, root
 // returns the receiver continuation id, or "" when the message was queued for a
 // future receiver.
 func SendChannel(ctx context.Context, db DB, env StepEnv, channel string, value cek.Value, sentBy string) (string, error) {
-	return "", fmt.Errorf("cfr: SendChannel unimplemented (RED)")
+	payload, err := EncodeValue(value)
+	if err != nil {
+		return "", err
+	}
+	var deliveredTo string
+	err = RetrySerializable(ctx, "channel-send", func(int) error {
+		deliveredTo = ""
+		if e := db.BeginSerializable(ctx); e != nil {
+			return e
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = db.Rollback(ctx)
+			}
+		}()
+		msgID := uuid4()
+		if _, e := db.Exec(ctx, `
+INSERT INTO channel_message (id, channel, payload, sent_by) VALUES ($1,$2,$3::bytea,$4)`,
+			msgID, channel, byteaLiteral(payload), sentBy); e != nil {
+			return e
+		}
+		to, e := deliverToOldestReceiver(ctx, db, channel, msgID)
+		if e != nil {
+			return e
+		}
+		deliveredTo = to
+		if e := db.Commit(ctx); e != nil {
+			return e
+		}
+		committed = true
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return deliveredTo, nil
 }
 
 // deliverToOldestReceiver claims msgID for the oldest sleeping message-receiver on

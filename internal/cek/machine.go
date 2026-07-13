@@ -40,6 +40,12 @@ const (
 	ParkFuel     ParkKind = iota // fuelMeter breach: resume restores exactly + granted fuel
 	ParkGovernor                 // governorMeter breach: resume restores exactly
 	ParkSignal                   // std signal(): resume delivers restart value at the call point
+	// APPEND-ONLY (ADR-05 §8: park kinds never renumber). ParkWake resumes a wake
+	// park by delivering a value at the parked call point (timer: undefined;
+	// message: payload; join: results). ParkFresh is an initial, never-stepped
+	// state: resume delivers nothing and just runs (the CFR seed InitialState builds).
+	ParkWake
+	ParkFresh
 )
 
 // State is the complete serializable machine snapshot at a park point (ADR-05

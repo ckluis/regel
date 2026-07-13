@@ -363,15 +363,23 @@ func (m *machine) performNative(f *Frame, hash string, args []Value) (Outcome, b
 	if !ok {
 		return m.fault("no native registered for %s", hash)
 	}
-	v, cond := fn(m.host, args)
-	if cond != nil {
+	v, park := fn(m.host, args)
+	if park != nil {
+		// Both park kinds re-enter at this call point in Apply mode on resume: pop
+		// FrCall, park m at the call, and snapshot. ParkWake carries a wake trigger
+		// (the store delivers a value on wake); ParkSignal carries a durable
+		// condition (an operator/agent delivers a restart value).
 		callPath := f.Path.clone()
 		m.pop() // pop FrCall; resume re-enters in apply mode at this point
 		m.path = callPath
 		m.mode = ModeApply
 		m.val = undef()
+		if park.Wake != nil {
+			st := m.snapshot(ParkWake)
+			return Outcome{Kind: OutParked, State: st, Wake: park.Wake, Transitions: m.transitions}, true
+		}
 		st := m.snapshot(ParkSignal)
-		return Outcome{Kind: OutParked, State: st, Condition: cond, Transitions: m.transitions}, true
+		return Outcome{Kind: OutParked, State: st, Condition: park.Condition, Transitions: m.transitions}, true
 	}
 	m.pop()
 	m.apply(v)

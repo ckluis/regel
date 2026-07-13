@@ -312,7 +312,9 @@ WHERE continuation_id = $1 AND status = 'open' ORDER BY signaled_at DESC LIMIT 1
 	}
 
 	resume := func(state *cek.State, choice cek.RestartChoice) cek.Outcome {
-		return s.interp.Resume(context.Background(), state, choice)
+		// STAGE-A dev stub: the resume principal is the operator (as the eval path).
+		return s.interp.Resume(context.Background(), state, cek.Delivery{Restart: &choice},
+			cek.Principal{Subject: "operator", IsOperator: true})
 	}
 	out, claimed, err := cfr.ClaimAndResume(r.Context(), conn, contID, seenSeq, s.kernelID, resume)
 	if err != nil {

@@ -25,9 +25,12 @@ type Outcome struct {
 	// OutDone.
 	Value Value
 
-	// OutParked.
+	// OutParked. A parked outcome carries EITHER Condition (a durable-condition
+	// park, status='condition') OR Wake (a wake park, status='sleeping'), never
+	// both (ADR-05 §5/§6).
 	State     *State     // full serializable machine snapshot (park point)
 	Condition *Condition // durable condition + restarts
+	Wake      *Wake      // wake trigger (timer / message / join); nil for condition parks
 
 	// OutFaulted.
 	Fault Value

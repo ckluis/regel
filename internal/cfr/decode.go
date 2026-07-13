@@ -10,6 +10,12 @@ import (
 
 func mathFloat64bits(f float64) uint64 { return math.Float64bits(f) }
 
+// DecodeValue is the fail-closed inverse of EncodeValue. RED STUB: real body
+// lands GREEN.
+func DecodeValue(data []byte) (cek.Value, error) {
+	return cek.Value{}, decodeErr("DecodeValue not implemented")
+}
+
 // Decode rebuilds a machine State from a CFR blob. It is versioned and total: an
 // unknown version/tag/frame-kind or a truncation returns a typed error wrapping
 // ErrCFR, never a panic and never a partial state (ADR-05 §6 test 4b).

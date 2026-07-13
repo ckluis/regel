@@ -78,7 +78,7 @@ func (im *Image) Registry() *cek.Registry {
 // (taak.all/race/signal/sleep): the dispatch bijection requires a registered
 // implementation for every NativeBody hash. It records no effect and returns
 // undefined. STAGE-A RESIDUE: real taak join/timer semantics are Stage B.
-func nativeStub(_ *cek.Host, _ []cek.Value) (cek.Value, *cek.Condition) {
+func nativeStub(_ *cek.Host, _ []cek.Value) (cek.Value, *cek.NativePark) {
 	return cek.UndefV(), nil
 }
 

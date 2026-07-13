@@ -76,7 +76,7 @@ func TestPauseAnywhere(t *testing.T) {
 			t.Fatalf("k=%d: CFR not byte-identical across round-trip (%d vs %d bytes)", k, len(b1), len(b2))
 		}
 		// Resume the decoded state to completion; result must match reference.
-		res := in.Resume(ctx, st, cek.RestartChoice{Name: "grant-fuel", Args: map[string]any{"fuel": 1 << 30}})
+		res := in.Resume(ctx, st, cek.Delivery{Restart: &cek.RestartChoice{Name: "grant-fuel", Args: map[string]any{"fuel": 1 << 30}}}, cek.Principal{IsOperator: true})
 		if res.Kind != cek.OutDone {
 			t.Fatalf("k=%d resume kind=%d err=%v", k, res.Kind, res.Err)
 		}

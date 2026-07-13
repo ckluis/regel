@@ -16,8 +16,9 @@ func ModeValid(m Mode) bool { return m <= ModeUnwind }
 // SigKindValid reports whether k is a defined signal kind.
 func SigKindValid(k SigKind) bool { return k <= SigReturn }
 
-// ParkKindValid reports whether p is a defined park kind.
-func ParkKindValid(p ParkKind) bool { return p <= ParkSignal }
+// ParkKindValid reports whether p is a defined park kind (append-only; includes
+// ParkWake and ParkFresh, ADR-05 §8).
+func ParkKindValid(p ParkKind) bool { return p <= ParkFresh }
 
 // TierValid reports whether t is a defined tier.
 func TierValid(t Tier) bool { return t <= TierTrusted }

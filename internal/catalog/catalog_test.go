@@ -457,6 +457,97 @@ VALUES (gen_random_uuid(), 'resume', now(), $1::jsonb)`, `{"continuation_id":"c"
 	})
 }
 
+// --- Stage-B (ADR-05 BUILD-B / ADR-08) schema additions ----------------------
+
+func TestStageBSchema(t *testing.T) {
+	e := setupEnv(t)
+	ctx := ctxT(t)
+	q := e.conn
+	admID := mkAdmission(t, ctx, q)
+	hash := "r1_stageb0def"
+	mkDef(t, ctx, q, hash, admID)
+
+	// continuation.result column exists (nullable bytea).
+	t.Run("result_column", func(t *testing.T) {
+		var one int
+		ok, err := q.QueryRow(ctx, `
+SELECT 1 FROM information_schema.columns
+WHERE table_name='continuation' AND column_name='result' AND data_type='bytea'`, nil, &one)
+		if err != nil || !ok {
+			t.Fatalf("continuation.result bytea column absent: ok=%v err=%v", ok, err)
+		}
+	})
+
+	// 'cancelled' is accepted by the status CHECK.
+	var contID string
+	t.Run("cancelled_status_accepted", func(t *testing.T) {
+		if ok, err := q.QueryRow(ctx, `
+INSERT INTO continuation (id, kind, root_def_hash, epoch, format_ver, frames, wake, status, principal)
+VALUES (gen_random_uuid(), 'workflow', $1, 1, 1, $2::bytea, $3::jsonb, 'cancelled', '{}'::jsonb) RETURNING id`,
+			[]any{hash, byteaLiteral(nil), `{"kind":"join"}`}, &contID); err != nil || !ok {
+			t.Fatalf("'cancelled' status rejected: ok=%v err=%v", ok, err)
+		}
+	})
+
+	// A live continuation to hang outbox / channel_message rows off of.
+	var liveID string
+	if ok, err := q.QueryRow(ctx, `
+INSERT INTO continuation (id, kind, root_def_hash, epoch, format_ver, frames, wake, status, principal)
+VALUES (gen_random_uuid(), 'workflow', $1, 1, 1, $2::bytea, $3::jsonb, 'sleeping', '{}'::jsonb) RETURNING id`,
+		[]any{hash, byteaLiteral(nil), `{"kind":"message","channel":"c"}`}, &liveID); err != nil || !ok {
+		t.Fatalf("seed live continuation: ok=%v err=%v", ok, err)
+	}
+
+	// channel_message table exists and accepts a row.
+	t.Run("channel_message_table", func(t *testing.T) {
+		if _, err := q.Exec(ctx, `
+INSERT INTO channel_message (id, channel, payload, sent_by)
+VALUES (gen_random_uuid(), 'orders', $1::bytea, 'external')`, byteaLiteral([]byte{1, 2, 3})); err != nil {
+			t.Fatalf("channel_message insert: %v", err)
+		}
+	})
+
+	// epoch_current table exists with the singleton row (genesis writes n=1).
+	t.Run("epoch_current_table", func(t *testing.T) {
+		var n int
+		ok, err := q.QueryRow(ctx, `SELECT 1 FROM epoch_current WHERE one = true`, nil, &n)
+		// Bootstrap (DDL only) may or may not seed the row; assert the table exists
+		// and the singleton constraint holds by inserting/updating.
+		if err != nil {
+			t.Fatalf("epoch_current query: %v", err)
+		}
+		_ = ok
+		// The 'one' PK + CHECK(one) makes it a singleton: a second true row fails.
+		// (epoch row n=1 exists from the DDL's epoch table only if genesis ran; here
+		// insert an epoch row then the epoch_current row.)
+		if _, err := q.Exec(ctx, `
+INSERT INTO epoch (n, std_manifest_root, dispatch_attestation) VALUES (1,'r','a')
+ON CONFLICT (n) DO NOTHING`); err != nil {
+			t.Fatalf("seed epoch: %v", err)
+		}
+		if _, err := q.Exec(ctx, `
+INSERT INTO epoch_current (one, n) VALUES (true, 1)
+ON CONFLICT (one) DO UPDATE SET n = EXCLUDED.n`); err != nil {
+			t.Fatalf("epoch_current upsert: %v", err)
+		}
+	})
+
+	// outbox table exists and its UNIQUE (continuation_id, step_seq, ordinal)
+	// rejects a duplicate dedup key.
+	t.Run("outbox_unique_dedup", func(t *testing.T) {
+		ins := func() error {
+			_, err := q.Exec(ctx, `
+INSERT INTO outbox (id, continuation_id, step_seq, ordinal, class, payload)
+VALUES (gen_random_uuid(), $1, 7, 0, 'mail.send', '{}'::jsonb)`, liveID)
+			return err
+		}
+		if err := ins(); err != nil {
+			t.Fatalf("first outbox insert: %v", err)
+		}
+		wantCode(t, ins(), pgwire.CodeUniqueViolation, "outbox duplicate (continuation_id, step_seq, ordinal)")
+	})
+}
+
 // --- Resolver: scope walk, overlays, visibility, as-of, CAS -------------------
 
 func TestResolver(t *testing.T) {

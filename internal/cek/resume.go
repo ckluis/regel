@@ -3,6 +3,7 @@ package cek
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"time"
 )
@@ -14,12 +15,24 @@ type RestartChoice struct {
 	Args map[string]any
 }
 
-// Resume re-enters a parked machine from a decoded State, delivering the chosen
-// restart (ADR-05 §6). A fuel park resumes at the exact suspended transition
-// under a fresh budget (grant-fuel supplies it); a signal park delivers the
-// restart value as the awaited value of the parked call.
-func (in *Interp) Resume(ctx context.Context, st *State, choice RestartChoice) Outcome {
-	if choice.Name == "abort" {
+// Delivery is what a resume hands the parked machine (ADR-05 §5/§6). Exactly one
+// arm is used per park kind: Restart carries the operator/agent choice for
+// ParkSignal / ParkFuel / ParkGovernor parks; Value carries the delivered value
+// for ParkWake parks (timer: undefined; message: payload; join: results).
+// ParkFresh parks use neither.
+type Delivery struct {
+	Restart *RestartChoice // ParkSignal / ParkFuel / ParkGovernor
+	Value   *Value         // ParkWake
+}
+
+// Resume re-enters a parked machine from a decoded State under a Principal (ADR-05
+// §4: the resume host is rebuilt with the row's capabilities so a capability
+// captured across the pause is re-validated). A fuel/governor park resumes at the
+// exact suspended transition under a fresh budget (grant-fuel supplies it); a
+// signal park delivers the restart value as the awaited value of the parked call;
+// a wake park delivers d.Value at the parked call; a fresh state just runs.
+func (in *Interp) Resume(ctx context.Context, st *State, d Delivery, p Principal) Outcome {
+	if d.Restart != nil && d.Restart.Name == "abort" {
 		return Outcome{Kind: OutFaulted, Fault: strVal("aborted")}
 	}
 	root, err := in.loadAST(st.DefHash)
@@ -41,7 +54,7 @@ func (in *Interp) Resume(ctx context.Context, st *State, choice RestartChoice) O
 		mode:      st.Mode,
 		val:       st.Val,
 		sig:       st.Sig,
-		host:      &Host{ctx: ctx, reg: in.reg},
+		host:      &Host{ctx: ctx, reg: in.reg, Principal: p},
 		tier:      st.Tier,
 		fuelSteps: st.FuelSteps,
 		fuelAlloc: st.FuelAlloc,
@@ -50,8 +63,23 @@ func (in *Interp) Resume(ctx context.Context, st *State, choice RestartChoice) O
 	switch st.ParkKind {
 	case ParkSignal:
 		// Deliver the restart value at the parked call point.
-		m.val = restartValue(choice)
+		if d.Restart != nil {
+			m.val = restartValue(*d.Restart)
+		} else {
+			m.val = undef()
+		}
 		m.mode = ModeApply
+	case ParkWake:
+		// Deliver the wake value at the parked call point (undefined if none).
+		if d.Value != nil {
+			m.val = *d.Value
+		} else {
+			m.val = undef()
+		}
+		m.mode = ModeApply
+	case ParkFresh:
+		// A never-stepped state: mode/val are already the Eval-mode seed; deliver
+		// nothing, just run.
 	}
 
 	switch st.Tier {
@@ -59,7 +87,7 @@ func (in *Interp) Resume(ctx context.Context, st *State, choice RestartChoice) O
 		gm := &governorMeter{ceiling: DefaultGovernorCeiling, deadline: time.Now().Add(DefaultGovernorWall)}
 		return run[*governorMeter](m, gm)
 	default:
-		steps := grantedFuel(choice, st.FuelSteps)
+		steps := grantedFuel(d.Restart, st.FuelSteps)
 		alloc := st.FuelAlloc
 		if alloc == 0 {
 			alloc = DefaultFuelAllocBytes
@@ -69,6 +97,16 @@ func (in *Interp) Resume(ctx context.Context, st *State, choice RestartChoice) O
 		fm := &fuelMeter{steps: steps, alloc: alloc}
 		return run[*fuelMeter](m, fm)
 	}
+}
+
+// InitialState builds the never-stepped State for invoking a definition (or a
+// closure value) with args under a tier/budget — the CFR seed for a fresh
+// workflow row or a join child. ParkKind = ParkFresh. clo nil → top-level
+// definition by hash (same param binding as newMachine); clo non-nil → the
+// closure applied to args. The bottom FrRet frame mirrors newMachine.
+func (in *Interp) InitialState(defHash string, clo *ClosureObj, args []Value, tier Tier, fuel, alloc int64) (*State, error) {
+	// RED STUB: real body lands GREEN.
+	return nil, fmt.Errorf("cek: InitialState not implemented")
 }
 
 // rebindNodes re-derives every K frame's live Node pointer from its immortal
@@ -112,8 +150,8 @@ func restartValue(choice RestartChoice) Value {
 	return recVal(r)
 }
 
-func grantedFuel(choice RestartChoice, fallback int64) int64 {
-	if choice.Name == "grant-fuel" {
+func grantedFuel(choice *RestartChoice, fallback int64) int64 {
+	if choice != nil && choice.Name == "grant-fuel" {
 		if v, ok := choice.Args["fuel"]; ok {
 			if n, ok2 := toInt64(v); ok2 {
 				return n

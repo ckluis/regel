@@ -28,12 +28,18 @@ var HasSyntacticModifier = ast.HasSyntacticModifier
 // Remaining member modifiers the gate compares against (class accessors, static,
 // abstract, accessibility) beyond those already in ast.go.
 const (
+	ModifierFlagsNone      = ast.ModifierFlagsNone
 	ModifierFlagsStatic    = ast.ModifierFlagsStatic
 	ModifierFlagsAccessor  = ast.ModifierFlagsAccessor
 	ModifierFlagsAbstract  = ast.ModifierFlagsAbstract
 	ModifierFlagsPublic    = ast.ModifierFlagsPublic
 	ModifierFlagsPrivate   = ast.ModifierFlagsPrivate
 	ModifierFlagsProtected = ast.ModifierFlagsProtected
+	ModifierFlagsAmbient   = ast.ModifierFlagsAmbient
+	ModifierFlagsAsync     = ast.ModifierFlagsAsync
+	ModifierFlagsDefault   = ast.ModifierFlagsDefault
+	ModifierFlagsExport    = ast.ModifierFlagsExport
+	ModifierFlagsReadonly  = ast.ModifierFlagsReadonly
 )
 
 // TokenFlags surface: the numeric-literal radix bits lowering reads to

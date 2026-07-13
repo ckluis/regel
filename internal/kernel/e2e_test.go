@@ -164,6 +164,19 @@ func (e *procEnv) scalar(t *testing.T, sql string, args ...any) int64 {
 	return n
 }
 
+// exec runs a mutation against the env's DB.
+func (e *procEnv) exec(t *testing.T, sql string, args ...any) {
+	t.Helper()
+	conn, err := e.pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer e.pool.Release(conn)
+	if _, err := conn.Exec(context.Background(), sql, args...); err != nil {
+		t.Fatalf("exec %q: %v", sql, err)
+	}
+}
+
 func (e *procEnv) text(t *testing.T, sql string, args ...any) string {
 	t.Helper()
 	conn, err := e.pool.Acquire(context.Background())

@@ -200,6 +200,51 @@ CREATE TABLE approval_token (                      -- ADR-12 §6: one-shot produ
   consumed_at  timestamptz,
   created_at   timestamptz NOT NULL DEFAULT now()
 );
+
+-- (8) Derivation tier (BUILD-C: ADR-07 §1 step 5a + §4 V3/V6). ADR-07's derivation
+-- seam produces PROPOSED derived rows over base ⊕ patch; ADR-10 §4 lists the v1
+-- pass roster. The seam had no authored DDL for where the derived model lives, so
+-- V3 catalog-parity and V6 derivation-parity had nothing to query and the schema
+-- pass had no recorded prior shape to diff against (the ADR-07 §1 requirement:
+-- "compare against previously-derived shape recorded in the catalog, not
+-- information_schema guesswork"). Authored here so the derivation tier is a
+-- first-class, INSPECTABLE part of the catalog like every other row.
+--
+-- derived_resource is the recorded derived SHAPE per (resource name, scope): the
+-- last-admitted field map + wired policy + physical table. The schema pass diffs
+-- the proposed shape against this row (a REMOVED field vs this shape derives the
+-- destructive statement V6 rejects unless the envelope carries intent=retire).
+-- Written in the admission transaction beside the pointer move; rolled back whole
+-- on any rejection (zero trace), like name_pointer.
+CREATE TABLE derived_resource (
+  resource_name text NOT NULL,                     -- catalog name, e.g. 'app/crm/Deal'
+  scope_kind    smallint NOT NULL CHECK (scope_kind BETWEEN 0 AND 4),
+  scope_id      text NOT NULL DEFAULT '',
+  def_hash      text NOT NULL REFERENCES definition(hash),  -- the resource def this shape derives from
+  fields        jsonb NOT NULL,                    -- {name: {base, pii}} — the declared field map (sorted)
+  policy_name   text,                              -- wired policy artifact name, or NULL (no policy)
+  table_name    text NOT NULL,                     -- derived physical table name (deterministic slug)
+  admission_id  bigint NOT NULL REFERENCES admission(id),
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (resource_name, scope_kind, scope_id)
+);
+
+-- derived_artifact is the INSPECTABLE proposed-row record per derivation pass
+-- (ADR-07 §1 step 5a "a derived-artifact record per resource"): V3/V6 query these
+-- uncommitted rows in-transaction, and C4's resource.query serves the minimal
+-- resource shape from them later. One row per (resource, pass kind) per admission.
+CREATE TABLE derived_artifact (
+  id            bigserial PRIMARY KEY,
+  admission_id  bigint NOT NULL REFERENCES admission(id),
+  resource_name text NOT NULL,
+  scope_kind    smallint NOT NULL CHECK (scope_kind BETWEEN 0 AND 4),
+  scope_id      text NOT NULL DEFAULT '',
+  pass          text NOT NULL CHECK (pass IN ('schema','policy','retire')),
+  detail        jsonb NOT NULL,                    -- pass-specific proposed rows (DDL, policy wiring, retired attrs)
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX derived_artifact_resource_idx
+  ON derived_artifact (resource_name, scope_kind, scope_id);
 ```
 
 ### 2. Definition granularity and names

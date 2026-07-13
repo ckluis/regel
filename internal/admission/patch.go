@@ -31,6 +31,11 @@ type Patch struct {
 	// the envelope; Stage-A eval reads the tier from the eval request, not from a
 	// durable per-def column — named residue.
 	Tier map[string]string `json:"tier,omitempty"`
+	// Intent is the maintenance-lane discriminant (ADR-07 §4 V6). "" is an
+	// ordinary additive admission; "retire" routes a resource's REMOVED fields to
+	// the staged maintenance lane (BUILD-C: inline destructive DDL is refused;
+	// the retire-intent envelope is the named path that admits without it).
+	Intent string `json:"intent,omitempty"`
 	// TargetScope is where the pointers move. Empty ⇒ product scope (0, "").
 	TargetScope Scope `json:"target_scope"`
 	// BaseHashes is the head each pointer-move saw (empty entry / absent ⇒

@@ -105,6 +105,36 @@ CREATE TABLE IF NOT EXISTS continuation_coverage (
   PRIMARY KEY (epoch, frame_kind, cfr_version, decoder)
 );
 
+-- (8) Derivation tier (BUILD-C: ADR-03 §1 table 8; ADR-07 §1 step 5a + V3/V6).
+-- derived_resource records the last-admitted derived SHAPE per (resource, scope)
+-- so the schema pass diffs the proposed shape against the recorded one (never
+-- information_schema). derived_artifact records the INSPECTABLE proposed rows per
+-- derivation pass, queried by V3/V6 in-transaction and served by C4 later.
+CREATE TABLE IF NOT EXISTS derived_resource (
+  resource_name text NOT NULL,
+  scope_kind    smallint NOT NULL CHECK (scope_kind BETWEEN 0 AND 4),
+  scope_id      text NOT NULL DEFAULT '',
+  def_hash      text NOT NULL REFERENCES definition(hash),
+  fields        jsonb NOT NULL,
+  policy_name   text,
+  table_name    text NOT NULL,
+  admission_id  bigint NOT NULL REFERENCES admission(id),
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (resource_name, scope_kind, scope_id)
+);
+CREATE TABLE IF NOT EXISTS derived_artifact (
+  id            bigserial PRIMARY KEY,
+  admission_id  bigint NOT NULL REFERENCES admission(id),
+  resource_name text NOT NULL,
+  scope_kind    smallint NOT NULL CHECK (scope_kind BETWEEN 0 AND 4),
+  scope_id      text NOT NULL DEFAULT '',
+  pass          text NOT NULL CHECK (pass IN ('schema','policy','retire')),
+  detail        jsonb NOT NULL,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS derived_artifact_resource_idx
+  ON derived_artifact (resource_name, scope_kind, scope_id);
+
 -- ADR-05 §2 continuation store.
 CREATE TABLE IF NOT EXISTS continuation (
   id            uuid PRIMARY KEY,

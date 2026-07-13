@@ -76,7 +76,8 @@ REVOKE INSERT, UPDATE, DELETE ON name_pointer_history FROM %[1]s;
 GRANT SELECT, INSERT, UPDATE, DELETE ON
   name_pointer, admission, gate_refusal, continuation, durable_condition,
   restart, task, grant_row, verifier_coverage, perf_budget,
-  continuation_coverage, epoch, schema_version TO %[1]s;
+  continuation_coverage, epoch, schema_version,
+  derived_resource, derived_artifact TO %[1]s;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %[1]s;
 `, role)
 }

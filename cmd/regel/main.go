@@ -73,7 +73,8 @@ func usage() {
   regel migrate-db [--role NAME]        apply substrate DDL (+ optional kernel role)
   regel genesis                         admit the micro-std image + pin the epoch
   regel serve [--addr :8787]            run the HTTP kernel + reactor
-  regel step-once CONTINUATION-ID       claim + step one continuation once (probe)
+        [--lease SECONDS] [--poll DUR]  lease window + reactor poll interval
+  regel step-once [--lease N] CONT-ID   claim + step one continuation once (probe)
   regel admit FILE... --name-prefix P   admit source through the gate (prints Verdict)
         [--actor kind:id] [--declare c1,c2] [--tier trusted|sandbox]
         [--base name=hash ...]
@@ -142,6 +143,8 @@ func cmdGenesis(args []string) error {
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", ":8787", "listen address")
+	lease := fs.Int("lease", 30, "continuation/task lease seconds (reaper recovery window)")
+	poll := fs.Duration("poll", 250*time.Millisecond, "reactor poll interval")
 	_ = fs.Parse(args)
 
 	cfg, err := pgwire.ParseDSN(dsn())
@@ -160,12 +163,19 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	reactor := srv.StartReactor(ctx, kernel.ReactorConfig{})
+	reactor := srv.StartReactor(ctx, kernel.ReactorConfig{
+		LeaseSeconds: *lease,
+		PollInterval: *poll,
+		// A fast lease needs a fast reaper cadence to re-offer within it.
+		ReapEvery:      reapCadence(*lease),
+		HeartbeatEvery: heartbeatCadence(*lease),
+	})
 	defer reactor.Stop()
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(*addr) }()
-	fmt.Printf("serve: regel kernel %s listening on %s (epoch %d)\n", srv.KernelID(), *addr, srv.Epoch())
+	fmt.Printf("serve: regel kernel %s listening on %s (epoch %d, lease %ds, poll %s)\n",
+		srv.KernelID(), *addr, srv.Epoch(), *lease, *poll)
 	select {
 	case <-ctx.Done():
 		fmt.Println("serve: signal received, draining reactor")
@@ -175,15 +185,46 @@ func cmdServe(args []string) error {
 	}
 }
 
+// reapCadence keeps the reaper ticking well inside the lease window so a dead
+// kernel's work is re-offered promptly (the kill-9 demo pins lease 2s). Capped at
+// the 1s default so a long lease keeps the calm default cadence.
+func reapCadence(leaseSecs int) time.Duration {
+	d := time.Duration(leaseSecs) * time.Second / 4
+	if d <= 0 || d > time.Second {
+		return time.Second
+	}
+	if d < 50*time.Millisecond {
+		return 50 * time.Millisecond
+	}
+	return d
+}
+
+// heartbeatCadence renews the lease at ~1/3 of its length (default 10s for the
+// 30s lease), so a live kernel never lets its own lease lapse.
+func heartbeatCadence(leaseSecs int) time.Duration {
+	d := time.Duration(leaseSecs) * time.Second / 3
+	if d <= 0 || d > 10*time.Second {
+		return 10 * time.Second
+	}
+	if d < 100*time.Millisecond {
+		return 100 * time.Millisecond
+	}
+	return d
+}
+
 // --- step-once ---------------------------------------------------------------
 
 // cmdStepOnce claims and steps one continuation exactly once, printing a JSON
 // summary. Increment 3's cross-kernel determinism probe drives it.
 func cmdStepOnce(args []string) error {
-	if len(args) < 1 {
+	fs := flag.NewFlagSet("step-once", flag.ExitOnError)
+	lease := fs.Int("lease", 30, "claim lease seconds for this step")
+	_ = fs.Parse(permute(args, map[string]bool{"lease": true}))
+	rest := fs.Args()
+	if len(rest) < 1 {
 		return fmt.Errorf("step-once: need CONTINUATION-ID")
 	}
-	contID := args[0]
+	contID := rest[0]
 	cfg, err := pgwire.ParseDSN(dsn())
 	if err != nil {
 		return err
@@ -210,7 +251,7 @@ func cmdStepOnce(args []string) error {
 	if !found {
 		return fmt.Errorf("step-once: no such continuation %s", contID)
 	}
-	env := cfr.StepEnv{KernelID: srv.KernelID(), KernelEpoch: srv.Epoch(), LeaseSeconds: 30}
+	env := cfr.StepEnv{KernelID: srv.KernelID(), KernelEpoch: srv.Epoch(), LeaseSeconds: *lease}
 	resume := func(st *cek.State, d cek.Delivery, p cek.Principal) cek.Outcome {
 		return srv.Interp().Resume(ctx, st, d, p)
 	}

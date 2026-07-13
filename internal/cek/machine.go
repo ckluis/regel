@@ -211,6 +211,7 @@ func run[M Meter](m *machine, meter M) Outcome {
 		}
 		if done {
 			o.Transitions = m.transitions
+			o.Effects = m.host.Effects
 			return o
 		}
 	}
@@ -269,6 +270,7 @@ func (m *machine) parkMeter(meter Meter) Outcome {
 			Restarts: meter.restarts(),
 		},
 		Transitions: m.transitions,
+		Effects:     m.host.Effects,
 	}
 }
 

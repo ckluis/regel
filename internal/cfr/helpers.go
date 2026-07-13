@@ -27,6 +27,10 @@ func decodeBytea(s string) ([]byte, error) {
 	return hex.DecodeString(s[2:])
 }
 
+// hexDecode parses a bare hex string (no \x prefix) as produced by SQL
+// encode(col,'hex'). Empty input decodes to an empty slice.
+func hexDecode(s string) ([]byte, error) { return hex.DecodeString(s) }
+
 // nullable maps "" to SQL NULL, else the string.
 func nullable(s string) any {
 	if s == "" {

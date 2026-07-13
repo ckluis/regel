@@ -8,10 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 
 	"regel.dev/regel/internal/admission"
 	"regel.dev/regel/internal/catalog"
 	"regel.dev/regel/internal/cek"
+	"regel.dev/regel/internal/cfr"
 	"regel.dev/regel/internal/pgwire"
 	"regel.dev/regel/internal/rast"
 )
@@ -22,6 +24,8 @@ type Server struct {
 	interp   *cek.Interp
 	image    *admission.Image
 	kernelID string
+	epoch    int          // pinned catalog epoch, read at boot after VerifyBoot (ADR-06 §6)
+	draining atomic.Bool  // set by the epoch fence: 503 on new work
 }
 
 // New builds a kernel over a live pool. It verifies boot parity (ADR-10 §2:
@@ -35,13 +39,39 @@ func New(ctx context.Context, pool *pgwire.Pool) (*Server, error) {
 		return nil, err
 	}
 	verr := admission.VerifyBoot(ctx, conn, image)
-	pool.Release(conn)
 	if verr != nil {
+		pool.Release(conn)
 		return nil, verr
 	}
+	// Pin the live catalog epoch AFTER boot parity (ADR-06 §6): every work txn
+	// fences against this value.
+	var epoch int
+	if _, err := conn.QueryRow(ctx, `SELECT n FROM epoch_current WHERE one=true`, nil, &epoch); err != nil {
+		pool.Release(conn)
+		return nil, err
+	}
+	pool.Release(conn)
 	src := &catalogSource{pool: pool}
 	interp := cek.New(src, image.Registry())
-	return &Server{pool: pool, interp: interp, image: image, kernelID: admissionUUID()}, nil
+	return &Server{pool: pool, interp: interp, image: image, kernelID: admissionUUID(), epoch: epoch}, nil
+}
+
+// Draining reports whether the epoch fence has tripped and the kernel is in
+// terminal drain (ADR-06 §6): new work is refused with 503.
+func (s *Server) Draining() bool { return s.draining.Load() }
+
+// Epoch returns the kernel's pinned catalog epoch.
+func (s *Server) Epoch() int { return s.epoch }
+
+// KernelID returns the kernel's ephemeral lease-owner uuid.
+func (s *Server) KernelID() string { return s.kernelID }
+
+// Interp exposes the interpreter (StartWorkflow / step-once need InitialState).
+func (s *Server) Interp() *cek.Interp { return s.interp }
+
+// stepEnv builds the StepEnv for this kernel's fenced work transactions.
+func (s *Server) stepEnv(leaseSeconds int) cfr.StepEnv {
+	return cfr.StepEnv{KernelID: s.kernelID, KernelEpoch: s.epoch, LeaseSeconds: leaseSeconds}
 }
 
 // Handler returns the routed HTTP handler (Go 1.22+ method+wildcard patterns).
@@ -49,8 +79,11 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /admit", s.handleAdmit)
 	mux.HandleFunc("POST /eval/{name...}", s.handleEval)
+	mux.HandleFunc("POST /workflow/{name...}", s.handleStartWorkflow)
 	mux.HandleFunc("GET /continuation/{id}", s.handleContinuation)
 	mux.HandleFunc("POST /continuation/{id}/restart", s.handleRestart)
+	mux.HandleFunc("POST /channel/{channel}/send", s.handleChannelSend)
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	return mux
 }
 

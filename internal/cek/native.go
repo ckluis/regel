@@ -207,7 +207,7 @@ func wfJoin(args []Value, race bool) (Value, *NativePark) {
 	if race {
 		quorum = 1
 	}
-	return undef(), &NativePark{Wake: &Wake{Kind: WakeJoin, Thunks: thunks, Quorum: quorum}}
+	return undef(), &NativePark{Wake: &Wake{Kind: WakeJoin, Thunks: thunks, Quorum: quorum, Race: race}}
 }
 
 func itoa(i int) string {

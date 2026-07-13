@@ -31,4 +31,5 @@ type Wake struct {
 	Channel string  // message: the channel name to receive on
 	Thunks  []Value // join: the TagClosure values the store materializes as children
 	Quorum  int     // join: len(Thunks) for all, 1 for race
+	Race    bool    // join: true for race (deliver the winner); false for all (deliver every result in thunk order)
 }

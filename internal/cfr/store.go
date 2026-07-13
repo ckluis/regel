@@ -176,152 +176,25 @@ INSERT INTO task (id, kind, run_at, payload) VALUES ($1, 'resume', now(), $2::js
 	return err
 }
 
-// ClaimAndResume performs the ADR-05 §7 claim CAS + step transaction: it claims a
-// 'ready' continuation (status='ready' AND step_seq=seenSeq ⇒ 'running',
-// step_seq+1, lease), decodes the CFR blob, re-enters the machine via resume
-// delivering the resolved restart, then checkpoints the outcome. It returns the
-// outcome and whether this call won the claim. A corrupt CFR blob fails closed
-// into a 'step.failed' condition (ADR-05 §6 test 4b).
+// ClaimAndResume is the Stage-A condition-resume door, kept as a thin wrapper over
+// the generalized ClaimAndStep (ADR-05 §7). It carries KernelEpoch=0 (unfenced —
+// the restart path pins no epoch) and adapts the restart-only resume signature. A
+// serialization loss surfaces as (claimed=false, nil), preserving the original
+// clean-loss semantics.
 func ClaimAndResume(ctx context.Context, db DB, continuationID string, seenSeq int64, kernelID string,
 	resume func(state *cek.State, choice cek.RestartChoice) cek.Outcome) (out cek.Outcome, claimed bool, err error) {
 
-	if err = db.BeginSerializable(ctx); err != nil {
-		return cek.Outcome{}, false, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = db.Rollback(ctx)
-		}
-	}()
-
-	// The CLAIM (CAS).
-	res, cerr := db.Exec(ctx, `
-UPDATE continuation
-   SET status='running', lease_owner=$2::uuid, lease_until=now()+interval '30 seconds',
-       step_seq=step_seq+1, updated_at=now()
- WHERE id=$1 AND status='ready' AND step_seq=$3`, continuationID, kernelID, seenSeq)
-	if cerr != nil {
-		if pgwire.IsCode(cerr, "40001") { // serialization failure ⇒ lost the race
-			return cek.Outcome{}, false, nil
-		}
-		err = cerr
-		return cek.Outcome{}, false, err
-	}
-	if res.RowsAffected != 1 {
-		// Another kernel won, or state moved: no work done.
-		if err = db.Commit(ctx); err == nil {
-			committed = true
-		}
-		return cek.Outcome{}, false, err
-	}
-	claimed = true
-
-	// Load frames + resolved restart.
-	var framesHex string
-	var restartName, argsJSON string
-	if _, err = db.QueryRow(ctx, `SELECT frames FROM continuation WHERE id=$1`,
-		[]any{continuationID}, &framesHex); err != nil {
-		return cek.Outcome{}, true, err
-	}
-	rfound, rerr := db.QueryRow(ctx, `
-SELECT r.name, COALESCE(dc.resolved_args::text, '{}')
-FROM durable_condition dc JOIN restart r ON r.id = dc.resolved_restart
-WHERE dc.continuation_id = $1 AND dc.status = 'resolved'
-ORDER BY dc.signaled_at DESC LIMIT 1`, []any{continuationID}, &restartName, &argsJSON)
-	if rerr != nil {
-		err = rerr
-		return cek.Outcome{}, true, err
-	}
-	if !rfound {
-		err = ErrNotResolved
-		return cek.Outcome{}, true, err
-	}
-
-	frames, derr := decodeBytea(framesHex)
-	if derr != nil {
-		err = derr
-		return cek.Outcome{}, true, err
-	}
-	state, decErr := Decode(frames)
-	if decErr != nil {
-		// Fail closed: mark the continuation failed and record a step.failed
-		// condition; never a partial resume (ADR-05 §6 test 4b).
-		if e := recordStepFailed(ctx, db, continuationID, decErr); e != nil {
-			err = e
-			return cek.Outcome{}, true, err
-		}
-		if e := db.Commit(ctx); e == nil {
-			committed = true
-		} else {
-			err = e
-			return cek.Outcome{}, true, err
-		}
-		return cek.Outcome{}, true, decErr
-	}
-
-	choice := cek.RestartChoice{Name: restartName, Args: parseArgs(argsJSON)}
-	out = resume(state, choice)
-
-	if err = checkpoint(ctx, db, continuationID, out); err != nil {
-		return out, true, err
-	}
-	if err = db.Commit(ctx); err != nil {
-		return out, true, err
-	}
-	committed = true
-	return out, true, nil
-}
-
-// checkpoint writes the terminal (or re-parked) state of a resumed step.
-func checkpoint(ctx context.Context, db DB, continuationID string, out cek.Outcome) error {
-	switch out.Kind {
-	case cek.OutDone:
-		_, err := db.Exec(ctx, `
-UPDATE continuation SET frames=$2::bytea, status='done', updated_at=now() WHERE id=$1`,
-			continuationID, byteaLiteral(nil))
-		return err
-	case cek.OutParked:
-		// Re-park: rewrite frames + open a fresh condition. (Rare in Stage A.)
-		blob, err := Encode(out.State)
-		if err != nil {
-			return err
-		}
-		newCond := uuid4()
-		wake := fmt.Sprintf(`{"kind":"manual","condition":%q}`, newCond)
-		if _, err := db.Exec(ctx, `
-UPDATE continuation SET frames=$2::bytea, wake=$3::jsonb, status='condition', updated_at=now() WHERE id=$1`,
-			continuationID, byteaLiteral(blob), wake); err != nil {
-			return err
-		}
-		if _, err := db.Exec(ctx, `
-INSERT INTO durable_condition (id, continuation_id, class, payload) VALUES ($1, $2, $3, '{}'::jsonb)`,
-			newCond, continuationID, out.Condition.Class); err != nil {
-			return err
-		}
-		for _, r := range out.Condition.Restarts {
-			if _, err := db.Exec(ctx, `
-INSERT INTO restart (id, condition_id, name, label, capability_required) VALUES ($1,$2,$3,$4,$5)`,
-				uuid4(), newCond, r.Name, r.Label, nullable(r.CapabilityRequired)); err != nil {
-				return err
+	env := StepEnv{KernelID: kernelID, LeaseSeconds: 30}
+	out, claimed, err = ClaimAndStep(ctx, db, env, nil, continuationID, seenSeq,
+		func(state *cek.State, d cek.Delivery, _ cek.Principal) cek.Outcome {
+			ch := cek.RestartChoice{}
+			if d.Restart != nil {
+				ch = *d.Restart
 			}
-		}
-		return nil
-	default: // OutFaulted / OutError
-		_, err := db.Exec(ctx, `
-UPDATE continuation SET status='failed', updated_at=now() WHERE id=$1`, continuationID)
-		return err
+			return resume(state, ch)
+		})
+	if err != nil && pgwire.IsCode(err, "40001") {
+		return cek.Outcome{}, false, nil
 	}
-}
-
-func recordStepFailed(ctx context.Context, db DB, continuationID string, cause error) error {
-	if _, err := db.Exec(ctx, `UPDATE continuation SET status='failed', updated_at=now() WHERE id=$1`,
-		continuationID); err != nil {
-		return err
-	}
-	payload := fmt.Sprintf(`{"error":%q}`, cause.Error())
-	_, err := db.Exec(ctx, `
-INSERT INTO durable_condition (id, continuation_id, class, payload) VALUES ($1, $2, 'step.failed', $3::jsonb)`,
-		uuid4(), continuationID, payload)
-	return err
+	return out, claimed, err
 }

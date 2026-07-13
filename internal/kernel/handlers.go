@@ -193,6 +193,100 @@ func (s *Server) park(ctx context.Context, rootHash string, out cek.Outcome) (Ev
 	}, Transitions: out.Transitions}, nil
 }
 
+// --- POST /workflow/{name...} ------------------------------------------------
+
+// handleStartWorkflow resolves a name and starts a durable workflow continuation
+// driven by the reactor (ADR-06 §4). Replies 202 with the continuation id.
+func (s *Server) handleStartWorkflow(w http.ResponseWriter, r *http.Request) {
+	if s.Draining() {
+		writeJSON(w, 503, map[string]string{"error": "kernel draining (epoch fence)"})
+		return
+	}
+	name := r.PathValue("name")
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	args, err := parseArgs(body)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	conn, err := s.pool.Acquire(r.Context())
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	resolved, ok, rerr := catalog.Resolve(r.Context(), conn, catalog.ResolveReq{
+		Name: name, Chain: chainFromHeader(r), CallerModule: "",
+	})
+	if rerr != nil {
+		s.pool.Release(conn)
+		writeJSON(w, 500, map[string]string{"error": rerr.Error()})
+		return
+	}
+	if !ok {
+		s.pool.Release(conn)
+		writeJSON(w, 404, map[string]string{"error": "name does not resolve: " + name})
+		return
+	}
+	actor := authFromHeader(r)
+	principal := map[string]any{"subject": actor.ActorID, "operator": actor.ActorKind == "operator"}
+	contID, serr := cfr.StartWorkflow(r.Context(), conn, s.stepEnv(0), s.interp,
+		resolved.Hash, args, principal, cek.TierTrusted)
+	s.pool.Release(conn)
+	if serr != nil {
+		writeJSON(w, 500, map[string]string{"error": serr.Error()})
+		return
+	}
+	writeJSON(w, 202, map[string]any{"continuation_id": contID})
+}
+
+// --- POST /channel/{channel}/send --------------------------------------------
+
+// handleChannelSend lands a channel message and wakes the oldest matching sleeping
+// receiver (ADR-05 §5 BUILD-B external send). Replies 200 {delivered_to}.
+func (s *Server) handleChannelSend(w http.ResponseWriter, r *http.Request) {
+	if s.Draining() {
+		writeJSON(w, 503, map[string]string{"error": "kernel draining (epoch fence)"})
+		return
+	}
+	channel := r.PathValue("channel")
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	var req struct {
+		Value any `json:"value"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad send json: " + err.Error()})
+		return
+	}
+	conn, err := s.pool.Acquire(r.Context())
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	defer s.pool.Release(conn)
+	actor := authFromHeader(r)
+	to, serr := cfr.SendChannel(r.Context(), conn, s.stepEnv(0), channel, jsonToValue(req.Value), actor.ActorID)
+	if serr != nil {
+		writeJSON(w, 500, map[string]string{"error": serr.Error()})
+		return
+	}
+	var delivered any
+	if to != "" {
+		delivered = to
+	}
+	writeJSON(w, 200, map[string]any{"delivered_to": delivered})
+}
+
+// --- GET /healthz ------------------------------------------------------------
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{
+		"kernel_id": s.kernelID,
+		"epoch":     s.epoch,
+		"draining":  s.Draining(),
+		"metrics":   cfr.MetricsSnapshot(),
+	})
+}
+
 // --- GET /continuation/{id} --------------------------------------------------
 
 func (s *Server) handleContinuation(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +310,11 @@ func (s *Server) handleContinuation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{"continuation_id": id, "status": status}
+	if status == "done" {
+		if v, ok, lerr := cfr.LoadResult(r.Context(), conn, id); lerr == nil && ok {
+			resp["result"] = valueToJSON(v)
+		}
+	}
 
 	var condID, class, cstatus string
 	cfound, err := conn.QueryRow(r.Context(), `

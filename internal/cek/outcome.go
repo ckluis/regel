@@ -41,6 +41,13 @@ type Outcome struct {
 	// Transitions is the number of CEK transitions this run consumed — the
 	// counter ADR-04 §8 exposes for the ≤50k-per-request ceiling assertion.
 	Transitions int64
+
+	// Effects is the effect-intent trace this step recorded (ADR-05 §7): the
+	// store writes one outbox row per effect in its checkpoint transaction, and a
+	// channel.send effect additionally lands a channel_message. A resumed step
+	// starts with a fresh Host, so Effects carries exactly THIS step's effects —
+	// the outbox dedup key (continuation_id, step_seq) makes each fire once.
+	Effects []Effect
 }
 
 // Condition is a durable condition raised at a park point (ADR-05 §6). Class is

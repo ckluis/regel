@@ -9,12 +9,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"regel.dev/regel/internal/admission"
 	"regel.dev/regel/internal/catalog"
 	"regel.dev/regel/internal/cek"
+	"regel.dev/regel/internal/cfr"
 	"regel.dev/regel/internal/kernel"
 	"regel.dev/regel/internal/pgwire"
 )
@@ -42,6 +45,8 @@ func main() {
 		err = cmdGenesis(args)
 	case "serve":
 		err = cmdServe(args)
+	case "step-once":
+		err = cmdStepOnce(args)
 	case "admit":
 		os.Exit(cmdAdmit(args))
 	case "eval":
@@ -67,7 +72,8 @@ func usage() {
 
   regel migrate-db [--role NAME]        apply substrate DDL (+ optional kernel role)
   regel genesis                         admit the micro-std image + pin the epoch
-  regel serve [--addr :8787]            run the HTTP kernel
+  regel serve [--addr :8787]            run the HTTP kernel + reactor
+  regel step-once CONTINUATION-ID       claim + step one continuation once (probe)
   regel admit FILE... --name-prefix P   admit source through the gate (prints Verdict)
         [--actor kind:id] [--declare c1,c2] [--tier trusted|sandbox]
         [--base name=hash ...]
@@ -142,16 +148,95 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	pool := pgwire.NewPool(cfg, 8)
+	pool := pgwire.NewPool(cfg, 16)
 	defer pool.Close()
 
-	ctx := context.Background()
+	// Graceful shutdown on SIGTERM/SIGINT — but NOT SIGKILL: surviving kill -9 is
+	// the point of Stage B (the reaper re-offers un-heartbeated leases).
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	srv, err := kernel.New(ctx, pool)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("serve: regel kernel listening on %s\n", *addr)
-	return srv.Serve(*addr)
+	reactor := srv.StartReactor(ctx, kernel.ReactorConfig{})
+	defer reactor.Stop()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(*addr) }()
+	fmt.Printf("serve: regel kernel %s listening on %s (epoch %d)\n", srv.KernelID(), *addr, srv.Epoch())
+	select {
+	case <-ctx.Done():
+		fmt.Println("serve: signal received, draining reactor")
+		return nil
+	case e := <-errCh:
+		return e
+	}
+}
+
+// --- step-once ---------------------------------------------------------------
+
+// cmdStepOnce claims and steps one continuation exactly once, printing a JSON
+// summary. Increment 3's cross-kernel determinism probe drives it.
+func cmdStepOnce(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("step-once: need CONTINUATION-ID")
+	}
+	contID := args[0]
+	cfg, err := pgwire.ParseDSN(dsn())
+	if err != nil {
+		return err
+	}
+	pool := pgwire.NewPool(cfg, 4)
+	defer pool.Close()
+	ctx, cancel := rootCtx()
+	defer cancel()
+	srv, err := kernel.New(ctx, pool)
+	if err != nil {
+		return err
+	}
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer pool.Release(conn)
+
+	var seenSeq int64
+	found, err := conn.QueryRow(ctx, `SELECT step_seq FROM continuation WHERE id=$1`, []any{contID}, &seenSeq)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("step-once: no such continuation %s", contID)
+	}
+	env := cfr.StepEnv{KernelID: srv.KernelID(), KernelEpoch: srv.Epoch(), LeaseSeconds: 30}
+	resume := func(st *cek.State, d cek.Delivery, p cek.Principal) cek.Outcome {
+		return srv.Interp().Resume(ctx, st, d, p)
+	}
+	out, claimed, serr := cfr.ClaimAndStep(ctx, conn, env, srv.Interp(), contID, seenSeq, resume)
+	summary := map[string]any{"claimed": claimed, "outcome": outcomeName(out.Kind)}
+	if serr != nil {
+		summary["error"] = serr.Error()
+	}
+	if v, ok, _ := cfr.LoadResult(ctx, conn, contID); ok {
+		summary["result"] = kernel.ValueToJSON(v)
+	}
+	printJSON(summary)
+	return nil
+}
+
+func outcomeName(k cek.OutcomeKind) string {
+	switch k {
+	case cek.OutDone:
+		return "done"
+	case cek.OutParked:
+		return "parked"
+	case cek.OutFaulted:
+		return "faulted"
+	default:
+		return "error"
+	}
 }
 
 // --- admit -------------------------------------------------------------------

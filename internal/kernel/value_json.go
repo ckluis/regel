@@ -7,6 +7,9 @@ import (
 	"regel.dev/regel/internal/cek"
 )
 
+// ValueToJSON is the exported projection used by the CLI (step-once summary).
+func ValueToJSON(v cek.Value) any { return valueToJSON(v) }
+
 // valueToJSON projects a cek.Value to a JSON-marshalable Go value using only the
 // exported Value surface (Tag/N/S/Ref). Compound handles (closures, capability
 // tokens, opaque) render as a tagged marker string — they are not transportable

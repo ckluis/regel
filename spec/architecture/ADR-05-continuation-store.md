@@ -100,8 +100,16 @@ CREATE TABLE continuation (
   CONSTRAINT wake_kind_shape CHECK (
     wake ? 'kind' AND wake->>'kind' IN ('timer','message','event','join','manual'))
 );
-CREATE INDEX ON continuation (((wake->>'due')::timestamptz))
+CREATE INDEX ON continuation ((wake->>'due'))
   WHERE status = 'sleeping' AND wake->>'kind' = 'timer';
+-- BUILD-A: the original expression index `((wake->>'due')::timestamptz)` is
+-- uncreatable — the text→timestamptz cast is STABLE, not IMMUTABLE (it reads the
+-- session TimeZone), and Postgres rejects non-IMMUTABLE index expressions
+-- (SQLSTATE 42P17; hit on PG 16.13 at Stage A bootstrap). The index is therefore
+-- over the raw `wake->>'due'` text, and timer wakes MUST serialize `due` as a
+-- fixed-width UTC ISO-8601 instant (`YYYY-MM-DDTHH:MM:SS.ssssssZ`), whose
+-- lexicographic order equals timestamp order — the timer scanner's range scan
+-- (`wake->>'due' <= :now_utc_iso`) stays index-served with identical semantics.
 ```
 
 ### 3. Capture discipline: enforced at admission, total at pause time

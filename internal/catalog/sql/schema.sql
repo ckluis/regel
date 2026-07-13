@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS name_pointer (
 CREATE TABLE IF NOT EXISTS name_pointer_history (
   name       text NOT NULL, scope_kind smallint NOT NULL, scope_id text NOT NULL,
   hash       text NOT NULL REFERENCES definition(hash),
+  -- BUILD-A (ADR-03 §1 table 4): visibility snapshotted per window so as-of
+  -- resolution can carry the identical R1-12 visibility predicate as live.
+  visibility text NOT NULL DEFAULT 'exported' CHECK (visibility IN ('exported','private')),
   valid_from timestamptz NOT NULL,
   valid_to   timestamptz,
   admission_id bigint NOT NULL REFERENCES admission(id),
@@ -238,8 +241,9 @@ BEGIN
        AND scope_id = OLD.scope_id AND valid_to IS NULL;
   END IF;
   INSERT INTO name_pointer_history
-    (name, scope_kind, scope_id, hash, valid_from, valid_to, admission_id)
-  VALUES (NEW.name, NEW.scope_kind, NEW.scope_id, NEW.hash, ts, NULL, NEW.admission_id);
+    (name, scope_kind, scope_id, hash, visibility, valid_from, valid_to, admission_id)
+  VALUES (NEW.name, NEW.scope_kind, NEW.scope_id, NEW.hash, NEW.visibility, ts, NULL,
+          NEW.admission_id);
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 

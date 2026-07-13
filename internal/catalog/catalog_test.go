@@ -576,6 +576,29 @@ WHERE name='app/x/ver' AND scope_kind=0 AND scope_id='' ORDER BY valid_from`)
 		}
 	})
 
+	// BUILD-A (ADR-03 §3): as-of carries the identical visibility predicate —
+	// a private helper is as invisible historically as it is live.
+	t.Run("as_of_private_visibility", func(t *testing.T) {
+		var tw time.Time
+		ok, err := q.QueryRow(ctx, `
+SELECT valid_from FROM name_pointer_history
+WHERE name='app/crm/deal/roundUp' AND scope_kind=0 AND scope_id='' AND valid_to IS NULL`,
+			nil, &tw)
+		mustNil(t, err, "read private window start")
+		if !ok {
+			t.Fatal("private helper has no history window")
+		}
+		if r, ok := resolve(ResolveReq{Name: "app/crm/deal/roundUp", CallerModule: "app/crm/deal", AsOf: &tw}); !ok || r.Hash != Hpriv {
+			t.Fatalf("as-of same-module private: want %s got %+v ok=%v", Hpriv, r, ok)
+		}
+		if _, ok := resolve(ResolveReq{Name: "app/crm/deal/roundUp", CallerModule: "app/other", AsOf: &tw}); ok {
+			t.Fatal("as-of private name must be invisible to a different module")
+		}
+		if _, ok := resolve(ResolveReq{Name: "app/crm/deal/roundUp", CallerModule: "", AsOf: &tw}); ok {
+			t.Fatal("as-of private name must be invisible to an external caller")
+		}
+	})
+
 	// CAS: two updates from the same stale base ⇒ exactly one wins.
 	t.Run("cas_stale_base_loses", func(t *testing.T) {
 		seed(Pointer{Name: "app/x/cas", ScopeKind: 0, Kind: "function", Visibility: "exported", Hash: Hb, AdmissionID: admID})

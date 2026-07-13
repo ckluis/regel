@@ -73,9 +73,9 @@ LIMIT 1`,
 			[]any{req.Name, c.UserID, c.TeamID, c.OrgID, c.PackageID, moduleOf(req.Name), req.CallerModule},
 			&r.Hash, &r.Kind, &r.ScopeKind)
 	} else {
-		// History carries no visibility/kind columns; kind is recovered by joining
-		// the immortal definition row. As-of visibility is not reconstructable
-		// (visibility is not versioned), so the historical predicate is scope-only.
+		// BUILD-A (ADR-03 §3): history snapshots visibility per window, so the
+		// as-of query carries the identical visibility predicate as live. kind is
+		// recovered by joining the immortal definition row.
 		ok, err = q.QueryRow(ctx, `
 SELECT h.hash, d.kind, h.scope_kind
 FROM name_pointer_history h JOIN definition d ON d.hash = h.hash
@@ -83,10 +83,12 @@ WHERE h.name = $1
   AND (h.scope_kind, h.scope_id) IN (VALUES
         (4::smallint, $2::text), (3::smallint, $3::text), (2::smallint, $4::text),
         (1::smallint, $5::text), (0::smallint, ''::text))
-  AND h.valid_from <= $6 AND (h.valid_to IS NULL OR h.valid_to > $6)
+  AND (h.visibility = 'exported'
+       OR (h.visibility = 'private' AND $6::text = $7::text))
+  AND h.valid_from <= $8 AND (h.valid_to IS NULL OR h.valid_to > $8)
 ORDER BY h.scope_kind DESC
 LIMIT 1`,
-			[]any{req.Name, c.UserID, c.TeamID, c.OrgID, c.PackageID, *req.AsOf},
+			[]any{req.Name, c.UserID, c.TeamID, c.OrgID, c.PackageID, moduleOf(req.Name), req.CallerModule, *req.AsOf},
 			&r.Hash, &r.Kind, &r.ScopeKind)
 	}
 	if err != nil || !ok {

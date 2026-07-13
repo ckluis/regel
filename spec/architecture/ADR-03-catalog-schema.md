@@ -87,6 +87,12 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 CREATE TABLE name_pointer_history (
   name       text NOT NULL, scope_kind smallint NOT NULL, scope_id text NOT NULL,
   hash       text NOT NULL REFERENCES definition(hash),
+  visibility text NOT NULL DEFAULT 'exported' CHECK (visibility IN ('exported','private')),
+  -- BUILD-A: visibility column added. §3 requires as-of resolution to be "the
+  -- identical query against name_pointer_history", including the R1-12 visibility
+  -- predicate — but the original history DDL carried no visibility, so the as-of
+  -- leg of that predicate was unstatable (a private helper would resolve
+  -- cross-module as-of). The I7 trigger snapshots NEW.visibility with each window.
   valid_from timestamptz NOT NULL,
   valid_to   timestamptz,                          -- NULL = current
   admission_id bigint NOT NULL REFERENCES admission(id),  -- R1-12: FK added — history was a
@@ -315,11 +321,17 @@ BEGIN ISOLATION LEVEL SERIALIZABLE;
   5. verifier suite (catalog-parity, capability-audit, pii-flow, contracts)
      as queries on this connection — they see uncommitted rows; any failure ⇒ RAISE;
   6. apply derived migration_sql (Postgres DDL is transactional);
-  7. UPDATE/INSERT name_pointer with CAS:
-       ... ON CONFLICT (name, scope_kind, scope_id) DO UPDATE SET hash = :new
-       WHERE name_pointer.hash = :base_hash_the_patch_saw;
+  7. UPDATE/INSERT name_pointer with CAS — semantics: move the pointer iff it still
+     names :base_hash_the_patch_saw (or insert iff the patch expected an absent name);
+     BUILD-A: realized as an explicit two-arm INSERT-if-absent / UPDATE-with-CAS
+     rather than the single `INSERT ... ON CONFLICT (name, scope_kind, scope_id)
+     DO UPDATE SET hash = :new WHERE name_pointer.hash = :base` statement this step
+     originally showed: on the conflict path that statement fires the I7
+     BEFORE INSERT trigger for a row that is never inserted AND the BEFORE UPDATE
+     trigger, writing two history windows for one pointer move and tripping the I4
+     exclusion (observed on PG 16.13). The CAS contract is unchanged:
      0 rows updated ⇒ a concurrent admission won ⇒ RAISE (client retries against the
-     new head); the I7 trigger writes history;
+     new head); the I7 trigger writes history exactly once per move;
   8. re-verify overlays of any moved base pointer (§3); failure ⇒ RAISE;
 COMMIT;   -- deploy is this commit. Any RAISE ⇒ ROLLBACK ⇒ nothing happened:
           -- no definition row, no DDL, no pointer move, no audit row.

@@ -405,7 +405,7 @@ func (p *printer) forOfStmt(n *Node) string {
 	if decl.U&1 != 0 {
 		kw = "const"
 	}
-	pat := decl.Kids[0].Kids[0]
+	pat := decl.Kids[0].Kids[0].Kids[0] // KVarDecl → KList → KDeclr → pattern
 	// iterExpr is evaluated in the outer scope (binder not yet pushed).
 	iterStr := p.expr(iter)
 	var binders []*Node

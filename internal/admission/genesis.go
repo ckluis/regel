@@ -108,6 +108,13 @@ INSERT INTO epoch (n, std_manifest_root, dispatch_attestation) VALUES ($1, $2, $
 		return fmt.Errorf("genesis: insert epoch: %w", err)
 	}
 
+	// ADR-08 §2: pin the live epoch fence row in the same transaction as the epoch.
+	if _, err := conn.Exec(ctx, `
+INSERT INTO epoch_current (one, n) VALUES (true, $1)
+ON CONFLICT (one) DO UPDATE SET n = EXCLUDED.n`, im.Epoch); err != nil {
+		return fmt.Errorf("genesis: pin epoch_current: %w", err)
+	}
+
 	if err := conn.Commit(ctx); err != nil {
 		return err
 	}

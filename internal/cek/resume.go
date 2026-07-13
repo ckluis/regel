@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math/big"
 	"time"
+
+	"regel.dev/regel/internal/rast"
 )
 
 // RestartChoice is the operator/agent choice delivered to a parked machine
@@ -105,8 +107,54 @@ func (in *Interp) Resume(ctx context.Context, st *State, d Delivery, p Principal
 // definition by hash (same param binding as newMachine); clo non-nil → the
 // closure applied to args. The bottom FrRet frame mirrors newMachine.
 func (in *Interp) InitialState(defHash string, clo *ClosureObj, args []Value, tier Tier, fuel, alloc int64) (*State, error) {
-	// RED STUB: real body lands GREEN.
-	return nil, fmt.Errorf("cek: InitialState not implemented")
+	kont := []*Frame{{Kind: FrRet, RetDef: "", RetEnv: nil}}
+	st := &State{
+		Mode:      ModeEval,
+		Kont:      kont,
+		Tier:      tier,
+		FuelSteps: fuel,
+		FuelAlloc: alloc,
+		ParkKind:  ParkFresh,
+	}
+	if clo != nil {
+		root, err := in.loadAST(clo.DefHash)
+		if err != nil {
+			return nil, err
+		}
+		fnNode, ok := navigate(root, clo.Path)
+		if !ok {
+			return nil, fmt.Errorf("cek: InitialState cannot navigate closure path in %s", clo.DefHash)
+		}
+		if fnNode.Kind != rast.KFunc {
+			return nil, fmt.Errorf("cek: InitialState closure is not a function (kind %d)", fnNode.Kind)
+		}
+		act, err := bindParams(fnNode, args, clo.Env)
+		if err != nil {
+			return nil, err
+		}
+		st.DefHash = clo.DefHash
+		st.Env = act
+		st.Path = clo.Path.child(3)
+		return st, nil
+	}
+	root, err := in.loadAST(defHash)
+	if err != nil {
+		return nil, err
+	}
+	st.DefHash = defHash
+	switch root.Kind {
+	case rast.KFunc:
+		act, err := bindParams(root, args, nil)
+		if err != nil {
+			return nil, err
+		}
+		st.Env = act
+		st.Path = Path{3}
+	default:
+		st.Env = nil
+		st.Path = nil
+	}
+	return st, nil
 }
 
 // rebindNodes re-derives every K frame's live Node pointer from its immortal

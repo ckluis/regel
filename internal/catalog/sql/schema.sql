@@ -113,9 +113,11 @@ CREATE TABLE IF NOT EXISTS continuation (
   epoch         int  NOT NULL,
   format_ver    int  NOT NULL,
   frames        bytea NOT NULL,
+  result        bytea,                       -- BUILD-B: terminal value, CFR value-encoded; NULL until done.
   wake          jsonb NOT NULL,
   status        text NOT NULL CHECK (status IN
-                  ('sleeping','ready','running','condition','done','failed')),
+                  ('sleeping','ready','running','condition','done','failed','cancelled')),
+                -- BUILD-B: 'cancelled' for §5 race losers.
   step_seq      bigint NOT NULL DEFAULT 0,
   lease_owner   uuid,
   lease_until   timestamptz,
@@ -132,6 +134,55 @@ CREATE TABLE IF NOT EXISTS continuation (
 -- order and range scans (wake->>'due' <= :now_iso) are still index-served.
 CREATE INDEX IF NOT EXISTS continuation_timer_idx ON continuation ((wake->>'due'))
   WHERE status = 'sleeping' AND wake->>'kind' = 'timer';
+
+-- BUILD-B: bring a pre-existing continuation table up to the current shape.
+-- The result column and the 'cancelled' status are additive; both are no-ops on
+-- a fresh DB (the CREATE above already carries them).
+ALTER TABLE continuation ADD COLUMN IF NOT EXISTS result bytea;
+DO $$
+DECLARE cn text;
+BEGIN
+  SELECT c.conname INTO cn
+  FROM pg_constraint c
+  WHERE c.conrelid = 'continuation'::regclass
+    AND c.contype = 'c'
+    AND pg_get_constraintdef(c.oid) LIKE '%status%'
+    AND pg_get_constraintdef(c.oid) NOT LIKE '%cancelled%';
+  IF cn IS NOT NULL THEN
+    EXECUTE 'ALTER TABLE continuation DROP CONSTRAINT ' || quote_ident(cn);
+    ALTER TABLE continuation ADD CONSTRAINT continuation_status_check CHECK (status IN
+      ('sleeping','ready','running','condition','done','failed','cancelled'));
+  END IF;
+END $$;
+
+-- ADR-05 §5 BUILD-B: channel messages. A receive claims the oldest undelivered
+-- message on its channel; a send claims the oldest matching sleeping receiver.
+CREATE TABLE IF NOT EXISTS channel_message (
+  id         uuid PRIMARY KEY,
+  channel    text  NOT NULL,
+  payload    bytea NOT NULL,                          -- CFR value-encoded (EncodeValue)
+  sent_by    text  NOT NULL,                          -- continuation id or external principal
+  sent_at    timestamptz NOT NULL DEFAULT now(),
+  claimed_by uuid REFERENCES continuation(id)         -- receiving continuation; NULL = undelivered
+);
+CREATE INDEX IF NOT EXISTS channel_message_undelivered_idx
+  ON channel_message (channel) WHERE claimed_by IS NULL;
+CREATE INDEX IF NOT EXISTS channel_message_fifo_idx
+  ON channel_message (channel, sent_at) WHERE claimed_by IS NULL;
+
+-- ADR-05 §7 BUILD-B: the transactional outbox. UNIQUE (continuation_id, step_seq,
+-- ordinal) is THE dedup key that makes "effect fires exactly once" a DB fact.
+CREATE TABLE IF NOT EXISTS outbox (
+  id              uuid PRIMARY KEY,
+  continuation_id uuid  NOT NULL REFERENCES continuation(id),
+  step_seq        bigint NOT NULL,
+  ordinal         int    NOT NULL,                     -- position within the step's effect trace
+  class           text   NOT NULL,                     -- 'mail.send' | 'channel.send' | …
+  payload         jsonb  NOT NULL,
+  delivered_at    timestamptz,                         -- NULL until ADR-06's dispatcher delivers
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (continuation_id, step_seq, ordinal)
+);
 
 -- ADR-05 §6 durable conditions + restarts.
 CREATE TABLE IF NOT EXISTS durable_condition (
@@ -199,6 +250,13 @@ CREATE TABLE IF NOT EXISTS epoch (
   std_manifest_root    text NOT NULL,
   dispatch_attestation text NOT NULL,
   created_at           timestamptz NOT NULL DEFAULT now()
+);
+
+-- ADR-08 §2: the fleet-coherence fence row — the single live catalog epoch.
+-- Defined after epoch so its FK target exists.
+CREATE TABLE IF NOT EXISTS epoch_current (
+  one bool PRIMARY KEY DEFAULT true CHECK (one),
+  n   int NOT NULL REFERENCES epoch(n)
 );
 
 -- Bootstrap bookkeeping.

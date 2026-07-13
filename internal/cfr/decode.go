@@ -10,10 +10,35 @@ import (
 
 func mathFloat64bits(f float64) uint64 { return math.Float64bits(f) }
 
-// DecodeValue is the fail-closed inverse of EncodeValue. RED STUB: real body
-// lands GREEN.
-func DecodeValue(data []byte) (cek.Value, error) {
-	return cek.Value{}, decodeErr("DecodeValue not implemented")
+// DecodeValue is the fail-closed inverse of EncodeValue: it rebuilds a single
+// Value from a [version][heap][value] blob. Like Decode it is total — an unknown
+// version/tag or a truncation yields a typed error, never a panic.
+func DecodeValue(data []byte) (v cek.Value, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			v = cek.Value{}
+			err = decodeErr("panic during value decode: %v", r)
+		}
+	}()
+	d := &decoder{buf: data}
+	ver, e := d.byteE()
+	if e != nil {
+		return cek.Value{}, e
+	}
+	if ver != FormatVersion {
+		return cek.Value{}, decodeErr("unknown format version %d", ver)
+	}
+	if e := d.loadHeap(); e != nil {
+		return cek.Value{}, e
+	}
+	val, e := d.valueE()
+	if e != nil {
+		return cek.Value{}, e
+	}
+	if d.pos != len(d.buf) {
+		return cek.Value{}, decodeErr("%d trailing bytes", len(d.buf)-d.pos)
+	}
+	return val, nil
 }
 
 // Decode rebuilds a machine State from a CFR blob. It is versioned and total: an
@@ -38,36 +63,8 @@ func Decode(data []byte) (st *cek.State, err error) {
 
 	// Object heap: allocate shells, then fill (two passes support forward refs
 	// and cycles).
-	n, e := d.uvarintE()
-	if e != nil {
+	if e := d.loadHeap(); e != nil {
 		return nil, e
-	}
-	if n > uint64(len(d.buf)) {
-		return nil, decodeErr("object count %d exceeds buffer", n)
-	}
-	d.shells = make([]any, n)
-	types := make([]byte, n)
-	for i := uint64(0); i < n; i++ {
-		t, e := d.byteE()
-		if e != nil {
-			return nil, e
-		}
-		types[i] = t
-		switch t {
-		case objEnv:
-			d.shells[i] = &cek.Env{}
-		case objArray:
-			d.shells[i] = &cek.ArrayObj{}
-		case objRecord:
-			d.shells[i] = &cek.RecordObj{M: map[string]cek.Value{}}
-		default:
-			return nil, decodeErr("unknown heap object type %d", t)
-		}
-	}
-	for i := uint64(0); i < n; i++ {
-		if e := d.fillObject(types[i], d.shells[i]); e != nil {
-			return nil, e
-		}
 	}
 
 	out := &cek.State{}
@@ -144,6 +141,44 @@ func Decode(data []byte) (st *cek.State, err error) {
 		return nil, decodeErr("%d trailing bytes", len(d.buf)-d.pos)
 	}
 	return out, nil
+}
+
+// loadHeap reads the object table (count + type tags), allocates shells, then
+// fills them — two passes so forward refs and cycles resolve. Shared by Decode
+// and DecodeValue.
+func (d *decoder) loadHeap() error {
+	n, e := d.uvarintE()
+	if e != nil {
+		return e
+	}
+	if n > uint64(len(d.buf)) {
+		return decodeErr("object count %d exceeds buffer", n)
+	}
+	d.shells = make([]any, n)
+	types := make([]byte, n)
+	for i := uint64(0); i < n; i++ {
+		t, e := d.byteE()
+		if e != nil {
+			return e
+		}
+		types[i] = t
+		switch t {
+		case objEnv:
+			d.shells[i] = &cek.Env{}
+		case objArray:
+			d.shells[i] = &cek.ArrayObj{}
+		case objRecord:
+			d.shells[i] = &cek.RecordObj{M: map[string]cek.Value{}}
+		default:
+			return decodeErr("unknown heap object type %d", t)
+		}
+	}
+	for i := uint64(0); i < n; i++ {
+		if e := d.fillObject(types[i], d.shells[i]); e != nil {
+			return e
+		}
+	}
+	return nil
 }
 
 func (d *decoder) fillObject(t byte, shell any) error {

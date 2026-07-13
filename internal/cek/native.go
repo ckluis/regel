@@ -81,6 +81,17 @@ func SignalCondition(class string, restarts []Restart, payload map[string]any) *
 // StdMailSend records a mail.send intent (no real I/O in Stage A) and returns a
 // record describing the intent.
 func StdMailSend(h *Host, args []Value) (Value, *NativePark) {
+	// Runtime capability gate (defense in depth, ADR-05 §4): the caller's
+	// principal must be the operator or hold the mail.send grant. Otherwise the
+	// call parks on capability.revoked and records NO effect (fail closed).
+	if !h.Principal.IsOperator && !h.Principal.Grants["mail.send"] {
+		return undef(), &NativePark{Condition: SignalCondition("capability.revoked",
+			[]Restart{
+				{Name: "re-grant", Label: "Re-grant mail.send", CapabilityRequired: "operator"},
+				{Name: "abort", Label: "Abort"},
+			},
+			map[string]any{"capability": "mail.send"})}
+	}
 	to, subject := "", ""
 	if len(args) > 0 {
 		to = toStr(args[0])
@@ -134,22 +145,70 @@ func StdKeys(h *Host, args []Value) (Value, *NativePark) {
 }
 
 // --- Stage-B micro-std wake natives (ADR-05 §5 BUILD-B) -----------------------
-// RED STUBS: these return no park so the wake tests fail; real bodies land GREEN.
 
-// StdWfSleep parks on a timer wake (wf.sleep(ms)).
-func StdWfSleep(h *Host, args []Value) (Value, *NativePark) { return undef(), nil }
+// wfFault builds a fail-closed durable-condition park for a wf.* argument fault
+// (a non-serializable programming error surfaced as a resumable condition, never
+// a crash). Restart set is [abort].
+func wfFault(class, msg string) *NativePark {
+	return &NativePark{Condition: SignalCondition(class,
+		[]Restart{{Name: "abort", Label: "Abort"}}, map[string]any{"error": msg})}
+}
 
-// StdWfReceive parks on a message wake (wf.receive(channel)).
-func StdWfReceive(h *Host, args []Value) (Value, *NativePark) { return undef(), nil }
+// StdWfSleep parks on a timer wake (wf.sleep(ms)); resume delivers undefined.
+func StdWfSleep(h *Host, args []Value) (Value, *NativePark) {
+	if len(args) < 1 || args[0].Tag != TagF64 {
+		return undef(), wfFault("wf.arg", "wf.sleep expects a number of milliseconds")
+	}
+	return undef(), &NativePark{Wake: &Wake{Kind: WakeTimer, DelayMS: int64(args[0].N)}}
+}
 
-// StdWfSend records a channel.send effect (wf.send(channel, value)); no park.
-func StdWfSend(h *Host, args []Value) (Value, *NativePark) { return undef(), nil }
+// StdWfReceive parks on a message wake (wf.receive(channel)); resume delivers the
+// message payload value.
+func StdWfReceive(h *Host, args []Value) (Value, *NativePark) {
+	if len(args) < 1 || args[0].Tag != TagStr {
+		return undef(), wfFault("wf.arg", "wf.receive expects a channel name")
+	}
+	return undef(), &NativePark{Wake: &Wake{Kind: WakeMessage, Channel: args[0].S}}
+}
+
+// StdWfSend records a channel.send effect carrying the full-fidelity payload
+// value (wf.send(channel, value)); it does NOT park. The store applies it
+// transactionally at checkpoint.
+func StdWfSend(h *Host, args []Value) (Value, *NativePark) {
+	if len(args) < 2 || args[0].Tag != TagStr {
+		return undef(), wfFault("wf.arg", "wf.send expects (channel, value)")
+	}
+	h.RecordEffectVal("channel.send", map[string]any{"channel": args[0].S}, args[1])
+	return undef(), nil
+}
 
 // StdWfAll parks on a join wake with quorum = len(thunks) (wf.all(thunks)).
-func StdWfAll(h *Host, args []Value) (Value, *NativePark) { return undef(), nil }
+func StdWfAll(h *Host, args []Value) (Value, *NativePark) { return wfJoin(args, false) }
 
 // StdWfRace parks on a join wake with quorum = 1 (wf.race(thunks)).
-func StdWfRace(h *Host, args []Value) (Value, *NativePark) { return undef(), nil }
+func StdWfRace(h *Host, args []Value) (Value, *NativePark) { return wfJoin(args, true) }
+
+// wfJoin validates a thunk array and parks a join wake. Every element must be a
+// closure (the dialect's only deferred-computation value, ADR-05 §5 BUILD-B); a
+// non-closure element fails closed.
+func wfJoin(args []Value, race bool) (Value, *NativePark) {
+	if len(args) < 1 || args[0].Tag != TagArray {
+		return undef(), wfFault("wf.arg", "wf.all/race expects an array of thunks")
+	}
+	elems := args[0].arr().Elems
+	thunks := make([]Value, 0, len(elems))
+	for _, el := range elems {
+		if el.Tag != TagClosure {
+			return undef(), wfFault("wf.thunk", "join thunk is not a closure")
+		}
+		thunks = append(thunks, el)
+	}
+	quorum := len(thunks)
+	if race {
+		quorum = 1
+	}
+	return undef(), &NativePark{Wake: &Wake{Kind: WakeJoin, Thunks: thunks, Quorum: quorum}}
+}
 
 func itoa(i int) string {
 	if i == 0 {

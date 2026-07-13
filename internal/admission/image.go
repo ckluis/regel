@@ -107,6 +107,12 @@ func buildImage() *Image {
 		{module: "std/contract", export: "ensures", defKind: rast.DefNative, catKind: "function", native: cek.StdContractEnsures},
 		// std/mail (send — capability "mail.send", the V1 fixture target)
 		{module: "std/mail", export: "send", defKind: rast.DefNative, catKind: "function", native: cek.StdMailSend, capability: "mail.send"},
+		// std/wf (Stage-B wake vocabulary — ADR-05 §5 BUILD-B)
+		{module: "std/wf", export: "sleep", defKind: rast.DefNative, catKind: "function", native: cek.StdWfSleep},
+		{module: "std/wf", export: "receive", defKind: rast.DefNative, catKind: "function", native: cek.StdWfReceive},
+		{module: "std/wf", export: "send", defKind: rast.DefNative, catKind: "function", native: cek.StdWfSend},
+		{module: "std/wf", export: "all", defKind: rast.DefNative, catKind: "function", native: cek.StdWfAll},
+		{module: "std/wf", export: "race", defKind: rast.DefNative, catKind: "function", native: cek.StdWfRace},
 	}
 
 	im := &Image{
@@ -230,5 +236,10 @@ func moduleStubs() map[string]string {
 			"export declare const ensures: (cond: boolean) => boolean;\n",
 		"/std/mail.ts": "export declare const send: (to: string, subject: string) => " +
 			"{ intent: string; to: string; subject: string };\n",
+		"/std/wf.ts": "export declare const sleep: (ms: number) => void;\n" +
+			"export declare const receive: <T>(channel: string) => T;\n" +
+			"export declare const send: <T>(channel: string, value: T) => void;\n" +
+			"export declare const all: <T>(thunks: (() => T)[]) => T[];\n" +
+			"export declare const race: <T>(thunks: (() => T)[]) => T;\n",
 	}
 }

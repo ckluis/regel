@@ -93,9 +93,15 @@ func Encode(st *cek.State) ([]byte, error) {
 
 // EncodeValue serializes a single Value with the CFR value codec (shared heap
 // interning, same wire rules as Encode) — used for continuation.result and
-// channel_message.payload. RED STUB: real body lands GREEN.
+// channel_message.payload. The layout is [version][heap][value], so it shares
+// the object-table content-sharing of Encode.
 func EncodeValue(v cek.Value) ([]byte, error) {
-	return nil, fmt.Errorf("%w: EncodeValue not implemented", ErrCFR)
+	e := &encoder{objIdx: map[any]int{}}
+	e.internValue(v)
+	e.byte(FormatVersion)
+	e.emitHeap()
+	e.value(v)
+	return e.buf, nil
 }
 
 func (e *encoder) emitHeap() {

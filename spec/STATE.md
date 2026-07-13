@@ -38,8 +38,8 @@
 - Session limits killed wide fan-outs twice; run sub-orchestrators serial-to-2-concurrency; resume stragglers only.
 
 - STAGE B GATE: **OPERATOR GO (Stage B only)** 2026-07-13. Re-decide at Stage B gate before Stage C.
-- Phase 4 Stage B (deepest bets, est. 4 sessions): IN PROGRESS — fable build sub-orchestrator.
+- Phase 4 Stage B (deepest bets, =M0 CFR core→M2): **DONE — GATE GREEN with named residues** 2026-07-13 (spec/gates/STAGE-B.md). ADR-05 kill suite 10/10 (+12/13/14; 11 = residue, binds at first frame-kind/CFR-version epoch); real kill -9 cross-kernel resume to identical result, effects exactly-once (scripts/demo-kill9-resume.sh, exit 0); year-old resume across an epoch; 10k wake storm 0 dupes 2.3-2.9s abort_rate ≤0.9%; hermeticity 6/6 byte-identical across processes; exact-budget fuel (park at exactly T-1/T-5); capability smuggle (forged CapToken in CFR) refused pre-machine-re-entry with zero trace; P2-6 retry-on-40001 + ≤5% abort budget implemented+measured; resume p95 ~58ms, CFR blob p95 199B. 5 BUILD-B ADR updates (ADR-05 result/'cancelled'/thunk-joins/channel_message/outbox/retry-policy; ADR-13 rows 25-26). Survived 2 more session strands (9 total). **Operator re-decision required before Stage C** (GATE-1 §5).
 
 ## Next
-- Stage B → gate + operator re-decision → C (verifiers+MCP+git) → D (std/ slice) → E (proof CRM + claim-evidence).
-- Stage B must build on internal/cfr Park/ClaimAndResume seams (no re-plumb); timer `due` fixed-width UTC ISO-8601; V5 shares the CFR type table.
+- Operator re-decision at the Stage B gate → C (verifiers V2-V6 + MCP + git projection) → D (std/ slice) → E (proof CRM + claim-evidence).
+- Stage C must compose with the ClaimAndStep step-txn seam (fence→CAS→grants→token-revalidation→delivery→fenced checkpoint), not around it; V5 shares internal/cfr's type table (encodable ≡ admitted); STAGE-B.md §10 residues are Stage-C/D work items (V5 4a leg, decode-coverage floor gate, torn-write statement sweep, outbox dispatcher, message match-predicates/event wakes, reaper breaker state machine).

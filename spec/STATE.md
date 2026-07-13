@@ -7,7 +7,7 @@
 - Phase 3 iter 1/2 — ARCH-R1: DONE. 14/14 revisions applied + fable integration pass (5 cross-ADR contradictions fixed). ADR-13-observability created. Ledger: spec/architecture/REVISIONS-R1.md (incl. 4 documented deviations: R1-07 M1-not-M0 tsgo budget; R1-08 patch_id optional/enum 7; R1-12 SQL literal kept; R1-13 restart-authority disable). Markers: R1-<nn> + R1-INT grep-verified.
 - Phase 3 iter 1/2 — LUMINARY-R1 re-review: DONE — **VERDICT: GO** (spec/luminary/REPORT-R1.md). 14/14 SATISFIED; both P0 red flags CLEARED (Celko, Bach); Allspaw+Karpathy stay withdrawn; all 4 deviations ACCEPTED. New findings 0 P0/P1, 7 P2, 16 P3 → tracked backlog with expert owners; 8 out-of-scope carries. No iteration 2 needed.
 - GATE 1: **OPERATOR GO (Stage A only)** 2026-07-10 — spec/GATE-1.md; design corpus committed (1cde410). Re-decide at Stage A gate before Stage B.
-- Phase 4 Stage A (walking skeleton, =M0, est. 2 sessions): IN PROGRESS — fable build sub-orchestrator.
+- Phase 4 Stage A (walking skeleton, =M0): **DONE — GATE GREEN with named residues** 2026-07-13 (spec/gates/STAGE-A.md). One binary + PG 16.13: admit→CEK-evaluate→serve + admit!/rollback/as-of demo (scripts/demo-admit-rollback.sh, 8/8 steps); go test ./... green (9 pkgs, real PG); 4 kill-test families at Stage-A scope; perf 27.1M CEK steps/sec (27× floor), metering tax ≈0%, 10 transitions/req; I4 overlap kill-test on PG 16.13; TS 7.1.0-dev vendored as Go lib; 3 ADR-first fixes (BUILD-A: markers in ADR-03/05). Survived 3 more session strands (serial finishers). **Operator re-decision required before Stage B** (GATE-1 §5).
 
 ## Facts
 - Project root: /Users/clank/Desktop/projects/regel (git initialized 2026-07-09).

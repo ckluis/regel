@@ -80,9 +80,20 @@ CREATE TABLE continuation (
                 -- gating is the ADR-08 R1-05 fence against epoch_current, not this column.
   format_ver    int  NOT NULL,               -- CFR version
   frames        bytea NOT NULL,              -- CFR blob (C + K + E heap)
+  result        bytea,                       -- BUILD-B: terminal value, CFR value-encoded.
+                -- Stage B's acceptance test (kill -9 → resume → IDENTICAL result) and the
+                -- 202-then-poll HTTP contract both need the produced value to be durable,
+                -- and no ADR stored it (STAGE-A residue "durable result storage"). Written
+                -- exactly once, in the terminal checkpoint's own transaction (status→'done'),
+                -- encoded with the same CFR value codec as frames — never jsonb, for the
+                -- same fidelity reasons as §2. NULL until terminal.
   wake          jsonb NOT NULL,              -- §5
   status        text NOT NULL CHECK (status IN
-                  ('sleeping','ready','running','condition','done','failed')),
+                  ('sleeping','ready','running','condition','done','failed','cancelled')),
+                -- BUILD-B: 'cancelled' added for §5 race losers. "race cancels losers" was
+                -- unrepresentable in the closed status set: 'done' would fabricate a result,
+                -- 'failed' would fabricate an error. A cancelled row keeps frames for audit,
+                -- never resumes (no claim path accepts it), and needs no condition row.
                 -- R1-12: the status value 'condition' is the THIRD distinct sense of the
                 -- word (GLOSSARY disambiguation): "parked on an open durable_condition
                 -- awaiting a restart choice" (§6). It is neither a wake condition (a
@@ -154,6 +165,48 @@ decrements the join in the same transaction, and quorum flips the parent to `rea
 (`race` cancels losers). Timer wakes are found by the partial index; message/event wakes
 are flipped to `ready` in the same transaction as the triggering write, with a NOTIFY to
 wake ADR-06's pollers.
+
+BUILD-B (Stage-B realizations forced by the machine's own semantics; each is a
+refinement, none contradicts the shapes above):
+
+- **`all`/`race` take thunk arrays** — `wf.all([() => f(x), …])`, quorum = length;
+  `wf.race([...])`, quorum = 1. The machine evaluates calls eagerly and inline
+  (ADR-04 §2), so a promise-valued argument list would already have run its work
+  before the combinator saw it; closures are the dialect's only deferred-computation
+  value, they serialize as `(def_hash, env_ptr)` (§2), and each child continuation's
+  initial CFR is exactly "this closure, applied to zero arguments, not yet stepped."
+- **Children are rows written by the parent's park transaction.** The native marks the
+  park; the checkpoint transaction (§7) inserts one `continuation` row per thunk
+  (status `'ready'`, a resume task each) plus the parent's `join` wake — child
+  creation and parent park commit atomically or not at all.
+- **Quorum is computed, never counted.** The "decrement" above is realized as: a
+  child's terminal transaction re-derives quorum by counting terminal siblings among
+  `wake->'children'` and flips the parent with a status CAS (`WHERE status='sleeping'`).
+  Idempotent by construction — a re-offered child step cannot double-decrement, which
+  is what test 10's crash leg actually asserts.
+- **`race` losers flip to `'cancelled'`** (§2) in the same winning transaction; their
+  in-flight steps, if any, die at their own commit-time CAS.
+- **`message` sends are rows too.** A send from inside a workflow is recorded by the
+  step and applied in its checkpoint transaction (exactly-once with the step); an
+  external send lands through the kernel door in its own transaction. Either way the
+  triggering write, the receiver flip, and the resume task share one transaction:
+
+```sql
+CREATE TABLE channel_message (
+  id         uuid PRIMARY KEY,
+  channel    text  NOT NULL,          -- channel name (scoped like any catalog name)
+  payload    bytea NOT NULL,          -- CFR value-encoded (same codec as frames/result)
+  sent_by    text  NOT NULL,          -- continuation id or external principal
+  sent_at    timestamptz NOT NULL DEFAULT now(),
+  claimed_by uuid REFERENCES continuation(id)  -- receiving continuation; NULL = undelivered
+);
+CREATE INDEX ON channel_message (channel) WHERE claimed_by IS NULL;
+```
+
+  A `receive` park either claims the oldest undelivered message immediately (no park)
+  or parks with the `message` wake; the send transaction claims the message for the
+  oldest matching sleeping receiver as it flips it — one message wakes one receiver,
+  exactly once, because the claim is an UPDATE under the same SERIALIZABLE rules as §7.
 
 ### 6. Durable conditions and named restarts: rows, buttons, choices
 
@@ -249,6 +302,49 @@ lease-is-liveness-only). External side effects (mail, webhooks) never fire inlin
 the transaction writes an intent row and ADR-06's dispatcher delivers with the
 idempotency key — exactly-once inside Postgres, effectively-once with dedup keys across
 the process boundary. That is the honest limit, stated.
+
+BUILD-B: the outbox intent row referenced above was DDL'd nowhere (ADR-06 §5's
+`deliver` tasks name `intent_id` + `dedup_key` against a table that did not exist).
+Authored here because the dedup key is this section's `(continuation_id, step_seq)`;
+a step may record several effects, so an ordinal completes the key:
+
+```sql
+CREATE TABLE outbox (
+  id              uuid PRIMARY KEY,
+  continuation_id uuid  NOT NULL REFERENCES continuation(id),
+  step_seq        bigint NOT NULL,
+  ordinal         int    NOT NULL,   -- position within the step's effect trace
+  class           text   NOT NULL,   -- effect class ('mail.send', 'channel.send', …)
+  payload         jsonb  NOT NULL,
+  delivered_at    timestamptz,       -- NULL until ADR-06's dispatcher delivers
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (continuation_id, step_seq, ordinal)   -- THE dedup key
+);
+```
+
+The UNIQUE constraint is what makes "effect fires exactly once" a database fact
+rather than a protocol hope: a zombie kernel that somehow reached its effect INSERT
+after losing the CAS would violate the key and abort.
+
+BUILD-B (REPORT-R1 P2-6, Kleppmann — retry-on-40001 policy + abort-rate budget,
+binding at M2): SERIALIZABLE-everywhere means concurrent steps abort each other by
+design; aborts are SAFE (this section's CAS + ADR-06's re-offer) but were unpoliced.
+The policy, normative:
+
+- **Retry discipline.** A transaction that fails with SQLSTATE `40001`
+  (`serialization_failure`) or `40P01` (deadlock) is retried by its initiating kernel
+  up to **5 attempts**, with capped exponential backoff and full jitter
+  (base 10 ms, factor 2, cap 500 ms). Retry re-runs the WHOLE step from the claim
+  CAS — never a partial replay — which is safe precisely because nothing before
+  COMMIT escaped. A claim CAS that finds 0 rows on retry is a clean loss, not an
+  error. After 5 exhausted attempts the work is left for the lease/reaper path
+  (liveness delayed, correctness untouched) and the exhaustion is counted.
+- **Abort-rate budget.** `step.abort_rate` = serialization aborts / step-transaction
+  attempts, measured over the wake-storm kill-test (test 9) and in production over a
+  5-minute window: budget **≤ 5%** sustained (matching R1-07's admission retry
+  budget), recorded as a `perf_budget` row (metric `step.abort_rate`, milestone M2).
+  Signals: `pg.serialization_aborts_total{txn}` and
+  `pg.serialization_retry_exhausted_total` (ADR-13 registry, BUILD-B rows).
 
 ### 8. Epoch compatibility
 

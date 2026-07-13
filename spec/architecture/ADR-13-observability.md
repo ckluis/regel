@@ -119,6 +119,8 @@ means at 3am, and the owning subsystem. CI asserts registry ↔ table equivalenc
 | 22 | `cap.denials_total{class}` | counter | Capability denials: resume re-validation failures, vault CHECK rejections, reveal-grant denials | ADR-04 §5 / ADR-05 §4 / ADR-10 |
 | 23 | `agent.refusals_total{reason}` | counter | Refusal-ledger writes: `ADMISSION_BUDGET`, `CAP_UNGRANTED`, scope escalation | ADR-12 §5/§6 |
 | 24 | `condition.open_age_ms{class}` | gauge | Age of the oldest open durable condition — the operator-inbox lag | ADR-05 §6 |
+| 25 | `pg.serialization_aborts_total{txn}` | counter | BUILD-B (REPORT-R1 P2-6): 40001/40P01 aborts by transaction kind (step, admission, send, drain) — the SSI cost SERIALIZABLE-everywhere pays, now measured | ADR-05 §7 |
+| 26 | `pg.serialization_retry_exhausted_total` | counter | BUILD-B (REPORT-R1 P2-6): steps whose 5-attempt retry budget exhausted and fell back to the lease/reaper path | ADR-05 §7 |
 
 Plus the meta-signals `telemetry.dropped_total` and `telemetry.label_overflow_total`
 (§4, §1a) — the pipeline watches itself.
@@ -152,6 +154,7 @@ normative now; the numbers are the first stake in the ground, not folklore.
 | `sse.fanout_lag_ms` | p95 ≤ 500 ms; the 50k-session storm drains within its ADR-11 budget | M4 |
 | `sse.resyncs_total` | < 0.1% of frames sent | M4 |
 | `pg.select1_latency_ms` | p99 ≤ 100 ms; two consecutive probe failures mark the kernel degraded on its health port | M2 |
+| `pg.serialization_aborts_total` | BUILD-B: `step.abort_rate` (aborts/attempts) ≤ 5% sustained over a 5-min window; measured by the ADR-05 test-9 wake storm; a `perf_budget` row | M2 |
 | `epoch` flip | fence-trip → fleet serving on N ≤ the drain deadline (30 s lease TTL) | M6 |
 | `store.scrubber_trips_total` | **Zero.** Any trip pages and opens the ADR-03 §4a runbook — this SLO is never "calibrated" upward | M0 onward |
 | `telemetry.dropped_total` | < 1% of events under a 5-minute sink outage (ring-buffer sizing check) | M2 |

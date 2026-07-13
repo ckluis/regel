@@ -37,5 +37,9 @@
 ## Ops lessons
 - Session limits killed wide fan-outs twice; run sub-orchestrators serial-to-2-concurrency; resume stragglers only.
 
+- STAGE B GATE: **OPERATOR GO (Stage B only)** 2026-07-13. Re-decide at Stage B gate before Stage C.
+- Phase 4 Stage B (deepest bets, est. 4 sessions): IN PROGRESS — fable build sub-orchestrator.
+
 ## Next
-- Phase 2 LUMINARY verdict → Phase 3 revision loop (if REVISE, max 2) → GATE 1 operator stop.
+- Stage B → gate + operator re-decision → C (verifiers+MCP+git) → D (std/ slice) → E (proof CRM + claim-evidence).
+- Stage B must build on internal/cfr Park/ClaimAndResume seams (no re-plumb); timer `due` fixed-width UTC ISO-8601; V5 shares the CFR type table.

@@ -72,6 +72,12 @@ gains the `qname` term — flagged there, not defined twice.)
 | `condition.restart {condition_id, restart_name, expectedHash, args?}` → `{status}` | wrong-continuation resume → §7 hash fence + ADR-05 `capability_required` |
 | `audit.query {subject, since}` → admission/mutation rows, masked | recon → scope filter + masking |
 
+BUILD-C: at Stage C `resource.query`/`resource.mutate` operate over the minimal
+derived-resource shape the ADR-07 §1 BUILD-C derivation seam produces (declared field
+map → one derived table, masked reads, policy-predicate + row-version-guarded writes);
+the full 13-field-type vocabulary and ADR-11 wiring are Stage D behind the same tool
+contracts. All 11 tools ship at Stage C — none stubbed to a fake verdict.
+
 `patch.submit` with `commit:false` is the dry-run: the full ADR-07 pipeline in a
 transaction that always rolls back (ADR-09's mechanism); `commit:true` is the real gate.
 The Verdict is ADR-07 §6's object, byte-identical to what the operator plane and PR
@@ -170,6 +176,20 @@ corpus** and blocking M5 by the same discipline.
 The iterations-to-green P95 is not decorative: §5 sizes the agent admission-fuel budget from
 it, and §3a is the **only** sanctioned source for that constant.
 
+BUILD-C: the three **eval-corpus** gates — this §3a authoring eval, the §7
+restart-decision eval, and the §5 P95-derived fuel capacity — require a *real LLM agent*
+driving the loop and a reference app to author against; both first exist at Stage E
+(M6). Stage C lands their substrate (task-suite harness seams, monotone coverage rows,
+the fuel formula wired to read an eval row) and the M5 **structural** surface in full;
+the eval-corpus legs bind before v1 at Stage E and are recorded as OPEN gates in the
+Stage-C report — M5 is not declared closed while they are unrun. Nothing here weakens
+gate standing: unrun still blocks, it just blocks at the stage where a real agent exists.
+Consistent with §7's own policy, the agent-facing `condition.restart` authority ships
+DISABLED at Stage C (metric absent ⇒ disabled is the mandated state); the agent-kind
+fuel capacity ships as an operator-set constant with `derived_from='provisional'`
+(ADR-03 table 7) and the §5 traceability red-path reads red — an open gate, never
+silently green.
+
 ### 4. Vault plaintext is structurally unreachable from the agent plane
 
 Three independent layers, each sufficient:
@@ -246,6 +266,14 @@ refusal is fetchable by id through the agent plane**, not only in-transaction ve
 never is.) `verdict.get` serves both ledgers; escalation attempts are evidence (§6), and the
 refusal ledger is where that evidence lives. (The `refusal_id`/`outcome` columns are DDL'd in
 ADR-03 — flagged there.)
+
+**BUILD-C — retrieval is caller-scoped (REPORT-R1 P2-3, Schneier).** `verdict.get {id}`
+and `catalog://verdict/{id}` resolve only ids whose recorded principal is the
+authenticated caller; any other id — another principal's, or one that never existed —
+returns the identical `NOT_FOUND` through the §3 fast-fail path (same bytes, same
+latency floor). A guessed or leaked `refusal_id` is therefore not a cross-principal
+disclosure oracle. Operator-plane retrieval crosses principals only under an operator
+grant and is audit-rowed.
 
 ### 6. Patch scope policy: overlay self-serve; product by one-shot human approval
 

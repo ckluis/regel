@@ -175,6 +175,31 @@ CREATE TABLE continuation_coverage (               -- ADR-05 §8.5 (R1-10): deco
   decoder text NOT NULL, covered bool NOT NULL,
   PRIMARY KEY (epoch, frame_kind, cfr_version, decoder)
 );
+
+-- (7) Agent-plane tables. BUILD-C: ADR-12 §5/§6 name "two new tables (budget, refusal
+-- ledger)" — the refusal ledger is table (6); the budget and the one-shot approval token
+-- had no authored DDL anywhere. Authored here so every ADR-12 pointer resolves.
+CREATE TABLE admission_fuel (                      -- ADR-12 §5: per-principal token bucket
+  principal    text PRIMARY KEY,                   -- grant_row subject key ("kind:id")
+  capacity     bigint NOT NULL CHECK (capacity > 0),
+  refill_per_s numeric NOT NULL CHECK (refill_per_s >= 0),
+  level        numeric NOT NULL CHECK (level >= 0),-- current tokens; charged by deepest stage
+  updated_at   timestamptz NOT NULL DEFAULT now(), -- refill is computed lazily from elapsed time
+  -- BUILD-C: ADR-12 §5 derives agent-kind capacity from the §3a eval P95; until that eval
+  -- runs (Stage E, live agent), agent rows carry derived_from='provisional' and the §5
+  -- traceability red-path reads red — an OPEN gate, never silently green.
+  derived_from text NOT NULL DEFAULT 'provisional' -- 'eval-p95:<epoch>' | 'operator' | 'provisional'
+);
+CREATE TABLE approval_token (                      -- ADR-12 §6: one-shot product-scope approval
+  token        uuid PRIMARY KEY,
+  bound_hashes text[] NOT NULL,                    -- exact content hashes the human approved
+  minted_by    text NOT NULL,                      -- approving human principal (product-write holder)
+  minted_for   text NOT NULL,                      -- author agent principal
+  expires_at   timestamptz NOT NULL,
+  consumed_by  bigint REFERENCES admission(id),    -- set by the consuming admission txn; one-shot
+  consumed_at  timestamptz,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
 ```
 
 ### 2. Definition granularity and names

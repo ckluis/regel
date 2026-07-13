@@ -65,6 +65,15 @@ BEGIN ISOLATION LEVEL SERIALIZABLE;
 COMMIT;
 ```
 
+BUILD-C: step 5a's *seam* (explicit ordered pure passes over base ⊕ patch → proposed
+derived rows + `migration_sql`, nothing applied) is built at Stage C; its v1 *pass
+roster* over the full erf `resource(...)` vocabulary is ADR-10's and lands at Stage D
+behind the same seam. The Stage-C pass set covers exactly the governance vocabulary the
+Stage-C std slice exposes — capability/contract/policy declarations, vault-typed PII
+fields, and a minimal `std/resource` field map deriving additive DDL — which is what
+V3 (catalog-parity) and V6 (derivation-parity) verify at M1. Stage-D passes plug into
+this seam without changing any verifier's semantics.
+
 Ordering rationale: cheapest and most local first; identity (2c) is fixed by canonical
 form alone before the checker runs, so a tsgo version bump can never move a hash;
 derivation precedes verification because catalog-parity and derivation-parity check the
@@ -220,6 +229,13 @@ the proposed catalog model. Each entry: semantics / failure shape / one red-path
   resolver where the bans were relocated — mutation-untested, so a silently-weakened ban
   could survive; it can no longer. A surviving mutant anywhere in the three-part surface
   (verifiers, grammar gate, resolver) is a release blocker.
+  BUILD-C: direction (ii)'s mechanism, realized — seeded mutants are **named weakenings
+  compiled into the production enforcement code** (a mutant registry in the verifier /
+  grammar-gate / resolver packages: each entry flips one comparison, drops one sink,
+  widens one matcher; default-off, enabled one-at-a-time by the harness), never mocks —
+  the same discipline REPORT-R1 rev-2 ratified for the ADR-04 harness-3 evaluator
+  mutants. The harness enables each mutant, runs the hostile corpus, and asserts red;
+  a mutant the corpus leaves green blocks the release.
 - **Grammar fuzz invariants:** generated subset-valid ASTs through the real gate —
   never a panic, always terminates within budget, deterministic verdicts (same input,
   same verdict, any kernel).

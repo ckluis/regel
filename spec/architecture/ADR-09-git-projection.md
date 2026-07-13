@@ -77,6 +77,15 @@ a hosted remote after each admission. The truth branch (`main`) accepts updates 
 the kernel's projector identity only — forge branch protection plus the projector's
 sole write credential; humans and bots cannot advance it.
 
+BUILD-C: at Stage C the "hosted remote" is a **kernel-owned local bare repository**
+(filesystem path), written by the same pure-Go object construction — loose objects +
+an atomic ref update by the projector identity only. Everything this section requires
+(computed fold, stored mirror, SHA comparison, self-healing force-restore, audit row)
+is real against that mirror; pointing it at a hosted forge remote (credentials, branch
+protection, push transport) is operator infrastructure and rides as a named residue.
+Git's native SHA-1 object format is used, so "byte-identical SHAs" means git object ids
+any stock git client verifies.
+
 Divergence is self-healing by construction: on every projection the kernel compares
 the mirror's `main` SHA against the computed SHA for the ledger head; any mismatch
 (force-push mangle, forge-side accident) is force-restored from the image and audited.
@@ -107,6 +116,15 @@ Un-admitted code lives only on feature branches — proposals, never truth.
   with the failing check and the structured Verdict (ADR-07 §6 leak discipline
   applies verbatim). There is no status a human can override into truth, because no
   human identity can write `main`.
+
+BUILD-C: the inbound door ships at Stage C as kernel machinery — a git-submission
+entry point that takes a branch's changed files, maps the verified git identity to a
+catalog principal, and runs the ADR-07 pipeline as dry-run (PR check) or real
+admission (merge), `via='git'`, returning the Verdict for the forge to render. The
+forge-side wiring that invokes it (webhook listener, status-check posting, merge-queue
+configuration) is the same operator-infrastructure residue as the hosted mirror above;
+no timing hole is introduced because the local flow already proves the merge action
+cannot advance `main` except through the gate.
 
 One gate, three doors — CLI, Settings, git — same transaction, same verifiers, same
 audit row. Rejection through git looks like rejection everywhere: a Verdict. R1-INT:

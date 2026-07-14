@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -364,6 +365,10 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Restart string         `json:"restart"`
 		Args    map[string]any `json:"args"`
+		// ExpectedHash is the SHA-256 of the condition's continuation frames blob at
+		// render time (ADR-12 §7). Optional here for back-compat; when present the
+		// shared fence rejects a moved continuation with CONDITION_MOVED.
+		ExpectedHash string `json:"expected_hash"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad restart json: " + err.Error()})
@@ -396,32 +401,17 @@ WHERE continuation_id = $1 AND status = 'open' ORDER BY signaled_at DESC LIMIT 1
 		return
 	}
 
-	// Resolve the condition by choosing the restart. STAGE-A dev stub: the eval
-	// caller is granted "operator", so operator-gated restarts (grant-fuel) apply.
-	if err := cfr.PickRestart(r.Context(), conn, condID, req.Restart, req.Args, "operator", []string{"operator"}); err != nil {
-		writeJSON(w, 409, map[string]string{"error": err.Error()})
-		return
-	}
-
-	var seenSeq int64
-	if _, err := conn.QueryRow(r.Context(),
-		`SELECT step_seq FROM continuation WHERE id = $1`, []any{contID}, &seenSeq); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-
 	resume := func(state *cek.State, choice cek.RestartChoice) cek.Outcome {
 		// STAGE-A dev stub: the resume principal is the operator (as the eval path).
 		return s.interp.Resume(context.Background(), state, cek.Delivery{Restart: &choice},
 			cek.Principal{Subject: "operator", IsOperator: true})
 	}
-	out, claimed, err := cfr.ClaimAndResume(r.Context(), conn, contID, seenSeq, s.kernelID, resume)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	if !claimed {
-		writeJSON(w, 409, map[string]string{"error": "continuation already claimed or moved"})
+	// The shared fenced path (ADR-12 §7): one implementation, two doors — the same
+	// cfr.ResolveConditionFenced the MCP condition.restart tool calls.
+	out, rerr := cfr.ResolveConditionFenced(r.Context(), conn, condID, req.Restart, req.ExpectedHash,
+		req.Args, "operator", []string{"operator"}, resume)
+	if rerr != nil {
+		writeJSON(w, restartErrStatus(rerr), map[string]string{"error": rerr.Error()})
 		return
 	}
 
@@ -442,6 +432,20 @@ WHERE continuation_id = $1 AND status = 'open' ORDER BY signaled_at DESC LIMIT 1
 }
 
 // --- helpers -----------------------------------------------------------------
+
+// restartErrStatus maps a fenced-restart error to its HTTP status (ADR-12 §7).
+func restartErrStatus(err error) int {
+	switch {
+	case errors.Is(err, cfr.ErrRestartNotFound):
+		return 404
+	case errors.Is(err, cfr.ErrConditionMoved), errors.Is(err, cfr.ErrConditionResolved):
+		return 409
+	case errors.Is(err, cfr.ErrCapabilityRefused):
+		return 403
+	default:
+		return 500
+	}
+}
 
 func chainFromHeader(r *http.Request) catalog.Chain {
 	var c catalog.Chain

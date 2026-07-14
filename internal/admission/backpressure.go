@@ -85,11 +85,29 @@ func (s *semaphore) release() {
 	}
 }
 
-// Admit is the admission door (ADR-07 §1). It applies the two pre-BEGIN
-// backpressure gates, then runs the transactional pipeline, then charges the
-// fuel bucket by the deepest stage reached. A non-nil error is an internal fault;
-// every ordinary/backpressure refusal is a typed Verdict.
+// Admit is the real admission door (ADR-07 §1, commit:true): the full pipeline in
+// a transaction that COMMITS on green. A non-nil error is an internal fault; every
+// ordinary/backpressure refusal is a typed Verdict.
 func Admit(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image) (Verdict, error) {
+	return admitCore(ctx, conn, patch, auth, im, true)
+}
+
+// DryRun is the patch.submit{commit:false} door AND the shared implementation the
+// git PR-check door will reuse (ADR-12 §2, one implementation two doors): the full
+// ADR-07 pipeline in a transaction that ALWAYS rolls back, so no admission row
+// persists, returning the byte-identical Verdict (hermeticity, ADR-07 §2). It is
+// fuel-charged pre-BEGIN by the SAME backpressure the real gate uses (amendment 1),
+// so an honest iterating agent burns its own budget probing (ADR-12 §5).
+func DryRun(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image) (Verdict, error) {
+	return admitCore(ctx, conn, patch, auth, im, false)
+}
+
+// admitCore applies the two pre-BEGIN backpressure gates (fuel bucket, admission
+// semaphore — REUSED from C4, not re-implemented), runs the transactional pipeline
+// with the requested commit discipline, then charges the fuel bucket by the deepest
+// stage reached. commit=false is the dry-run: the green/noop paths roll back instead
+// of committing, so both doors share ONE pipeline (no second gate).
+func admitCore(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image, commit bool) (Verdict, error) {
 	// 1. per-principal admission-fuel bucket (pre-BEGIN).
 	enough, retryMs, err := fuelCheck(ctx, conn, auth)
 	if err != nil {
@@ -109,7 +127,7 @@ func Admit(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, 
 	}
 	defer admissionSem.release()
 
-	v, err := admitWithRetries(ctx, conn, patch, auth, im)
+	v, err := admitWithRetries(ctx, conn, patch, auth, im, commit)
 	if err != nil {
 		return v, err
 	}
@@ -180,7 +198,7 @@ RETURNING tokens, refill_per_sec`, []any{subject}, &tokens, &refill)
 	if refill <= 0 {
 		return false, 60000, nil // no refill configured: long backoff
 	}
-	ms := math.Ceil((minCharge-tokens)/refill*1000.0)
+	ms := math.Ceil((minCharge - tokens) / refill * 1000.0)
 	if ms < 1 {
 		ms = 1
 	}

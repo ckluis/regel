@@ -32,6 +32,16 @@ type Verdict struct {
 	// attached on EVERY run — green or red. A pure projection of what V1/V2/V6
 	// computed over the frozen snapshot vs. the base.
 	Delta Delta `json:"delta"`
+	// ApprovedBy names the human product-write holder whose one-shot approval token
+	// this admission consumed (ADR-12 §6), so the admission row records BOTH
+	// principals — the author agent (actor_*) and the approving human. "" when no
+	// token was consumed (overlay self-serve or a non-agent principal).
+	ApprovedBy string `json:"approved_by,omitempty"`
+	// DryRun is true when this Verdict came from patch.submit{commit:false} (ADR-12
+	// §2): the full ADR-07 pipeline ran in a transaction that always rolled back, so
+	// no admission row persisted. The semantically-meaningful fields (outcome,
+	// hashes, delta, seeders, diagnostics) are byte-identical to the commit path.
+	DryRun bool `json:"dry_run,omitempty"`
 	// Seeders is the content-seeder set (ADR-07 §1 / ADR-12 §6): the provenance of
 	// the rows the authoring session read that reach this patch. Empty for
 	// human/CLI submissions. Bound from the authenticated principal's scope chain

@@ -293,6 +293,10 @@ CREATE TABLE IF NOT EXISTS task (
 CREATE INDEX IF NOT EXISTS task_ready_idx ON task (run_at) WHERE status = 'ready';
 
 -- ADR-04 §5 capability grant rows (GRANT is reserved, so grant_row).
+-- BUILD-C (ADR-12 §4 layer 1): a reveal grant may name only a human principal — a
+-- database CHECK plus the mint flow (§7) offers approvers only, so no agent
+-- principal can hold the grant a masking leaf requires. Vault plaintext is thus
+-- structurally unreachable from the agent plane at the grant layer.
 CREATE TABLE IF NOT EXISTS grant_row (
   subject      text NOT NULL,
   capability   text NOT NULL,
@@ -300,7 +304,52 @@ CREATE TABLE IF NOT EXISTS grant_row (
   expires_at   timestamptz,
   granted_by   text NOT NULL,
   admission_id bigint REFERENCES admission(id),
-  PRIMARY KEY (subject, capability, scope)
+  PRIMARY KEY (subject, capability, scope),
+  CONSTRAINT reveal_grant_human_only
+    CHECK (capability <> 'pii.reveal' OR subject NOT LIKE 'agent:%')
+);
+-- Bring a pre-existing grant_row up to the reveal-grant CHECK (idempotent).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reveal_grant_human_only') THEN
+    ALTER TABLE grant_row ADD CONSTRAINT reveal_grant_human_only
+      CHECK (capability <> 'pii.reveal' OR subject NOT LIKE 'agent:%');
+  END IF;
+END $$;
+
+-- (9) Agent-plane auth + approval (ADR-12 §1/§6, BUILD-C: DDL authored in ADR-03
+-- §1 table 7 for approval_token; agent_key is the ADR-12 §1 "key hash → principal
+-- binding table if needed", authored here with its BUILD-C marker in ADR-03).
+--
+-- agent_key binds an API key hash to a principal + its overlay (sandbox org)
+-- scope. An agent is an ordinary capability principal (§1); the key IS a handle to
+-- a grant_row bundle. Rotation is set-revoked (or delete): the next request the
+-- key makes is refused, while past admissions stay attributed because every
+-- admission carries the principal id as of the act.
+CREATE TABLE IF NOT EXISTS agent_key (
+  key_hash    text PRIMARY KEY,        -- sha256 hex of the presented API key
+  actor_kind  text NOT NULL DEFAULT 'agent',
+  actor_id    text NOT NULL,
+  scope_kind  smallint NOT NULL DEFAULT 2 CHECK (scope_kind BETWEEN 0 AND 4),
+  scope_id    text NOT NULL DEFAULT '', -- the agent's sandbox/overlay org id
+  revoked     bool NOT NULL DEFAULT false,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- approval_token (ADR-03 §1 table 7 / ADR-12 §6): one-shot product-scope approval.
+-- Minted by a human product-write holder against a patch's EXACT content hashes;
+-- consumed inside the admission transaction (one-shot CAS on consumed_by); a token
+-- whose bound hashes no longer match the submission is dead. scope_attempted binds
+-- the token to the product scope it authorizes.
+CREATE TABLE IF NOT EXISTS approval_token (
+  token           uuid PRIMARY KEY,
+  bound_hashes    text[] NOT NULL,     -- exact content hashes the human approved (sorted)
+  minted_by       text NOT NULL,       -- approving human principal (product-write holder)
+  minted_for      text NOT NULL,       -- author agent principal ("agent:id")
+  scope_attempted text NOT NULL DEFAULT '0:', -- the "kind:id" scope this authorizes
+  expires_at      timestamptz NOT NULL,
+  consumed_by     bigint REFERENCES admission(id),  -- set by the consuming admission; one-shot
+  consumed_at     timestamptz,
+  created_at      timestamptz NOT NULL DEFAULT now()
 );
 
 -- STAGE-A-PLAN pin #10 minimal epoch table (ADR-10/ADR-08).

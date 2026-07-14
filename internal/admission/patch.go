@@ -41,6 +41,12 @@ type Patch struct {
 	// BaseHashes is the head each pointer-move saw (empty entry / absent ⇒
 	// expect-new). Keyed by full catalog name.
 	BaseHashes map[string]string `json:"base_hashes,omitempty"`
+	// ApprovalToken is the optional one-shot product-scope approval token (ADR-12
+	// §6). An agent principal targeting product scope must carry a valid token; the
+	// admission transaction validates it against the submitted hashes and consumes
+	// it (one-shot CAS) on commit. It is a submission credential, not identity, so
+	// it rides the envelope — scope still binds from the authenticated principal.
+	ApprovalToken string `json:"approval_token,omitempty"`
 	// ReadLog is the optional content-seeder read-log (ADR-07 §1 / ADR-12 §6): the
 	// provenance of catalog/resource/condition/audit rows the authoring agent read
 	// that reach this patch. Validated against the authenticated principal's scope

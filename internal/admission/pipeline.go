@@ -89,9 +89,9 @@ type loweredDef struct {
 // core; the exported Admit door (backpressure.go) wraps it with the pre-BEGIN
 // admission-control semaphore (busy) and per-principal fuel bucket (budget). A
 // non-nil error is an internal fault; every ordinary refusal is a Verdict.
-func admitWithRetries(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image) (Verdict, error) {
+func admitWithRetries(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image, commit bool) (Verdict, error) {
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		v, retry, err := admitOnce(ctx, conn, patch, auth, im)
+		v, retry, err := admitOnce(ctx, conn, patch, auth, im, commit)
 		if err != nil {
 			return Verdict{}, err
 		}
@@ -123,9 +123,9 @@ func admitWithRetries(ctx context.Context, conn *pgwire.Conn, patch Patch, auth 
 // admitOnce is one attempt of the one-SERIALIZABLE-transaction pipeline. It
 // returns (verdict, retry, err): retry=true means a serialization failure
 // rolled the whole attempt back and the caller should try a fresh snapshot.
-func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image) (Verdict, bool, error) {
+func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image, commit bool) (Verdict, bool, error) {
 	base := time.Now().UTC().Format(time.RFC3339Nano)
-	v := Verdict{Hashes: map[string]string{}, Epoch: im.Epoch, BaseSnapshot: base}
+	v := Verdict{Hashes: map[string]string{}, Epoch: im.Epoch, BaseSnapshot: base, DryRun: !commit}
 	var stages []Stage
 	stageStart := time.Now()
 	mark := func(name, status string) {
@@ -187,6 +187,28 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 	}
 	v.Seeders = seeders
 
+	// --- ADR-12 §6 patch scope policy: overlay self-serve; product by one-shot
+	//     human approval token. Scope binds from the AUTHENTICATED principal, never
+	//     the body — an agent may target only its own overlay scope; product
+	//     requires a valid token, else CAP_UNGRANTED (escalation is evidence: a
+	//     refusal-ledger row naming principal/scope/hashes, never a silent 403).
+	//     Enforced before any row is written (zero trace on refusal). --------------
+	tokenToConsume, scopeDiag, spErr := checkScopePolicy(ctx, conn, patch, auth, scope, lowered)
+	if spErr != nil {
+		if isSerialization(spErr) {
+			return Verdict{}, true, nil
+		}
+		return Verdict{}, false, spErr
+	}
+	if scopeDiag != nil {
+		mark("scope-policy", "fail")
+		v.Stages = stages
+		return reject(ctx, conn, auth, patch, v, []Diagnostic{*scopeDiag})
+	}
+	if tokenToConsume != nil {
+		v.ApprovedBy = tokenToConsume.MintedBy
+	}
+
 	// Grants for the principal (loaded from grant_row at bind time — Stage A).
 	grants, gerr := loadGrants(ctx, conn, auth.Subject())
 	if gerr != nil {
@@ -232,14 +254,8 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 			}
 			return Verdict{}, false, err
 		}
-		if err := conn.Commit(ctx); err != nil {
-			if isSerialization(err) {
-				return Verdict{}, true, nil
-			}
-			return Verdict{}, false, err
-		}
-		committed = true
-		return v, false, nil
+		retry, ferr := finalizeTxn(ctx, conn, &v, commit, &committed)
+		return v, retry, ferr
 	}
 
 	// --- 3 INSERT definition / definition_meta (dep order, rast re-hash) -----
@@ -394,6 +410,27 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 	}
 	mark("cas", "pass")
 
+	// Consume the one-shot approval token inside the admission txn (ADR-12 §6): a
+	// CAS on consumed_by binds it to THIS admission. 0 rows ⇒ the token was already
+	// consumed (replay) ⇒ the whole admission is refused (rolled back, zero trace,
+	// a refusal-ledger row). Only on commit; a dry-run rolls the txn back regardless
+	// so it never consumes a token (an agent may dry-run freely against approval).
+	if commit && tokenToConsume != nil {
+		ok, cerr := consumeApprovalToken(ctx, conn, tokenToConsume.Token, admissionID)
+		if cerr != nil {
+			if isSerialization(cerr) {
+				return Verdict{}, true, nil
+			}
+			return Verdict{}, false, cerr
+		}
+		if !ok {
+			mark("approval", "fail")
+			v.Stages = stages
+			return reject(ctx, conn, auth, patch, v, []Diagnostic{approvalReplayDiag()})
+		}
+	}
+	mark("approval", "pass")
+
 	// Complete the Verdict, then persist it whole to the committed admission row —
 	// the full green Verdict (delta + seeders) is retrievable later by admission id
 	// from admission.verifier_report (symmetric with gate_refusal.verdict for red).
@@ -409,14 +446,32 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 		return Verdict{}, false, err
 	}
 
+	retry, ferr := finalizeTxn(ctx, conn, &v, commit, &committed)
+	return v, retry, ferr
+}
+
+// finalizeTxn commits (commit:true) or rolls back (dry-run) the admission txn and
+// marks it settled so the deferred rollback is a no-op. On a dry-run it zeroes the
+// AdmissionID: the row was rolled back, so the returned Verdict must not claim a
+// persisted admission (the meaningful fields stay byte-identical to the commit
+// path — ADR-12 dry-run parity). A serialization loss on commit is a clean retry.
+func finalizeTxn(ctx context.Context, conn *pgwire.Conn, v *Verdict, commit bool, committed *bool) (bool, error) {
+	if !commit {
+		if err := conn.Rollback(ctx); err != nil {
+			return false, err
+		}
+		*committed = true
+		v.AdmissionID = 0
+		return false, nil
+	}
 	if err := conn.Commit(ctx); err != nil {
 		if isSerialization(err) {
-			return Verdict{}, true, nil
+			return true, nil
 		}
-		return Verdict{}, false, err
+		return false, err
 	}
-	committed = true
-	return v, false, nil
+	*committed = true
+	return false, nil
 }
 
 // --- lowering ----------------------------------------------------------------

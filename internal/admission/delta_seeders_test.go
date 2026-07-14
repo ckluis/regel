@@ -127,6 +127,9 @@ func TestSeederUnattributedRecorded(t *testing.T) {
 	ctx := ctxT(t)
 	src := "export function f(): number {\n  return 1;\n}\n"
 	v, err := admit(ctx, w.conn, src, "app/seedok", agent("a1", catalog.Chain{OrgID: "org1"}), func(p *Patch) {
+		// The agent self-serves at its OWN overlay scope (ADR-12 §6 realized: an
+		// agent may not self-serve product; seeder attribution is scope-independent).
+		p.TargetScope = Scope{Kind: 2, ID: "org1"}
 		p.ReadLog = []ReadLogEntry{
 			{SourceKind: "external", SourceRef: "upstream:fail-text", Scope: Scope{Kind: 0, ID: ""}, SeededBy: ""},
 			{SourceKind: "resource", SourceRef: "app/x/Deal", Scope: Scope{Kind: 0, ID: ""}, SeededBy: "agent:a1"},

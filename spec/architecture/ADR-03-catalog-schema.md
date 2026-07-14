@@ -191,14 +191,34 @@ CREATE TABLE admission_fuel (                      -- ADR-12 §5: per-principal 
   derived_from text NOT NULL DEFAULT 'provisional' -- 'eval-p95:<epoch>' | 'operator' | 'provisional'
 );
 CREATE TABLE approval_token (                      -- ADR-12 §6: one-shot product-scope approval
-  token        uuid PRIMARY KEY,
-  bound_hashes text[] NOT NULL,                    -- exact content hashes the human approved
-  minted_by    text NOT NULL,                      -- approving human principal (product-write holder)
-  minted_for   text NOT NULL,                      -- author agent principal
-  expires_at   timestamptz NOT NULL,
-  consumed_by  bigint REFERENCES admission(id),    -- set by the consuming admission txn; one-shot
-  consumed_at  timestamptz,
-  created_at   timestamptz NOT NULL DEFAULT now()
+  token           uuid PRIMARY KEY,
+  bound_hashes    text[] NOT NULL,                 -- exact content hashes the human approved
+  minted_by       text NOT NULL,                   -- approving human principal (product-write holder)
+  minted_for      text NOT NULL,                   -- author agent principal
+  scope_attempted text NOT NULL DEFAULT '0:',      -- BUILD-C (MCP C5): the "kind:id" product scope this token authorizes
+  expires_at      timestamptz NOT NULL,
+  consumed_by     bigint REFERENCES admission(id), -- set by the consuming admission txn; one-shot
+  consumed_at     timestamptz,
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+-- BUILD-C (MCP increment C5): ADR-12 §1 names the agent key as "a bundle of ADR-04
+-- §5 capability grants … key hash → principal binding table if needed". The bundle
+-- lives in grant_row already; the binding from a presented key to its principal +
+-- overlay (sandbox org) scope had no authored DDL, so it is authored here. There is
+-- no new identity TYPE (§1): agent_key only maps key_hash → an ordinary principal
+-- and the overlay scope its reads/patches target. Rotation is `revoked=true` (or a
+-- delete of the row): the next request the key makes authenticates to nothing and
+-- is refused, while past admissions stay attributed by the principal id on the
+-- admission row. Realized verbatim in internal/catalog/sql/schema.sql table (9).
+CREATE TABLE agent_key (
+  key_hash    text PRIMARY KEY,                    -- sha256 hex of the presented API key
+  actor_kind  text NOT NULL DEFAULT 'agent',
+  actor_id    text NOT NULL,
+  scope_kind  smallint NOT NULL DEFAULT 2 CHECK (scope_kind BETWEEN 0 AND 4),
+  scope_id    text NOT NULL DEFAULT '',            -- the agent's sandbox/overlay org id
+  revoked     bool NOT NULL DEFAULT false,
+  created_at  timestamptz NOT NULL DEFAULT now()
 );
 
 -- (8) Derivation tier (BUILD-C: ADR-07 §1 step 5a + §4 V3/V6). ADR-07's derivation

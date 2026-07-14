@@ -19,6 +19,7 @@ import (
 	"regel.dev/regel/internal/cek"
 	"regel.dev/regel/internal/cfr"
 	"regel.dev/regel/internal/kernel"
+	"regel.dev/regel/internal/mcp"
 	"regel.dev/regel/internal/pgwire"
 )
 
@@ -53,6 +54,12 @@ func main() {
 		err = cmdEval(args)
 	case "grant":
 		err = cmdGrant(args)
+	case "mcp":
+		err = cmdMCP(args)
+	case "approve":
+		err = cmdApprove(args)
+	case "agent-key":
+		err = cmdAgentKey(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -81,6 +88,11 @@ func usage() {
   regel eval NAME [ARGS_JSON]           resolve + evaluate (prints value)
         [--as-of RFC3339] [--tier sandbox --fuel N]
   regel grant SUBJECT CAPABILITY        dev helper: insert a grant_row
+  regel mcp [--key KEY]                  run the MCP/agent plane over stdio (JSON-RPC 2.0)
+  regel approve --for AGENT --hash H...  mint a one-shot product-scope approval token
+        [--minter kind:id] [--scope S] [--ttl SECONDS]
+  regel agent-key --key KEY --actor a1   dev helper: bind an API key to an agent principal
+        [--scope-id ORG] [--kind agent] [--revoke]
 
   DSN via REGEL_PG_DSN (default `+defaultDSN+`)
 `)
@@ -425,6 +437,138 @@ VALUES ($1, $2, '', 'cli') ON CONFLICT (subject, capability, scope) DO NOTHING`,
 	}
 	fmt.Printf("grant: %s → %s\n", subject, capability)
 	return nil
+}
+
+// --- mcp ---------------------------------------------------------------------
+
+// cmdMCP runs the MCP/agent plane over stdio (JSON-RPC 2.0). The session's API key
+// comes from --key or REGEL_MCP_KEY; it is re-resolved against agent_key on every
+// request (rotation). No daemon is left running: the loop returns at stdin EOF.
+func cmdMCP(args []string) error {
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	key := fs.String("key", os.Getenv("REGEL_MCP_KEY"), "agent API key (or REGEL_MCP_KEY)")
+	_ = fs.Parse(args)
+
+	cfg, err := pgwire.ParseDSN(dsn())
+	if err != nil {
+		return err
+	}
+	pool := pgwire.NewPool(cfg, 8)
+	defer pool.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	srv, err := mcp.New(ctx, pool)
+	if err != nil {
+		return err
+	}
+	return srv.ServeStdio(ctx, &mcp.Session{APIKey: *key}, os.Stdin, os.Stdout)
+}
+
+// --- approve -----------------------------------------------------------------
+
+// cmdApprove mints a one-shot product-scope approval token (ADR-12 §6/§7). The
+// minter must hold the product.write capability. Prints the token.
+func cmdApprove(args []string) error {
+	fs := flag.NewFlagSet("approve", flag.ExitOnError)
+	minter := fs.String("minter", "operator:human", "approving human principal kind:id")
+	forAgent := fs.String("for", "", "author agent principal (kind:id)")
+	scope := fs.String("scope", "product", "scope token to authorize (product|org.ID|...)")
+	ttl := fs.Int("ttl", 3600, "token time-to-live seconds")
+	var hashes multiFlag
+	fs.Var(&hashes, "hash", "a content hash the token binds to (repeatable)")
+	_ = fs.Parse(permute(args, map[string]bool{"minter": true, "for": true, "scope": true, "ttl": true, "hash": true}))
+
+	if *forAgent == "" || len(hashes) == 0 {
+		return fmt.Errorf("approve: need --for AGENT and at least one --hash")
+	}
+	sk, sid := scopeParts(*scope)
+
+	ctx, cancel := rootCtx()
+	defer cancel()
+	conn, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	held, err := admission.HoldsProductWrite(ctx, conn, *minter)
+	if err != nil {
+		return err
+	}
+	if !held {
+		return fmt.Errorf("approve: minter %q does not hold product.write", *minter)
+	}
+	token, err := admission.MintApprovalToken(ctx, conn, *minter, *forAgent,
+		admission.Scope{Kind: sk, ID: sid}, hashes, time.Duration(*ttl)*time.Second)
+	if err != nil {
+		return err
+	}
+	fmt.Println(token)
+	return nil
+}
+
+// --- agent-key ---------------------------------------------------------------
+
+// cmdAgentKey binds an API key to an agent principal + overlay scope (dev helper),
+// or revokes it (--revoke) — the rotation path.
+func cmdAgentKey(args []string) error {
+	fs := flag.NewFlagSet("agent-key", flag.ExitOnError)
+	key := fs.String("key", "", "the API key to bind")
+	actor := fs.String("actor", "", "the agent actor id")
+	kind := fs.String("kind", "agent", "actor kind")
+	scopeID := fs.String("scope-id", "", "the agent's overlay (sandbox org) id")
+	revoke := fs.Bool("revoke", false, "revoke this key (rotation)")
+	_ = fs.Parse(permute(args, map[string]bool{"key": true, "actor": true, "kind": true, "scope-id": true}))
+
+	if *key == "" {
+		return fmt.Errorf("agent-key: need --key")
+	}
+	ctx, cancel := rootCtx()
+	defer cancel()
+	conn, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if *revoke {
+		if _, err := conn.Exec(ctx, `UPDATE agent_key SET revoked=true WHERE key_hash=$1`, mcp.HashKey(*key)); err != nil {
+			return err
+		}
+		fmt.Println("agent-key: revoked")
+		return nil
+	}
+	if *actor == "" {
+		return fmt.Errorf("agent-key: need --actor")
+	}
+	if _, err := conn.Exec(ctx, `
+INSERT INTO agent_key (key_hash, actor_kind, actor_id, scope_kind, scope_id)
+VALUES ($1, $2, $3, 2, $4)
+ON CONFLICT (key_hash) DO UPDATE SET actor_kind=EXCLUDED.actor_kind, actor_id=EXCLUDED.actor_id,
+  scope_id=EXCLUDED.scope_id, revoked=false`,
+		mcp.HashKey(*key), *kind, *actor, *scopeID); err != nil {
+		return err
+	}
+	fmt.Printf("agent-key: bound %s → %s:%s @org.%s\n", "sha256("+(*key)[:min(4, len(*key))]+"…)", *kind, *actor, *scopeID)
+	return nil
+}
+
+// scopeParts parses a scope token to (kind, id) for the CLI.
+func scopeParts(tok string) (int, string) {
+	if tok == "product" || tok == "" {
+		return 0, ""
+	}
+	if i := strings.IndexByte(tok, '.'); i >= 0 {
+		switch tok[:i] {
+		case "package":
+			return 1, tok[i+1:]
+		case "org":
+			return 2, tok[i+1:]
+		case "team":
+			return 3, tok[i+1:]
+		case "user":
+			return 4, tok[i+1:]
+		}
+	}
+	return 0, ""
 }
 
 // --- shared helpers ----------------------------------------------------------

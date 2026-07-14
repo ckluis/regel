@@ -45,6 +45,12 @@ func (s *Server) handleAdmit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
+	// ADR-09 post-admission hook: on a green admission, advance the git projection
+	// mirror (a pure fold + self-heal). Off the eval path; a projection error never
+	// fails the admission — the CLI `regel project` and self-heal reconcile later.
+	if s.mirror != nil && (v.Outcome == admission.OutcomeAdmitted || v.Outcome == admission.OutcomeAlreadyAdmitted) {
+		_, _ = s.mirror.Advance(r.Context(), conn)
+	}
 	writeJSON(w, admission.HTTPStatus(v.Outcome), v)
 }
 

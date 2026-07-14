@@ -57,15 +57,19 @@ func (m *Mirror) Advance(ctx context.Context, q catalog.Querier) (string, error)
 	if cur == res.Head {
 		return res.Head, nil // mirror already agrees with the image
 	}
-	// BUILD-C RED (increment C6): a normal fast-forward from a known prior
-	// projection advances main. The SELF-HEAL of a foreign (force-push-mangled) ref
-	// and its projection_audit row are NOT yet built — a mangled main is left as-is.
-	if cur == "" || inCommits(cur, res.Commits) {
-		if err := m.repo.setMain(res.Head); err != nil {
+	mangled := cur != "" && !inCommits(cur, res.Commits)
+	if err := m.repo.setMain(res.Head); err != nil {
+		return "", err
+	}
+	if mangled {
+		if err := writeAudit(ctx, q, "force-restore", map[string]string{
+			"mangled_sha":  cur,
+			"restored_sha": res.Head,
+			"ref":          mainRef,
+		}); err != nil {
 			return "", err
 		}
 	}
-	_ = q
 	return res.Head, nil
 }
 

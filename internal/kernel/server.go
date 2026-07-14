@@ -14,6 +14,7 @@ import (
 	"regel.dev/regel/internal/catalog"
 	"regel.dev/regel/internal/cek"
 	"regel.dev/regel/internal/cfr"
+	"regel.dev/regel/internal/gitproj"
 	"regel.dev/regel/internal/pgwire"
 	"regel.dev/regel/internal/rast"
 )
@@ -24,8 +25,9 @@ type Server struct {
 	interp   *cek.Interp
 	image    *admission.Image
 	kernelID string
-	epoch    int          // pinned catalog epoch, read at boot after VerifyBoot (ADR-06 §6)
-	draining atomic.Bool  // set by the epoch fence: 503 on new work
+	epoch    int             // pinned catalog epoch, read at boot after VerifyBoot (ADR-06 §6)
+	draining atomic.Bool     // set by the epoch fence: 503 on new work
+	mirror   *gitproj.Mirror // optional ADR-09 git projection mirror (nil ⇒ no projection)
 }
 
 // New builds a kernel over a live pool. It verifies boot parity (ADR-10 §2:
@@ -55,6 +57,11 @@ func New(ctx context.Context, pool *pgwire.Pool) (*Server, error) {
 	interp := cek.New(src, image.Registry())
 	return &Server{pool: pool, interp: interp, image: image, kernelID: admissionUUID(), epoch: epoch}, nil
 }
+
+// SetMirror wires an ADR-09 git projection mirror. After a green admission the
+// serve path folds the ledger and advances the mirror (self-healing). nil disables
+// projection (the default), so kernels without a configured mirror are unaffected.
+func (s *Server) SetMirror(m *gitproj.Mirror) { s.mirror = m }
 
 // Draining reports whether the epoch fence has tripped and the kernel is in
 // terminal drain (ADR-06 §6): new work is refused with 503.

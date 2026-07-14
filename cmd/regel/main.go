@@ -18,6 +18,7 @@ import (
 	"regel.dev/regel/internal/catalog"
 	"regel.dev/regel/internal/cek"
 	"regel.dev/regel/internal/cfr"
+	"regel.dev/regel/internal/gitproj"
 	"regel.dev/regel/internal/kernel"
 	"regel.dev/regel/internal/mcp"
 	"regel.dev/regel/internal/pgwire"
@@ -60,6 +61,12 @@ func main() {
 		err = cmdApprove(args)
 	case "agent-key":
 		err = cmdAgentKey(args)
+	case "project":
+		err = cmdProject(args)
+	case "git-submit":
+		os.Exit(cmdGitSubmit(args))
+	case "git-identity":
+		err = cmdGitIdentity(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -93,6 +100,12 @@ func usage() {
         [--minter kind:id] [--scope S] [--ttl SECONDS]
   regel agent-key --key KEY --actor a1   dev helper: bind an API key to an agent principal
         [--scope-id ORG] [--kind agent] [--revoke]
+  regel project --mirror PATH            fold the ledger into the bare mirror (ADR-09)
+  regel git-submit --email E FILE...     submit changed files through the git door
+        [--merge] [--mirror PATH]        (default dry-run PR check; --merge admits)
+        [--base name=hash ...]
+  regel git-identity --email E --actor a1  dev helper: bind a git identity to a principal
+        [--scope-id S] [--kind engineer] [--scope-kind N] [--revoke]
 
   DSN via REGEL_PG_DSN (default `+defaultDSN+`)
 `)
@@ -157,6 +170,7 @@ func cmdServe(args []string) error {
 	addr := fs.String("addr", ":8787", "listen address")
 	lease := fs.Int("lease", 30, "continuation/task lease seconds (reaper recovery window)")
 	poll := fs.Duration("poll", 250*time.Millisecond, "reactor poll interval")
+	mirror := fs.String("mirror", "", "ADR-09 git projection bare-repo path (post-admission hook)")
 	_ = fs.Parse(args)
 
 	cfg, err := pgwire.ParseDSN(dsn())
@@ -174,6 +188,24 @@ func cmdServe(args []string) error {
 	srv, err := kernel.New(ctx, pool)
 	if err != nil {
 		return err
+	}
+	if *mirror != "" {
+		m, err := gitproj.NewMirror(*mirror, gitproj.Config{})
+		if err != nil {
+			return err
+		}
+		srv.SetMirror(m)
+		// Bring the mirror current at boot (fold + self-heal) before serving.
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			return err
+		}
+		head, aerr := m.Advance(ctx, conn)
+		pool.Release(conn)
+		if aerr != nil {
+			return aerr
+		}
+		fmt.Printf("serve: git projection mirror %s at head %s\n", *mirror, head)
 	}
 	reactor := srv.StartReactor(ctx, kernel.ReactorConfig{
 		LeaseSeconds: *lease,
@@ -548,6 +580,157 @@ ON CONFLICT (key_hash) DO UPDATE SET actor_kind=EXCLUDED.actor_kind, actor_id=EX
 		return err
 	}
 	fmt.Printf("agent-key: bound %s → %s:%s @org.%s\n", "sha256("+(*key)[:min(4, len(*key))]+"…)", *kind, *actor, *scopeID)
+	return nil
+}
+
+// --- project (ADR-09 outbound fold) ------------------------------------------
+
+// cmdProject folds the admission ledger into the kernel-owned bare mirror and
+// advances refs/heads/main (self-healing any divergence). Prints the head SHA.
+func cmdProject(args []string) error {
+	fs := flag.NewFlagSet("project", flag.ExitOnError)
+	mirror := fs.String("mirror", "", "bare-repo path to fold into")
+	_ = fs.Parse(permute(args, map[string]bool{"mirror": true}))
+	if *mirror == "" {
+		return fmt.Errorf("project: need --mirror PATH")
+	}
+	ctx, cancel := rootCtx()
+	defer cancel()
+	conn, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	m, err := gitproj.NewMirror(*mirror, gitproj.Config{})
+	if err != nil {
+		return err
+	}
+	head, err := m.Advance(ctx, conn)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("project: mirror %s at head %s\n", m.Repo().Dir(), head)
+	return nil
+}
+
+// --- git-submit (ADR-09 inbound door) ----------------------------------------
+
+// cmdGitSubmit runs the git-submission door over changed files: dry-run PR check
+// (default) or real merge (--merge). Each positional arg is a repo path, or
+// repoPath=localFile when the on-disk name differs. Prints the Verdict.
+func cmdGitSubmit(args []string) int {
+	fs := flag.NewFlagSet("git-submit", flag.ExitOnError)
+	email := fs.String("email", "", "verified git committer identity")
+	merge := fs.Bool("merge", false, "admit for real (default: dry-run PR check)")
+	mirror := fs.String("mirror", "", "bare-repo path to advance on a merge accept")
+	var bases multiFlag
+	fs.Var(&bases, "base", "expected head, name=hash (repeatable)")
+	_ = fs.Parse(permute(args, map[string]bool{"email": true, "mirror": true, "base": true}))
+	if *email == "" {
+		fmt.Fprintln(os.Stderr, "git-submit: need --email")
+		return 2
+	}
+	files := map[string]string{}
+	for _, a := range fs.Args() {
+		repoPath, local := a, a
+		if i := strings.IndexByte(a, '='); i >= 0 {
+			repoPath, local = a[:i], a[i+1:]
+		}
+		src, err := os.ReadFile(local)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "git-submit: read %s: %v\n", local, err)
+			return 1
+		}
+		files[repoPath] = string(src)
+	}
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "git-submit: need at least one FILE")
+		return 2
+	}
+	sub := gitproj.Submission{Files: files, Email: *email, Bases: map[string]string{}}
+	for _, b := range bases {
+		if i := strings.IndexByte(b, '='); i >= 0 {
+			sub.Bases[b[:i]] = b[i+1:]
+		}
+	}
+
+	ctx, cancel := rootCtx()
+	defer cancel()
+	conn, err := connect(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git-submit: connect: %v\n", err)
+		return 1
+	}
+	defer conn.Close()
+
+	var m *gitproj.Mirror
+	if *mirror != "" {
+		if m, err = gitproj.NewMirror(*mirror, gitproj.Config{}); err != nil {
+			fmt.Fprintf(os.Stderr, "git-submit: mirror: %v\n", err)
+			return 1
+		}
+	}
+	im := admission.BuildImage()
+	var v admission.Verdict
+	if *merge {
+		v, err = gitproj.Merge(ctx, conn, sub, im, m)
+	} else {
+		v, err = gitproj.DryRun(ctx, conn, sub, im)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git-submit: %v\n", err)
+		return 1
+	}
+	printJSON(v)
+	if v.Outcome == admission.OutcomeAdmitted || v.Outcome == admission.OutcomeAlreadyAdmitted {
+		return 0
+	}
+	return 1
+}
+
+// --- git-identity (dev helper) -----------------------------------------------
+
+// cmdGitIdentity binds a verified git committer email to a catalog principal +
+// scope (dev helper), or revokes it (--revoke) — the rotation path.
+func cmdGitIdentity(args []string) error {
+	fs := flag.NewFlagSet("git-identity", flag.ExitOnError)
+	email := fs.String("email", "", "the verified git committer email")
+	actor := fs.String("actor", "", "the catalog actor id")
+	kind := fs.String("kind", "engineer", "actor kind")
+	scopeKind := fs.Int("scope-kind", 0, "bind scope kind (0 product, 1 package, 2 org, ...)")
+	scopeID := fs.String("scope-id", "", "bind scope id")
+	revoke := fs.Bool("revoke", false, "revoke this identity")
+	_ = fs.Parse(permute(args, map[string]bool{"email": true, "actor": true, "kind": true, "scope-kind": true, "scope-id": true}))
+
+	if *email == "" {
+		return fmt.Errorf("git-identity: need --email")
+	}
+	ctx, cancel := rootCtx()
+	defer cancel()
+	conn, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if *revoke {
+		if _, err := conn.Exec(ctx, `UPDATE git_identity SET revoked=true WHERE email=$1`, *email); err != nil {
+			return err
+		}
+		fmt.Println("git-identity: revoked")
+		return nil
+	}
+	if *actor == "" {
+		return fmt.Errorf("git-identity: need --actor")
+	}
+	if _, err := conn.Exec(ctx, `
+INSERT INTO git_identity (email, actor_kind, actor_id, scope_kind, scope_id)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (email) DO UPDATE SET actor_kind=EXCLUDED.actor_kind, actor_id=EXCLUDED.actor_id,
+  scope_kind=EXCLUDED.scope_kind, scope_id=EXCLUDED.scope_id, revoked=false`,
+		*email, *kind, *actor, *scopeKind, *scopeID); err != nil {
+		return err
+	}
+	fmt.Printf("git-identity: bound %s → %s:%s @scope %d:%s\n", *email, *kind, *actor, *scopeKind, *scopeID)
 	return nil
 }
 

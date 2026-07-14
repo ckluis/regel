@@ -82,11 +82,8 @@ func prepare(ctx context.Context, conn *pgwire.Conn, sub Submission) (admission.
 		return admission.Principal{}, admission.Patch{}, admission.Verdict{}, false, err
 	}
 	if !known {
-		// BUILD-C RED (increment C6): the identity gate is not yet built — an
-		// unmapped identity binds a default principal and proceeds. GREEN rejects it
-		// at scope-bind with a refusal row.
-		auth = admission.Principal{ActorKind: "engineer", ActorID: "anonymous", Via: "git"}
-		scope = admission.Scope{Kind: 0, ID: ""}
+		v, rerr := refuseUnknownIdentity(ctx, conn, sub)
+		return admission.Principal{}, admission.Patch{}, v, false, rerr
 	}
 	patch := buildPatch(sub, scope)
 	return auth, patch, admission.Verdict{}, true, nil

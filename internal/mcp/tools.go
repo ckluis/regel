@@ -34,7 +34,7 @@ func toolSpecs() []map[string]any {
 		{"name": "resource.mutate", "description": "Insert/update a derived-resource row under policy + row-version guard.",
 			"inputSchema": obj(map[string]any{"resource": str, "op": str, "id": map[string]any{"type": "integer"}, "values": map[string]any{"type": "object"}, "baseVersion": map[string]any{"type": "integer"}})},
 		{"name": "patch.submit", "description": "Submit a patch. commit:false is a dry-run (full pipeline, rolled back); commit:true is the real gate.",
-			"inputSchema": obj(map[string]any{"source": str, "scope": str, "message": str, "module": str, "commit": map[string]any{"type": "boolean"}, "approvalToken": str, "declare": map[string]any{"type": "array"}})},
+			"inputSchema": obj(map[string]any{"source": str, "scope": str, "message": str, "module": str, "commit": map[string]any{"type": "boolean"}, "approvalToken": str, "declare": map[string]any{"type": "array"}, "readLog": map[string]any{"type": "array"}})},
 		{"name": "verdict.get", "description": "Fetch a Verdict by patch_id or refusal_id (own-principal only).",
 			"inputSchema": obj(map[string]any{"id": str})},
 		{"name": "workflow.inspect", "description": "Inspect a continuation's status/wake/conditions (payloads masked).",
@@ -247,15 +247,26 @@ func internalErr(err error) *rpcError {
 
 // --- patch.submit ------------------------------------------------------------
 
+// readLogArg is one wire-form content-seeder read-log entry (ADR-12 §2/§6 BUILD-C):
+// the provenance of a catalog/resource/condition/audit row the authoring session read.
+// Scope is a qname scope token ("product", "org.<id>", …); absent ⇒ product.
+type readLogArg struct {
+	SourceKind string `json:"source_kind"`
+	SourceRef  string `json:"source_ref"`
+	Scope      string `json:"scope"`
+	SeededBy   string `json:"seeded_by"`
+}
+
 func (s *Server) toolPatchSubmit(ctx context.Context, conn *pgwire.Conn, p admission.Principal, raw json.RawMessage) (any, *rpcError) {
 	var a struct {
-		Source        string   `json:"source"`
-		Scope         string   `json:"scope"`
-		Message       string   `json:"message"`
-		Module        string   `json:"module"`
-		Commit        bool     `json:"commit"`
-		ApprovalToken string   `json:"approvalToken"`
-		Declare       []string `json:"declare"`
+		Source        string       `json:"source"`
+		Scope         string       `json:"scope"`
+		Message       string       `json:"message"`
+		Module        string       `json:"module"`
+		Commit        bool         `json:"commit"`
+		ApprovalToken string       `json:"approvalToken"`
+		Declare       []string     `json:"declare"`
+		ReadLog       []readLogArg `json:"readLog"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -282,6 +293,23 @@ func (s *Server) toolPatchSubmit(ctx context.Context, conn *pgwire.Conn, p admis
 	}
 	if len(a.Declare) > 0 {
 		patch.DefaultDeclared = a.Declare
+	}
+	// ADR-12 §6 / §2 BUILD-C (C7): the authoring session DECLARES the rows it read
+	// via readLog; the gate validates each entry against THIS principal's scope chain
+	// (step 2a: an out-of-chain seeder is unrepresentable ⇒ rejected) and projects the
+	// set into the Verdict `seeders` + the admission row — the content-seeder third
+	// principal. Scope still binds from the authenticated principal, never this body.
+	for _, e := range a.ReadLog {
+		sk, sid := 0, ""
+		if e.Scope != "" {
+			if k, id, ok := parseScopeToken(e.Scope); ok {
+				sk, sid = k, id
+			}
+		}
+		patch.ReadLog = append(patch.ReadLog, admission.ReadLogEntry{
+			SourceKind: e.SourceKind, SourceRef: e.SourceRef,
+			Scope: admission.Scope{Kind: sk, ID: sid}, SeededBy: e.SeededBy,
+		})
 	}
 	var v admission.Verdict
 	var err error

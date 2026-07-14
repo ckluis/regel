@@ -110,6 +110,11 @@ type getResult struct {
 	Scope         string   `json:"scope"`
 	AdmittedBy    string   `json:"admitted_by"`
 	AdmittedAt    string   `json:"admitted_at"`
+	// Docstring is the def's in-scope /** … */ JSDoc block (out-of-hash, ADR-02 §2),
+	// carried as an INERT data field (ADR-12 §2 BUILD-C / §4a): an attacker-
+	// influenceable read surface the confused-deputy corpus seeds, never interpreted
+	// as instruction by the plane.
+	Docstring string `json:"docstring,omitempty"`
 }
 
 // catalogGetByQName resolves a qname to a definition with the visibility predicate
@@ -130,16 +135,18 @@ func catalogGetByQName(ctx context.Context, conn *pgwire.Conn, chain catalog.Cha
 
 // catalogGetPointer fetches an exported pointer + its definition at an exact scope.
 func catalogGetPointer(ctx context.Context, conn *pgwire.Conn, name string, kind int, id string) (*getResult, bool, error) {
-	var hash, k, canon, contracts, admittedAt, admActor, admKind string
+	var hash, k, canon, contracts, admittedAt, admActor, admKind, docstring string
 	var deps []string
 	found, err := conn.QueryRow(ctx, `
 SELECT np.hash, np.kind, d.canonical_text, d.contracts::text, d.deps,
-       to_char(a.created_at, 'YYYY-MM-DD"T"HH24:MI:SSZ'), a.actor_id, a.actor_kind
+       to_char(a.created_at, 'YYYY-MM-DD"T"HH24:MI:SSZ'), a.actor_id, a.actor_kind,
+       COALESCE(dm.docstring,'')
 FROM name_pointer np
 JOIN definition d ON d.hash = np.hash
 JOIN admission a ON a.id = np.admission_id
+LEFT JOIN definition_meta dm ON dm.hash = np.hash
 WHERE np.name=$1 AND np.scope_kind=$2 AND np.scope_id=$3 AND np.visibility='exported'`,
-		[]any{name, kind, id}, &hash, &k, &canon, &contracts, &deps, &admittedAt, &admActor, &admKind)
+		[]any{name, kind, id}, &hash, &k, &canon, &contracts, &deps, &admittedAt, &admActor, &admKind, &docstring)
 	if err != nil || !found {
 		return nil, false, err
 	}
@@ -147,6 +154,7 @@ WHERE np.name=$1 AND np.scope_kind=$2 AND np.scope_id=$3 AND np.visibility='expo
 		Hash: hash, QName: makeQName(name, kind, id), Name: name, Kind: k,
 		CanonicalText: canon, Contracts: contracts, Deps: deps,
 		Scope: scopeToken(kind, id), AdmittedBy: admKind + ":" + admActor, AdmittedAt: admittedAt,
+		Docstring: docstring,
 	}, true, nil
 }
 

@@ -22,6 +22,14 @@ import (
 // plaintext (ADR-12 §4). It contains none of the underlying value.
 const maskToken = "‹masked›"
 
+// maskLeakForRedPath, when set (confused-deputy load-bearing demo ONLY, §4a), makes
+// resource.query render PII fields as PLAINTEXT — the masking control disabled. It
+// exists solely so the corpus can PROVE masking load-bearing: flip it on and a
+// confused-deputy exfil fixture escapes plaintext (the corpus reds); restore it and
+// the fixture is masked again. Default false — the plane never leaks in normal
+// operation. A var, mirroring mcp.leakOutOfScope / mcp.ResolutionFloor.
+var maskLeakForRedPath bool
+
 // derivedField is one column of a derived resource.
 type derivedField struct {
 	Base string `json:"base"`
@@ -140,7 +148,7 @@ func queryResource(ctx context.Context, conn *pgwire.Conn, chain catalog.Chain, 
 		}
 		row := map[string]any{}
 		for i, c := range selCols {
-			if maskedSet[c] {
+			if maskedSet[c] && !maskLeakForRedPath {
 				row[c] = maskToken // PII masked ALWAYS — no plaintext leaves the plane
 			} else {
 				row[c] = holders[i]

@@ -107,6 +107,16 @@ func buildImage() *Image {
 		{module: "std/contract", export: "ensures", defKind: rast.DefNative, catKind: "function", native: cek.StdContractEnsures},
 		// std/mail (send — capability "mail.send", the V1 fixture target)
 		{module: "std/mail", export: "send", defKind: rast.DefNative, catKind: "function", native: cek.StdMailSend, capability: "mail.send"},
+		// std/policy (BUILD-C, ADR-10 §4 item 4): the governance policy vocabulary
+		// the derivation wires into every read path — V3 catalog-parity's subject.
+		// orgScoped is the product-scope org/role predicate; policy(name) declares a
+		// named policy artifact. (std/pii mask/reveal + std/contract pre/post are C2.)
+		{module: "std/policy", export: "orgScoped", defKind: rast.DefNative, catKind: "function", native: nativeStub},
+		{module: "std/policy", export: "policy", defKind: rast.DefNative, catKind: "function", native: nativeStub},
+		// std/resource (BUILD-C, ADR-10 §4): the erf resource(...) declaration
+		// combinator — a declared field map (plain + pii-typed kinds) with optional
+		// policy wiring, whose additive DDL V6 derivation-parity checks total.
+		{module: "std/resource", export: "resource", defKind: rast.DefNative, catKind: "function", native: nativeStub},
 		// std/wf (Stage-B wake vocabulary — ADR-05 §5 BUILD-B)
 		{module: "std/wf", export: "sleep", defKind: rast.DefNative, catKind: "function", native: cek.StdWfSleep},
 		{module: "std/wf", export: "receive", defKind: rast.DefNative, catKind: "function", native: cek.StdWfReceive},
@@ -236,6 +246,27 @@ func moduleStubs() map[string]string {
 			"export declare const ensures: (cond: boolean) => boolean;\n",
 		"/std/mail.ts": "export declare const send: (to: string, subject: string) => " +
 			"{ intent: string; to: string; subject: string };\n",
+		// std/policy L0 (BUILD-C, ADR-10 §4). A Policy is an opaque governance
+		// predicate; orgScoped is the built-in org/role scope, policy(name) declares
+		// a named one. std/pii + std/contract land in C2 — room left, not built.
+		"/std/policy.ts": "export type Policy = { readonly __policy: string };\n" +
+			"export declare const orgScoped: Policy;\n" +
+			"export declare const policy: (name: string) => Policy;\n",
+		// std/resource L0 (BUILD-C, ADR-10 §4/§5). FieldSpec is the closed
+		// field-type surface at MINIMAL Stage-C scope: plain base kinds plus the
+		// pii(<base>) modifier over a subset — the full 13 base types land at Stage D
+		// behind the same seam. A resource declares a field map and an optional policy.
+		"/std/resource.ts": "import { Policy } from \"std/policy\";\n" +
+			"export type FieldSpec =\n" +
+			"  | \"text\" | \"longtext\" | \"number\" | \"boolean\" | \"date\" | \"timestamp\"\n" +
+			"  | \"email\" | \"phone\" | \"url\"\n" +
+			"  | \"pii:text\" | \"pii:email\" | \"pii:phone\" | \"pii:address\";\n" +
+			"export type ResourceDecl = {\n" +
+			"  fields: { readonly [name: string]: FieldSpec };\n" +
+			"  policy?: Policy;\n" +
+			"};\n" +
+			"export type Resource = { readonly __resource: string };\n" +
+			"export declare const resource: (decl: ResourceDecl) => Resource;\n",
 		"/std/wf.ts": "export declare const sleep: (ms: number) => void;\n" +
 			"export declare const receive: <T>(channel: string) => T;\n" +
 			"export declare const send: <T>(channel: string, value: T) => void;\n" +

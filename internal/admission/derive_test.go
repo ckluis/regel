@@ -2,6 +2,7 @@ package admission
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -247,6 +248,86 @@ func TestV6RetireIntentAdmits(t *testing.T) {
 	// The retirement is recorded as a named, inspectable artifact.
 	if got := w.count("SELECT count(*) FROM derived_artifact WHERE resource_name='app/ret/Deal' AND pass='retire'"); got != 1 {
 		t.Fatalf("retire artifact rows = %d, want 1", got)
+	}
+}
+
+// --- Derivation determinism (ADR-07 §1 5a): same patch + snapshot ⇒ byte-
+//     identical derived rows + migration_sql --------------------------------
+
+// TestDerivationDeterministicPure asserts buildPlan is a pure function: identical
+// (resources, policies, base shape, intent) yield byte-identical migration_sql
+// and a deep-equal plan across repeated calls, regardless of input field order.
+func TestDerivationDeterministicPure(t *testing.T) {
+	base := map[string]derivedShape{
+		"app/x/Deal": {
+			Fields:    map[string]fieldSpec{"title": {Name: "title", Base: "text"}},
+			TableName: "res_app_x_deal",
+		},
+	}
+	mk := func() []resourceDecl {
+		return []resourceDecl{{
+			CatalogName: "app/x/Deal",
+			DefHash:     "r1_deal",
+			// deliberately unsorted on input — buildPlan must sort.
+			Fields: []fieldSpec{
+				{Name: "owner", Base: "text", PII: true},
+				{Name: "title", Base: "text"},
+				{Name: "amount", Base: "number"},
+			},
+		}}
+	}
+	p1 := buildPlan(mk(), nil, base, "")
+	p2 := buildPlan(mk(), nil, base, "")
+	if p1.MigrationSQL != p2.MigrationSQL {
+		t.Fatalf("migration_sql not deterministic:\n%q\n%q", p1.MigrationSQL, p2.MigrationSQL)
+	}
+	if !reflect.DeepEqual(p1, p2) {
+		t.Fatalf("plan not deterministic:\n%+v\n%+v", p1, p2)
+	}
+	// The additive ADD COLUMNs come out in sorted field order, every time.
+	if !strings.Contains(p1.MigrationSQL, "amount") || !strings.Contains(p1.MigrationSQL, "owner") {
+		t.Fatalf("expected additive columns, got %q", p1.MigrationSQL)
+	}
+	if strings.Index(p1.MigrationSQL, "amount") > strings.Index(p1.MigrationSQL, "owner") {
+		t.Fatalf("additive DDL not in sorted order: %q", p1.MigrationSQL)
+	}
+}
+
+// TestDerivationDeterministicAcrossWorlds admits the identical resource patch into
+// two fresh catalogs and asserts the applied migration_sql and the derived_artifact
+// schema record are byte-identical — the ADR-07 hermeticity guarantee at the
+// derivation tier (two fresh databases cannot disagree).
+func TestDerivationDeterministicAcrossWorlds(t *testing.T) {
+	src := dealSrc(`title: "text", owner: "pii:text", amount: "number"`)
+	one := func() (string, string) {
+		w := setupWorld(t)
+		ctx := ctxT(t)
+		v, err := admit(ctx, w.conn, src, "app/det", engineer("dev"), nil)
+		if err != nil || v.Outcome != OutcomeAdmitted {
+			t.Fatalf("admit: %v / %q (%+v)", err, v.Outcome, v.Diagnostics)
+		}
+		var mig, detail string
+		if _, err := w.conn.QueryRow(ctx, `SELECT coalesce(migration_sql,'') FROM admission WHERE id=$1`,
+			[]any{v.AdmissionID}, &mig); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.conn.QueryRow(ctx,
+			`SELECT detail::text FROM derived_artifact WHERE resource_name='app/det/Deal' AND pass='schema'`,
+			nil, &detail); err != nil {
+			t.Fatal(err)
+		}
+		return mig, detail
+	}
+	migA, detailA := one()
+	migB, detailB := one()
+	if migA != migB {
+		t.Fatalf("migration_sql differs across worlds:\n%q\n%q", migA, migB)
+	}
+	if detailA != detailB {
+		t.Fatalf("derived_artifact detail differs across worlds:\n%q\n%q", detailA, detailB)
+	}
+	if !strings.Contains(strings.ToUpper(migA), "CREATE TABLE") {
+		t.Fatalf("expected CREATE TABLE in migration, got %q", migA)
 	}
 }
 

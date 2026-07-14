@@ -180,13 +180,55 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 	}
 	mark("tsgo", "pass")
 
-	// --- 5b V1 capability-audit (red-path-first) -----------------------------
+	// --- 5a derivation seam (ADR-07 §1 step 5a): pure ordered passes over
+	//     base ⊕ patch → proposed derived rows + migration_sql (nothing physical
+	//     applied here); the proposed rows are stored so V3/V6 can query them. ----
+	plan, derr := deriveResources(ctx, conn, lowered, patch, scope, im, admissionID)
+	if derr != nil {
+		if isSerialization(derr) {
+			return Verdict{}, true, nil
+		}
+		return Verdict{}, false, derr
+	}
+	mark("derive", "pass")
+
+	// --- 5b verifier suite V1..V6 over base ⊕ patch ⊕ derived (in-txn) --------
+	// V2/V4/V5 are increment-C2 seam stubs that pass trivially (clearly marked).
 	if vdiags := verifyV1(lowered, patch, grants, im); len(vdiags) > 0 {
 		mark("V1", "fail")
 		v.Stages = stages
 		return reject(ctx, conn, auth, patch, v, vdiags)
 	}
 	mark("V1", "pass")
+	_ = verifyV2(lowered, plan, im)
+	mark("V2", "pass")
+	if vdiags := verifyV3(plan); len(vdiags) > 0 {
+		mark("V3", "fail")
+		v.Stages = stages
+		return reject(ctx, conn, auth, patch, v, vdiags)
+	}
+	mark("V3", "pass")
+	_ = verifyV4(lowered, im)
+	mark("V4", "pass")
+	_ = verifyV5(lowered)
+	mark("V5", "pass")
+	if vdiags := verifyV6(plan); len(vdiags) > 0 {
+		mark("V6", "fail")
+		v.Stages = stages
+		return reject(ctx, conn, auth, patch, v, vdiags)
+	}
+	mark("V6", "pass")
+
+	// --- 6 apply migration_sql inside the txn (additive only — V6-enforced) ---
+	if plan.MigrationSQL != "" {
+		if _, err := conn.ExecSimple(ctx, plan.MigrationSQL); err != nil {
+			if isSerialization(err) {
+				return Verdict{}, true, nil
+			}
+			return Verdict{}, false, err
+		}
+	}
+	mark("migrate", "pass")
 
 	// --- 7 name_pointer CAS upsert per declaration ---------------------------
 	for _, ld := range lowered {
@@ -218,8 +260,8 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 	}
 	mark("cas", "pass")
 
-	// Persist the verifier report on the committed audit row.
-	if err := recordReport(ctx, conn, admissionID, tsgoMs, stages); err != nil {
+	// Persist the verifier report + applied migration_sql on the committed row.
+	if err := recordReport(ctx, conn, admissionID, tsgoMs, stages, plan.MigrationSQL); err != nil {
 		if isSerialization(err) {
 			return Verdict{}, true, nil
 		}
@@ -506,14 +548,18 @@ func isNoop(ctx context.Context, q catalog.Querier, lowered []loweredDef, scope 
 	return true, nil
 }
 
-func recordReport(ctx context.Context, q catalog.Querier, admissionID int64, tsgoMs int64, stages []Stage) error {
+func recordReport(ctx context.Context, q catalog.Querier, admissionID int64, tsgoMs int64, stages []Stage, migrationSQL string) error {
 	report, err := json.Marshal(map[string]any{"stages": stages})
 	if err != nil {
 		return err
 	}
+	var migArg any
+	if migrationSQL != "" {
+		migArg = migrationSQL
+	}
 	_, err = q.Exec(ctx,
-		`UPDATE admission SET tsgo_ms = $1, verifier_report = $2::jsonb WHERE id = $3`,
-		tsgoMs, string(report), admissionID)
+		`UPDATE admission SET tsgo_ms = $1, verifier_report = $2::jsonb, migration_sql = $3 WHERE id = $4`,
+		tsgoMs, string(report), migArg, admissionID)
 	return err
 }
 

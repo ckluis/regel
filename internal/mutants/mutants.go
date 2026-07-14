@@ -41,6 +41,22 @@ var All = []Mutant{
 	{Name: "RESOLVER_ADMIT_OUT_OF_WORLD", Component: "resolver", Weakens: "resolver: admits an out-of-world import (falls back past the catalog-world boundary)"},
 }
 
+// Evaluator is the closed set of seeded WRONG-EVALUATION mutants in the
+// production CEK evaluator (ADR-04 §6 harness 3 / ADR-07 §5 R1-02): one per
+// oracle-covered layer — contract enforcement, derived-boundary-validator
+// outcomes, effect-class ordering. They are NOT part of All: the admission
+// hostile corpus cannot witness an evaluator weakening (admission never
+// evaluates); the regel-native differential oracle (internal/oracle) is the
+// harness that must catch each of these, and a survivor blocks the release.
+var Evaluator = []Mutant{
+	{Name: "EVAL_PRE_ALWAYS_SATISFIED", Component: "evaluator-contract",
+		Weakens: "contract enforcement: a violated precondition clause is treated as satisfied (no boundary refusal)"},
+	{Name: "EVAL_VALIDATOR_ZERO_ACCEPTS", Component: "evaluator-validator",
+		Weakens: "boundary validator: a postcondition/validator predicate evaluating to numeric 0 is accepted (weakened accept set)"},
+	{Name: "EVAL_EFFECT_ORDER_TRANSPOSED", Component: "evaluator-effects",
+		Weakens: "effect-class ordering: a newly recorded effect is transposed before the previous one in the trace"},
+}
+
 // Mutant is one registered weakening.
 type Mutant struct {
 	Name      string

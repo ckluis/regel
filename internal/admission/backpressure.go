@@ -30,10 +30,16 @@ import (
 var admitRetries atomic.Int64
 
 // AdmissionConcurrency bounds concurrent in-transaction typechecks (ADR-07 §3,
-// sized from the N=32 benchmark: the largest S at which S-way concurrent
-// tsgo-in-txn holds p95 ≤ 40 ms / p99 ≤ 80 ms). A var so the benchmark can
-// resize it.
-var AdmissionConcurrency = 12
+// sized from the N=32 benchmark). The binding constraint is not tsgo-in-txn
+// latency (well within p95≤40ms/p99≤80ms even at higher concurrency) but the I4
+// `name_pointer_history` GiST exclusion index, whose SSI predicate locking is
+// page-coarse — so concurrent admissions false-conflict there regardless of
+// target scope, and the serialization-retry rate crosses 5% above S=2. The
+// benchmark therefore sizes the semaphore at 2 and sheds the excess as
+// ADMISSION_BUSY backpressure rather than thrashing the conflict window with
+// retries (RESIDUE: a finer-grained I4 predicate lock would raise this bound).
+// A var so the benchmark can resize it.
+var AdmissionConcurrency = 2
 
 // admissionSem is the process-wide admission-control semaphore.
 var admissionSem = newSemaphore(AdmissionConcurrency)
@@ -84,10 +90,6 @@ func (s *semaphore) release() {
 // fuel bucket by the deepest stage reached. A non-nil error is an internal fault;
 // every ordinary/backpressure refusal is a typed Verdict.
 func Admit(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image) (Verdict, error) {
-	// RED-STUB: backpressure gates not yet wired.
-	if true {
-		return admitWithRetries(ctx, conn, patch, auth, im)
-	}
 	// 1. per-principal admission-fuel bucket (pre-BEGIN).
 	enough, retryMs, err := fuelCheck(ctx, conn, auth)
 	if err != nil {

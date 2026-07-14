@@ -18,7 +18,7 @@ func TestAdmissionBusyPreBegin(t *testing.T) {
 	// Saturate the semaphore: size 1, hold the single slot so any admission that
 	// would open a transaction is shed as busy BEFORE BEGIN.
 	setAdmissionConcurrency(1)
-	t.Cleanup(func() { setAdmissionConcurrency(12) })
+	t.Cleanup(func() { setAdmissionConcurrency(2) })
 	if !admissionSem.tryAcquire() {
 		t.Fatalf("could not pre-acquire the lone slot")
 	}
@@ -149,24 +149,21 @@ func TestAdmissionFuelDifferentialCharge(t *testing.T) {
 func TestConcurrentAdmissionBenchmarkN32(t *testing.T) {
 	const (
 		N          = 32
-		S          = 12 // semaphore size sized from this benchmark
+		S          = 2 // semaphore size sized from this benchmark (see AdmissionConcurrency)
 		budgetP95  = 40.0
 		budgetP99  = 80.0
 		budgetRetr = 0.05
-		rounds     = 3 // best-of-N rounds for load robustness
+		rounds     = 3 // aggregate rounds for a fuller sample under load
 	)
 	w := setupWorld(t)
 	setAdmissionConcurrency(S)
-	t.Cleanup(func() { setAdmissionConcurrency(12) })
+	t.Cleanup(func() { setAdmissionConcurrency(2) })
 
-	bestP95, bestP99, bestRetr := 1e18, 1e18, 1e18
+	var mu sync.Mutex
+	var tsgoMs []float64
 	var admittedTotal, busyTotal int
+	retrBefore := admitRetries.Load()
 	for r := 0; r < rounds; r++ {
-		retrBefore := admitRetries.Load()
-		var mu sync.Mutex
-		var tsgoMs []float64
-		admitted, busy := 0, 0
-
 		var wg sync.WaitGroup
 		start := make(chan struct{})
 		for i := 0; i < N; i++ {
@@ -180,8 +177,12 @@ func TestConcurrentAdmissionBenchmarkN32(t *testing.T) {
 				defer conn.Close()
 				src := "export const c" + itoaAdm(i) + ": number = " + itoaAdm(i) + ";\n"
 				mod := "app/bench_r" + itoaAdm(r) + "_" + itoaAdm(i)
+				// Distinct overlay scope per admission: 32 tenants racing on the
+				// shared std L0 snapshot but writing disjoint scopes.
+				scope := Scope{Kind: 2, ID: "org_r" + itoaAdm(r) + "_" + itoaAdm(i)}
 				<-start
-				v, err := admit(context.Background(), conn, src, mod, engineer("bench"), nil)
+				v, err := admit(context.Background(), conn, src, mod, engineer("bench"),
+					func(p *Patch) { p.TargetScope = scope })
 				if err != nil {
 					return
 				}
@@ -189,32 +190,31 @@ func TestConcurrentAdmissionBenchmarkN32(t *testing.T) {
 				defer mu.Unlock()
 				switch v.Outcome {
 				case OutcomeAdmitted:
-					admitted++
+					admittedTotal++
 					for _, s := range v.Stages {
 						if s.Stage == "tsgo" {
 							tsgoMs = append(tsgoMs, float64(s.Ms))
 						}
 					}
 				case OutcomeBusy:
-					busy++
+					busyTotal++
 				}
 			}(i)
 		}
 		close(start)
 		wg.Wait()
-
-		retries := admitRetries.Load() - retrBefore
-		retrRate := float64(retries) / float64(admitted+busy)
-		p95 := percentile(tsgoMs, 0.95)
-		p99 := percentile(tsgoMs, 0.99)
-		if p95 < bestP95 {
-			bestP95, bestP99, bestRetr = p95, p99, retrRate
-		}
-		admittedTotal, busyTotal = admitted, busy
 	}
+	retries := admitRetries.Load() - retrBefore
+	attempts := admittedTotal + busyTotal
+	bestRetr := 0.0
+	if attempts > 0 {
+		bestRetr = float64(retries) / float64(attempts)
+	}
+	bestP95 := percentile(tsgoMs, 0.95)
+	bestP99 := percentile(tsgoMs, 0.99)
 
-	t.Logf("N=%d S=%d: tsgo-in-txn p95=%.1fms p99=%.1fms retry-rate=%.3f (admitted=%d busy=%d/round)",
-		N, S, bestP95, bestP99, bestRetr, admittedTotal, busyTotal)
+	t.Logf("N=%d S=%d over %d rounds: tsgo-in-txn p95=%.1fms p99=%.1fms retry-rate=%.3f (admitted=%d busy=%d)",
+		N, S, rounds, bestP95, bestP99, bestRetr, admittedTotal, busyTotal)
 
 	// Persist the budgets + measured values as perf_budget rows (ADR-04 §8 shape).
 	writeBudget := func(metric string, budget, measured float64) {

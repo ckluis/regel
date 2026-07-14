@@ -183,6 +183,28 @@ with serving-latency-invisible cost. The budget and its measured value are `perf
 rows (ADR-04 §8); they are enforced by the **M1 gate** that builds this hermetic host (the
 milestone at which tsgo-in-txn first exists) — a regression is red.
 
+BUILD-C (increment C4 — R1-07 realized; semaphore sized from the benchmark). The
+pre-`BEGIN` door is `internal/admission` `Admit` (backpressure.go), shared verbatim by
+the kernel HTTP door and the CLI door: first the ADR-12 §5 per-principal
+admission-fuel bucket (exhaustion ⇒ `budget-exhausted`/`ADMISSION_BUDGET`,
+`retry_after{cause:"budget-refill"}`), then a non-blocking admission-control
+semaphore (overflow ⇒ `busy`/`ADMISSION_BUSY`, `retry_after{cause:"admission-busy"}`);
+both mint a durable `refusal_id` written directly to `gate_refusal` with no
+transaction opened. The N = 32 benchmark measured tsgo-in-txn comfortably inside the
+budget (p95 ≈ 23 ms, p99 ≈ 23 ms ≤ 40/80 ms) at every probed concurrency — the binding
+constraint is not the checker but the **I4 `name_pointer_history` GiST exclusion
+index**, whose SSI predicate locking is page-coarse: concurrent admissions
+false-conflict there regardless of target scope, and the serialization-retry rate
+crosses the 5 % budget above S = 2 (measured: S=2 ⇒ 3.1 %, S=4 ⇒ 18.8 %, S=8 ⇒ 56 %).
+The semaphore is therefore sized **S = 2** and overflow is shed as `ADMISSION_BUSY`
+per this section, not queued into the conflict window. RESIDUE: a finer-grained I4
+predicate-locking scheme (e.g. partitioned history or btree-assisted exclusion)
+would raise the bound; re-benchmark when I4 changes. Fuel charging is by deepest
+stage reached (pre-typecheck refusals 1, insert 2, tsgo 3, full pipeline 5 — the
+parse-fail-cheap / full-run-expensive gradient ADR-12 §5 requires); agent-kind
+capacity rows carry `derived_from='provisional'` until the ADR-12 §3a eval P95
+derivation (R1-13) lands with the MCP increment.
+
 ### 4. Verifier suite v1 roster: exactly six
 
 Run in this order at step 5b, fail-closed, each a pure query/walk over the typed AST +

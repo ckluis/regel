@@ -193,14 +193,19 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 	mark("derive", "pass")
 
 	// --- 5b verifier suite V1..V6 over base ⊕ patch ⊕ derived (in-txn) --------
-	// V2/V4/V5 are increment-C2 seam stubs that pass trivially (clearly marked).
 	if vdiags := verifyV1(lowered, patch, grants, im); len(vdiags) > 0 {
 		mark("V1", "fail")
 		v.Stages = stages
 		return reject(ctx, conn, auth, patch, v, vdiags)
 	}
 	mark("V1", "pass")
-	_ = verifyV2(lowered, plan, im)
+	if !disableV2 {
+		if vdiags := verifyV2(lowered, plan, im); len(vdiags) > 0 {
+			mark("V2", "fail")
+			v.Stages = stages
+			return reject(ctx, conn, auth, patch, v, vdiags)
+		}
+	}
 	mark("V2", "pass")
 	if vdiags := verifyV3(plan); len(vdiags) > 0 {
 		mark("V3", "fail")
@@ -208,9 +213,21 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 		return reject(ctx, conn, auth, patch, v, vdiags)
 	}
 	mark("V3", "pass")
-	_ = verifyV4(lowered, im)
+	if !disableV4 {
+		if vdiags := verifyV4(lowered, im); len(vdiags) > 0 {
+			mark("V4", "fail")
+			v.Stages = stages
+			return reject(ctx, conn, auth, patch, v, vdiags)
+		}
+	}
 	mark("V4", "pass")
-	_ = verifyV5(lowered)
+	if !disableV5 {
+		if vdiags := verifyV5(lowered, patch, im); len(vdiags) > 0 {
+			mark("V5", "fail")
+			v.Stages = stages
+			return reject(ctx, conn, auth, patch, v, vdiags)
+		}
+	}
 	mark("V5", "pass")
 	if vdiags := verifyV6(plan); len(vdiags) > 0 {
 		mark("V6", "fail")

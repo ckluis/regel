@@ -24,6 +24,52 @@ type Verdict struct {
 	// Epoch + BaseSnapshot pin the frozen snapshot the verdict was computed over.
 	Epoch        int    `json:"epoch"`
 	BaseSnapshot string `json:"base_snapshot"`
+	// Delta is the machine-computed blast-radius delta (ADR-07 §6, R1-04),
+	// attached on EVERY run — green or red. A pure projection of what V1/V2/V6
+	// computed over the frozen snapshot vs. the base.
+	Delta Delta `json:"delta"`
+	// Seeders is the content-seeder set (ADR-07 §1 / ADR-12 §6): the provenance of
+	// the rows the authoring session read that reach this patch. Empty for
+	// human/CLI submissions. Bound from the authenticated principal's scope chain
+	// at step 2a (an out-of-chain seeder is unrepresentable, so rejected).
+	Seeders []Seeder `json:"seeders"`
+}
+
+// Delta is the blast-radius delta (ADR-07 §6). Each *_added_vs_base names only
+// the surface this patch widens relative to the base snapshot.
+type Delta struct {
+	Capabilities CapDelta `json:"capabilities"`
+	PIISurface   PIIDelta `json:"pii_surface"`
+	DDLSurface   DDLDelta `json:"ddl_surface"`
+}
+
+// CapDelta is the capability delta from V1 capability-audit.
+type CapDelta struct {
+	Requested   []string `json:"requested"`
+	Granted     []string `json:"granted"`
+	AddedVsBase []string `json:"added_vs_base"`
+}
+
+// PIIDelta is the pii-surface delta from V2 pii-flow: fields/values reaching a
+// boundary sink, and those newly reaching one vs. the base.
+type PIIDelta struct {
+	Touched     []string `json:"touched"`
+	AddedVsBase []string `json:"added_vs_base"`
+}
+
+// DDLDelta is the DDL-surface delta from V6 derivation-parity.
+type DDLDelta struct {
+	Statements  []string `json:"statements"`
+	Additive    bool     `json:"additive"`
+	AddedVsBase []string `json:"added_vs_base"`
+}
+
+// Seeder is one content-seeder provenance record (ADR-07 §1 / ADR-12 §6).
+type Seeder struct {
+	SourceKind string `json:"source_kind"`
+	SourceRef  string `json:"source_ref"`
+	Scope      Scope  `json:"scope"`
+	SeededBy   string `json:"seeded_by"` // "unattributed" for an external-effect source
 }
 
 // Outcome constants — the full ADR-07 §6 seven-value enum (as string constants).

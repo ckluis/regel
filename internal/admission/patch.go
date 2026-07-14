@@ -41,6 +41,21 @@ type Patch struct {
 	// BaseHashes is the head each pointer-move saw (empty entry / absent ⇒
 	// expect-new). Keyed by full catalog name.
 	BaseHashes map[string]string `json:"base_hashes,omitempty"`
+	// ReadLog is the optional content-seeder read-log (ADR-07 §1 / ADR-12 §6): the
+	// provenance of catalog/resource/condition/audit rows the authoring agent read
+	// that reach this patch. Validated against the authenticated principal's scope
+	// chain at step 2a. Human/CLI submissions carry none (empty seeder set).
+	ReadLog []ReadLogEntry `json:"read_log,omitempty"`
+}
+
+// ReadLogEntry is one provenance record an agent submits with a patch. Scope is
+// the seeder's own scope; step 2a rejects any scope outside the principal's chain
+// (unrepresentable), so the set can never be forged to blame another tenant.
+type ReadLogEntry struct {
+	SourceKind string `json:"source_kind"` // catalog|resource|condition|audit|external
+	SourceRef  string `json:"source_ref"`
+	Scope      Scope  `json:"scope"`
+	SeededBy   string `json:"seeded_by,omitempty"` // principal; "" ⇒ external/unattributed
 }
 
 // Principal is the authenticated identity of a submission (§2a). Grants are

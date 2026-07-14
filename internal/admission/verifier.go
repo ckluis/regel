@@ -74,12 +74,23 @@ func capUngranted(ld loweredDef, capability, msg string) Diagnostic {
 
 // --- V2/V4/V5 seam stubs (increment C2) --------------------------------------
 //
+// disableV2/V4/V5 are test-only kill switches (default false = enabled). The
+// adversarial harness (ADR-07 §5) flips one at a time to prove each verifier is
+// load-bearing: with it disabled, its red fixture ADMITS — demonstrating the
+// verifier, not some other stage, is what catches the mutant — then restores.
+// Package tests run sequentially, so a defer-restored global is safe.
+var (
+	disableV2 bool
+	disableV4 bool
+	disableV5 bool
+)
+
 // The suite runs V1..V6 in order at step 5b. V2 (pii-flow), V4 (contracts), and
 // V5 (capture) are increment-C2 seams: they pass trivially now, mount into the
 // same pipeline slot when built, and are clearly marked so no verdict is faked.
 func verifyV2(_ []loweredDef, _ derivationPlan, _ *Image) []Diagnostic { return nil }
 func verifyV4(_ []loweredDef, _ *Image) []Diagnostic                  { return nil }
-func verifyV5(_ []loweredDef) []Diagnostic                            { return nil }
+func verifyV5(_ []loweredDef, _ Patch, _ *Image) []Diagnostic         { return nil }
 
 // verifyV3 is catalog-parity (ADR-07 §4 V3): every declared governance artifact
 // reachable from ≥1 admitted-or-derived execution path in the proposed reference

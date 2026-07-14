@@ -38,6 +38,11 @@ type Entry struct {
 	Intrinsic     string      // "std/mail.send"
 	Native        cek.NativeFn // nil for type-only entries
 	Capability    string      // "" when the binding bears no capability
+	// NonSerial marks a binding or type whose value is a LIVE HOST RESOURCE — a
+	// connection/socket that "is never a dialect value at all, so the codec has
+	// no tag for it" (ADR-05 §3). A binding of such a type (or initialized by
+	// such a native) live across an await is refused by V5 (CAPTURE_UNSERIALIZABLE).
+	NonSerial bool
 }
 
 // Image is the whole compiled genesis image.
@@ -45,6 +50,7 @@ type Image struct {
 	Entries          []*Entry
 	ByHash           map[string]*Entry
 	CapabilityByHash map[string]string // capability-bearing std hashes → capability
+	NonSerialByHash  map[string]bool   // host-resource type/native hashes (V5, ADR-05 §3)
 	ModuleStubs      map[string]string // "/std/mail.ts" → L0 stub text
 	ManifestRoot     string            // SHA-256 over sorted (name,hash)
 	Attestation      string            // H_dispatch (ADR-10 §2)
@@ -90,6 +96,7 @@ type rosterEntry struct {
 	catKind    string
 	native     cek.NativeFn
 	capability string
+	nonSerial  bool
 }
 
 func buildImage() *Image {
@@ -105,6 +112,33 @@ func buildImage() *Image {
 		// std/contract (requires, ensures) — purity enforced by V4 (Stage B)
 		{module: "std/contract", export: "requires", defKind: rast.DefNative, catKind: "function", native: cek.StdContractRequires},
 		{module: "std/contract", export: "ensures", defKind: rast.DefNative, catKind: "function", native: cek.StdContractEnsures},
+		// std/contract (BUILD-C, ADR-10 §3/§137): pre/post are the pre/postcondition
+		// combinators attachable to a definition (ADR-02 §3 — contracts are subset
+		// code in the body, mirrored to definition.contracts). V4 enforces they are
+		// well-formed and PURE (a capability named in a clause ⇒ CONTRACT_EFFECTFUL;
+		// a governance/out-of-scope symbol ⇒ CONTRACT_MALFORMED).
+		{module: "std/contract", export: "pre", defKind: rast.DefNative, catKind: "function", native: cek.StdContractRequires},
+		{module: "std/contract", export: "post", defKind: rast.DefNative, catKind: "function", native: cek.StdContractEnsures},
+		// std/pii (BUILD-C, ADR-10 §4 item 5 / §5 modifier): Vault<T> is the pii /
+		// vault-routed value type; mask()/reveal() are the masking + reveal-grant
+		// combinators (the only sanitizers V2 pii-flow recognizes). A vault value
+		// reaching a boundary sink unmasked ⇒ PII_ESCAPE; a vault-typed literal ⇒
+		// PII_LITERAL (the immortality interaction).
+		{module: "std/pii", export: "Vault", defKind: rast.DefType, catKind: "type"},
+		{module: "std/pii", export: "mask", defKind: rast.DefNative, catKind: "function", native: nativeStub},
+		{module: "std/pii", export: "reveal", defKind: rast.DefNative, catKind: "function", native: nativeStub},
+		// std/sql (BUILD-C, ADR-10 §3 std/sql SHIP + §Red-Path "socket-typed value
+		// live across await"): the MINIMAL host-resource slice the V5 capture fixture
+		// needs. Conn is a live connection handle — a host resource with NO encodable
+		// Value tag (ADR-05 §3), so a Conn live across an await is CAPTURE_UNSERIALIZABLE.
+		// The full std/sql parameterized-query surface (ADR-10 §3) lands at Stage D.
+		// Conn is detected as a host-resource TYPE by its (module,name) dep — every
+		// std TYPE shares the opaque `unknown` genesis body (so their hashes collide;
+		// the L0 stub carries the real shape), so type classification keys on the dep
+		// name, never the hash. connect() is a value native with a unique hash, so its
+		// non-serial result is keyed by hash (NonSerialByHash).
+		{module: "std/sql", export: "Conn", defKind: rast.DefType, catKind: "type"},
+		{module: "std/sql", export: "connect", defKind: rast.DefNative, catKind: "function", native: nativeStub, nonSerial: true},
 		// std/mail (send — capability "mail.send", the V1 fixture target)
 		{module: "std/mail", export: "send", defKind: rast.DefNative, catKind: "function", native: cek.StdMailSend, capability: "mail.send"},
 		// std/policy (BUILD-C, ADR-10 §4 item 4): the governance policy vocabulary
@@ -128,6 +162,7 @@ func buildImage() *Image {
 	im := &Image{
 		ByHash:           map[string]*Entry{},
 		CapabilityByHash: map[string]string{},
+		NonSerialByHash:  map[string]bool{},
 		ModuleStubs:      moduleStubs(),
 		Epoch:            1,
 	}
@@ -164,11 +199,15 @@ func buildImage() *Image {
 			Intrinsic:     intrinsic,
 			Native:        r.native,
 			Capability:    r.capability,
+			NonSerial:     r.nonSerial,
 		}
 		im.Entries = append(im.Entries, e)
 		im.ByHash[hash] = e
 		if r.capability != "" {
 			im.CapabilityByHash[hash] = r.capability
+		}
+		if r.nonSerial {
+			im.NonSerialByHash[hash] = true
 		}
 	}
 
@@ -243,7 +282,19 @@ func moduleStubs() map[string]string {
 			"export declare const signal: (cls: string, restarts: unknown) => unknown;\n" +
 			"export declare const sleep: (ms: number) => void;\n",
 		"/std/contract.ts": "export declare const requires: (cond: boolean) => boolean;\n" +
-			"export declare const ensures: (cond: boolean) => boolean;\n",
+			"export declare const ensures: (cond: boolean) => boolean;\n" +
+			"export declare const pre: (cond: boolean) => void;\n" +
+			"export declare const post: (cond: boolean) => void;\n",
+		// std/pii L0 (BUILD-C, ADR-10 §4/§5). Vault<T> is the pii/vault-routed value
+		// type; pii-ness travels through the type ANNOTATION (V2 reads it off the
+		// lowered TCatRef), so the alias is transparent at the type level while the
+		// nominal reference survives lowering. mask()/reveal() are the only sanitizers.
+		"/std/pii.ts": "export type Vault<T> = T;\n" +
+			"export declare const mask: <T>(v: Vault<T>) => string;\n" +
+			"export declare const reveal: <T>(v: Vault<T>, grant: string) => T;\n",
+		// std/sql L0 (BUILD-C, ADR-10 §3 minimal): Conn is a live host-resource handle.
+		"/std/sql.ts": "export type Conn = { readonly __conn: string };\n" +
+			"export declare const connect: () => Conn;\n",
 		"/std/mail.ts": "export declare const send: (to: string, subject: string) => " +
 			"{ intent: string; to: string; subject: string };\n",
 		// std/policy L0 (BUILD-C, ADR-10 §4). A Policy is an opaque governance

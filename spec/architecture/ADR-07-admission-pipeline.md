@@ -142,6 +142,29 @@ same verdict, on any machine. Secondary backstop: a wall-clock deadline
 traffic is untouched (the heavy phase holds no locks — reads at a snapshot). A
 conditional-type bomb is a rejected patch, never a stalled gate.
 
+BUILD-C (increment C4 — owned-seam realization of the deterministic ceiling). The
+vendored tsgo checker instantiates the type graph internally and caps it with its
+own instantiation-depth/count limits (surfacing TS2589), but those limits are not
+reachable through the shim without editing fork internals — forbidden by the
+vendoring contract (zero fork edits). Per this section's determinism requirement,
+the ceiling is realized at the nearest owned seam (`internal/tsx.CheckTypeGraphBudget`,
+wired at the `internal/admission` pipeline ahead of step 4): a DETERMINISTIC
+pre-check on the **type-level syntactic weight** of the submitted patch — the
+maximum nesting depth of consecutive type-syntax nodes (`TypeGraphDepthCeiling`,
+the conditional/mapped/indexed recursion a bomb is built from) and the total
+type-node count (`TypeGraphNodeCeiling`, the breadth companion) — measured over
+the parsed tsgo tree with an explicit heap stack (the measurement itself never
+recurses). The submitted type syntax is the pre-image of the instantiated graph
+(a nest of N conditional nodes instantiates a graph ≥ N deep), so bounding the
+submitted weight bounds the graph the checker would build; and because the
+measurement is a pure function of the parsed tree, the verdict is byte-identical
+on any machine where the checker's own load-sensitive cutoff would not be. Because
+the pre-check is pure it runs ahead of lowering as well as the checker — a
+conditional-type bomb never reaches either. `TYPECHECK_TIMEOUT` is the goroutine
+wall-clock backstop (`TypecheckWithDeadline`); the abandoned checker goroutine on
+a timeout is an accepted liveness residue, never reached in practice because the
+deterministic ceiling refuses the bomb first.
+
 **tsgo-ms-in-transaction under concurrent admission — a measured, budgeted quantity (R1-07: measured under concurrency; backpressure, not silent stretch).**
 tsgo is the expensive stage and it runs **inside** the SERIALIZABLE transaction (§1 step
 4), so the milliseconds it holds the transaction open lengthen the SSI conflict window and

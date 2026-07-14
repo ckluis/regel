@@ -19,6 +19,63 @@ import (
 // serialization failures the pipeline returns retry-exhausted.
 const maxRetries = 3
 
+// typecheckWall is the ADR-07 §3 secondary wall-clock backstop for the
+// in-transaction typecheck (liveness only; the deterministic type-graph ceiling
+// is the primary control). A var so tests may tighten it.
+var typecheckWall = tsx.DefaultTypecheckWall
+
+// typeGraphBudgetDiags runs the deterministic type-graph node ceiling (ADR-07 §3,
+// BUILD-C) over every submitted module and returns a TYPECHECK_BUDGET diagnostic
+// on the first breach, naming the offending site. Parsing a module is a pure
+// function of its source, so the verdict is byte-identical on any kernel.
+func typeGraphBudgetDiags(patch Patch) []Diagnostic {
+	for _, mod := range patch.Modules {
+		pr, err := tsx.Parse("/"+mod.ModuleName+".ts", mod.Source)
+		if err != nil || pr == nil || pr.SourceFile == nil {
+			continue // a parse fault is lowering's to report, not the budget's
+		}
+		if b := tsx.CheckTypeGraphBudget(pr.SourceFile); b != nil {
+			kind := "nesting depth"
+			if b.Kind == "count" {
+				kind = "node count"
+			}
+			return []Diagnostic{{
+				StageOrVerifier: "tsgo", Code: "TYPECHECK_BUDGET", Severity: "error",
+				Subject: mod.ModuleName,
+				Loc:     Loc{Span: b.Site},
+				Message: "the submitted type graph exceeds the deterministic " + kind +
+					" ceiling at " + b.Site + " (" + itoaAdm(b.Measured) + " > " + itoaAdm(b.Ceiling) +
+					"); a conditional/mapped-type bomb is refused before the checker runs",
+				Fix: "reduce type-level nesting/breadth (a deeply-recursive or excessively wide generic type) and resubmit",
+			}}
+		}
+	}
+	return nil
+}
+
+// itoaAdm is a tiny local int→string for diagnostic messages.
+func itoaAdm(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	neg := i < 0
+	if neg {
+		i = -i
+	}
+	var b [20]byte
+	p := len(b)
+	for i > 0 {
+		p--
+		b[p] = byte('0' + i%10)
+		i /= 10
+	}
+	if neg {
+		p--
+		b[p] = '-'
+	}
+	return string(b[p:])
+}
+
 // loweredDef pairs a lowered definition with its full catalog name and module.
 type loweredDef struct {
 	CatalogName string
@@ -86,6 +143,17 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 
 	// --- 2a bind scope/principal (from auth, never the body) -----------------
 	scope := patch.TargetScope // default {0, ""} = product
+
+	// --- typecheck budget: deterministic type-graph node ceiling (ADR-07 §3,
+	//     BUILD-C owned-seam realization). A pure syntactic pre-check over the
+	//     submitted type surface, ahead of the checker (and, since it is pure,
+	//     ahead of lowering): the same submission ⇒ the same TYPECHECK_BUDGET
+	//     verdict on any machine. Breach is the normal in-txn reject path. --------
+	if bdiags := typeGraphBudgetDiags(patch); len(bdiags) > 0 {
+		mark("typecheck-budget", "fail")
+		v.Stages = stages
+		return reject(ctx, conn, auth, patch, v, bdiags)
+	}
 
 	// --- 2b/2c lower each module against this txn snapshot --------------------
 	lowered, diags, serr := lowerPatch(ctx, conn, patch, scope, im)
@@ -190,10 +258,22 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 		return Verdict{}, false, terr
 	}
 	tcStart := time.Now()
-	res, cerr := tsx.Typecheck(tsx.CheckRequest{Files: files, RootFiles: roots})
+	// Wall-clock deadline (ADR-07 §3 secondary backstop): a liveness net only —
+	// the deterministic ceiling above refuses a bomb before this can fire. A
+	// breach aborts the attempt cleanly with TYPECHECK_TIMEOUT (durable refusal).
+	res, timedOut, cerr := tsx.TypecheckWithDeadline(tsx.CheckRequest{Files: files, RootFiles: roots}, typecheckWall)
 	tsgoMs := time.Since(tcStart).Milliseconds()
-	if cerr != nil {
+	if cerr != nil && !timedOut {
 		return Verdict{}, false, cerr
+	}
+	if timedOut {
+		mark("tsgo", "fail")
+		v.Stages = stages
+		return reject(ctx, conn, auth, patch, v, []Diagnostic{{
+			StageOrVerifier: "tsgo", Code: "TYPECHECK_TIMEOUT", Severity: "error",
+			Message: "typecheck exceeded its wall-clock deadline; the submission was aborted (serving traffic untouched). Reduce type-level complexity and resubmit",
+			Fix:     "reduce type-level complexity (deeply-recursive or wide generic types) and resubmit",
+		}})
 	}
 	if tdiags := typeErrorDiags(res, lowered); len(tdiags) > 0 {
 		mark("tsgo", "fail")

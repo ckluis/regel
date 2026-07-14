@@ -255,9 +255,23 @@ export function run(): void {
 	},
 
 	// --- resolver (relocated ADR-01/ADR-02 import closure) ------------------
-	// RED LEG (ADR-07 §5 red-path-first): the resolver out-of-world fixture is
-	// deliberately withheld here so RESOLVER_ADMIT_OUT_OF_WORLD is a SURVIVING
-	// mutant — the harness must go red on it before the corpus that kills it ships.
+	{
+		// FUZZ VARIANT: import squat / out-of-world import. A truly hallucinated
+		// module is tsgo-redundant (both the resolver and tsgo reject it), so it
+		// cannot uniquely witness a resolver weakening; the REPRESENTABLE resolver-
+		// unique out-of-world is the L0-stub/catalog gap: std/resource's stub
+		// exports the type `Resource`, but no such definition exists in the catalog
+		// world, so tsgo accepts the import while the catalog resolver refuses it.
+		// This is what kills RESOLVER_ADMIT_OUT_OF_WORLD: the mutant binds the
+		// out-of-world import to an in-world sentinel, so the fixture flips green.
+		Name: "resolver-out-of-world", Component: "resolver", ThreatClass: "import.out_of_world",
+		Module: "app/squat", ExpectCode: "IMPORT_UNRESOLVED",
+		Source: `import type { Resource } from "std/resource";
+export function use(r: Resource): number {
+  return 1;
+}
+`,
+	},
 
 	// --- seeders (ADR-07 §1 / §6 content-seeder attribution) ----------------
 	{

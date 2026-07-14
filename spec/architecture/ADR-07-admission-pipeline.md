@@ -288,6 +288,32 @@ lowered rast, red-path-first; V1/V3/V6 already real from C1):
   `admission.verifier_report` (ADR-03), so "which suite version passed this
   definition" is a SELECT.
 
+BUILD-C (increment C3 — the §5 machinery realized, red-path-first). The mutant
+registry is `internal/mutants`: ten named weakenings compiled into the REAL
+production enforcement code — `V1_SKIP_DECLARED_CHECK`, `V2_DROP_LOG_SINK`,
+`V3_SKIP_POLICY_PARITY`, `V4_ALLOW_EFFECTFUL`, `V5_ALLOW_ALL_TAGS`,
+`V6_ALLOW_DESTRUCTIVE` (verifier.go/flow.go/contracts.go), `GATE_ALLOW_BANNED_SYNTAX`
+/ `GATE_SKIP_FLOATING_PROMISE` / `GATE_WEAKEN_CAPTURE_R1` (internal/lower), and
+`RESOLVER_ADMIT_OUT_OF_WORLD` (the pipeline.go resolver closure). Each is default
+hard-off (the registry is disarmed until the harness arms it), switched one at a
+time. The hostile corpus is `gate/redpath` (a data-only fixture set, no admission
+import); one runner in `internal/admission/harness_test.go` drives every fixture
+through the real pipeline on a fresh scratch DB. Direction (i) is a six-row
+definition-mutation table (drop a mask ⇒ V2, widen a declared grant ⇒ V1, capture
+across await ⇒ V5, unwire a policy ⇒ V3, effectful clause ⇒ V4, field-add→drop ⇒
+V6). Direction (ii) arms each registry mutant, runs the corpus, and asserts ≥1
+fixture flips green; a survivor fails the harness (the RED leg shipped a withheld
+resolver fixture to witness this). Coverage rows are written for all eight
+components (V1..V6 + grammar-gate + resolver) with `assertMonotone` refusing any
+epoch that shrinks a threat inventory or regresses a `mutation_score`.
+RESIDUE (Stage-C representability, ADR-07 §5 escape hatch): (a) the resolver
+out-of-world witness uses the L0-stub/catalog gap (`std/resource`'s stub-only
+`Resource` type) rather than a hallucinated module — a hallucinated import is
+tsgo-redundant, so it cannot uniquely witness a resolver weakening; (b) the
+capture-through-iterator fuzz variant is covered by its nearest representable form
+(a host resource live across a straight-line await), the loop-binder scope being a
+V5-walk residue (flow.go).
+
 ### 6. Concurrency and the structured Verdict
 
 **Concurrency: SERIALIZABLE only — no advisory locks.** ADR-03's model stands

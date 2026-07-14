@@ -1,6 +1,10 @@
 package cek
 
-import "context"
+import (
+	"context"
+
+	"regel.dev/regel/internal/mutants"
+)
 
 // NativeFn is a native (std / AOT) function dispatched by definition hash
 // (ADR-04 §5, §7 Value ABI). A non-nil *NativePark return means the call parks:
@@ -61,6 +65,15 @@ func (h *Host) Ctx() context.Context { return h.ctx }
 
 // RecordEffect appends an effect intent to the trace.
 func (h *Host) RecordEffect(class string, payload map[string]any) {
+	// MUTANT EVAL_EFFECT_ORDER_TRANSPOSED (ADR-04 §6 R1-02, layer c): transposing
+	// the newly recorded effect before the previous one silently reorders the
+	// effect-class trace — the regel-native differential oracle must catch it.
+	if mutants.Active("EVAL_EFFECT_ORDER_TRANSPOSED") && len(h.Effects) >= 1 {
+		last := h.Effects[len(h.Effects)-1]
+		h.Effects[len(h.Effects)-1] = Effect{Class: class, Payload: payload}
+		h.Effects = append(h.Effects, last)
+		return
+	}
 	h.Effects = append(h.Effects, Effect{Class: class, Payload: payload})
 }
 
@@ -123,6 +136,55 @@ func StdContractEnsures(h *Host, args []Value) (Value, *NativePark) {
 		return boolVal(false), nil
 	}
 	return boolVal(truthy(args[0])), nil
+}
+
+// contractViolationPark builds the typed durable-condition park a violated
+// boundary clause raises (BUILD-C runtime discharge of the V4-derived boundary
+// validators; ADR-04 §6 layers a/b). The turn is refused at the boundary: the
+// park is durable and resumable through the ADR-05 restart discipline, and — the
+// pre-violation guarantee — no effect recorded in this turn ever fires (the park
+// path carries no effect trace to the checkpoint).
+func contractViolationPark(clause string) *NativePark {
+	return &NativePark{Condition: SignalCondition("contract."+clause+".violated",
+		[]Restart{{Name: "abort", Label: "Abort"}},
+		map[string]any{"clause": clause})}
+}
+
+// StdContractPre is the ENFORCING precondition boundary validator (std/contract
+// .pre): a falsy predicate refuses entry with a typed contract.pre.violated
+// park. This is the runtime discharge of the validator artifact the derivation
+// seam mirrors from the clause (ADR-07 §4 V4).
+func StdContractPre(h *Host, args []Value) (Value, *NativePark) {
+	ok := len(args) > 0 && truthy(args[0])
+	// MUTANT EVAL_PRE_ALWAYS_SATISFIED (ADR-04 §6 R1-02, layer a): treating a
+	// violated precondition as satisfied lets a refused boundary evaluate — the
+	// differential oracle must catch the wrong verdict.
+	if mutants.Active("EVAL_PRE_ALWAYS_SATISFIED") {
+		ok = true
+	}
+	if !ok {
+		return undef(), contractViolationPark("pre")
+	}
+	return undef(), nil
+}
+
+// StdContractPost is the ENFORCING postcondition boundary validator
+// (std/contract.post): a falsy predicate refuses exit with a typed
+// contract.post.violated park, with the clause as the rejection subject.
+func StdContractPost(h *Host, args []Value) (Value, *NativePark) {
+	ok := len(args) > 0 && truthy(args[0])
+	// MUTANT EVAL_VALIDATOR_ZERO_ACCEPTS (ADR-04 §6 R1-02, layer b): widening the
+	// validator's accept set so a numeric-0 predicate passes is the off-by-one
+	// class of validator bug — the differential oracle must catch the wrong
+	// validator outcome.
+	if mutants.Active("EVAL_VALIDATOR_ZERO_ACCEPTS") &&
+		len(args) > 0 && args[0].Tag == TagF64 && args[0].N == 0 {
+		ok = true
+	}
+	if !ok {
+		return undef(), contractViolationPark("post")
+	}
+	return undef(), nil
 }
 
 // StdKeys returns the own-key list of a record (ADR-01 own-key semantics) or the

@@ -187,6 +187,28 @@ mutation-style validation of the oracle, not of the code under test.
 Divergences land in a golden corpus that is a versioned artifact of the epoch; the AOT
 seam (§7) reuses the same corpus as its admission bar.
 
+BUILD-C (increment C4 — harness 3 realized, red-path-first). The reference reducer is
+`internal/oracle`: an independently authored big-step tree-walker over the canonical
+rast sharing no production evaluation code — its own value union, its own environment
+chain (the De Bruijn contract is the lowered AST's, shared as data), and its OWN
+implementations of the three covered layers (contract enforcement, boundary-validator
+outcomes, effect recording). The corpus (`internal/oracle/corpus.go`) grows from the
+existing fixture shapes; the harness compares all four observables per (case, vector).
+**Runtime discharge prerequisite:** the V4-derived boundary validators now RUN at the
+kernel eval boundary — `std/contract.pre`/`post` are enforcing natives whose falsy
+clause is a typed durable `contract.{pre,post}.violated` condition park (abort
+restart), and a pre violation fires no effect (the ADR-05 condition discipline; proved
+at the kernel eval door). The three seeded wrong-evaluation mutants are
+`mutants.Evaluator` — `EVAL_PRE_ALWAYS_SATISFIED` (layer a), `EVAL_VALIDATOR_ZERO_ACCEPTS`
+(layer b, the weakened-accept-set/off-by-one class), `EVAL_EFFECT_ORDER_TRANSPOSED`
+(layer c) — compiled into the production natives/Host, default hard-off, armed
+one-at-a-time by the oracle harness, each proven caught (a survivor fails the harness).
+They are deliberately NOT in `mutants.All`: the admission corpus cannot witness an
+evaluator weakening; the oracle is their killing harness. Stage-C RESIDUE: layer (b)'s
+validator is the contract-clause validator artifact (C2 scope) — resource-type-derived
+input validators join the same corpus when ADR-10's full derivation lands; the RED leg
+(history) witnessed the machine evaluating straight past violated boundaries.
+
 ### 6.5 Machine determinism — the cross-kernel randomized hermeticity probe (R1-10: hermeticity probed across kernels + builds under randomized scheduling)
 
 Conformance (§6) proves the machine computes the *right* value; determinism proves it

@@ -116,9 +116,13 @@ func buildImage() *Image {
 		// combinators attachable to a definition (ADR-02 §3 — contracts are subset
 		// code in the body, mirrored to definition.contracts). V4 enforces they are
 		// well-formed and PURE (a capability named in a clause ⇒ CONTRACT_EFFECTFUL;
-		// a governance/out-of-scope symbol ⇒ CONTRACT_MALFORMED).
-		{module: "std/contract", export: "pre", defKind: rast.DefNative, catKind: "function", native: cek.StdContractRequires},
-		{module: "std/contract", export: "post", defKind: rast.DefNative, catKind: "function", native: cek.StdContractEnsures},
+		// a governance/out-of-scope symbol ⇒ CONTRACT_MALFORMED). BUILD-C (C4): the
+		// natives ENFORCE at the eval boundary — a falsy clause is a typed durable
+		// contract.{pre,post}.violated park (the runtime discharge of the V4-derived
+		// validator artifacts; a pre violation fires no effect). Rebinding a native
+		// leaves hashes/attestation untouched (both key on the intrinsic symbol).
+		{module: "std/contract", export: "pre", defKind: rast.DefNative, catKind: "function", native: cek.StdContractPre},
+		{module: "std/contract", export: "post", defKind: rast.DefNative, catKind: "function", native: cek.StdContractPost},
 		// std/pii (BUILD-C, ADR-10 §4 item 5 / §5 modifier): Vault<T> is the pii /
 		// vault-routed value type; mask()/reveal() are the masking + reveal-grant
 		// combinators (the only sanitizers V2 pii-flow recognizes). A vault value

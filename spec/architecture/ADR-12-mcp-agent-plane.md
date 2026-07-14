@@ -78,6 +78,20 @@ map → one derived table, masked reads, policy-predicate + row-version-guarded 
 the full 13-field-type vocabulary and ADR-11 wiring are Stage D behind the same tool
 contracts. All 11 tools ship at Stage C — none stubbed to a fake verdict.
 
+BUILD-C (§4a-driving surfaces, C7): the §4a injection corpus needs the two
+attacker-influenceable read/author surfaces §4a names to be present at Stage C, so C7
+binds them under the same tool contracts. (i) `catalog.get` carries the in-scope
+`docstring` as a response **data field** (out-of-hash, ADR-02 §2) — §4a lists "in-scope
+docstrings served by `catalog.get`" as a seeded surface, so the primary code-read tool
+must surface it, always as inert data, never interpreted. The §2 response enumeration
+predates R1-04's §4a surface list; this reconciles them. (ii) `patch.submit` accepts an
+optional `readLog` argument — the ADR-07 §1 / §6 content-seeder read-log envelope
+(`ReadLogEntry`) wired through the door — by which the authoring session **declares** the
+catalog/resource/condition/audit rows it read that reach the patch, so §6 attribution has
+its input at Stage C. Server-side **automatic** per-session read-tracking (no client
+declaration) is the Stage-D/E leg; the declared read-log is the Stage-C substrate and is
+validated identically (step 2a scope-chain rule, out-of-chain ⇒ rejected).
+
 `patch.submit` with `commit:false` is the dry-run: the full ADR-07 pipeline in a
 transaction that always rolls back (ADR-09's mechanism); `commit:true` is the real gate.
 The Verdict is ADR-07 §6's object, byte-identical to what the operator plane and PR
@@ -219,6 +233,19 @@ release (ADR-07 §5 standard). The corpus is carried by `verifier_coverage`-styl
 **monotone** rows keyed on the confused-deputy threat class, so the class can never be
 silently dropped once added.
 
+BUILD-C (structural leg, C7): Stage C lands the **structural** substrate + the corpus
+harness + the monotone coverage rows, driven by a **scripted, deterministic deputy** —
+NOT an LLM. The scripted deputy reads each seeded surface through the real MCP door and
+then **obeys** the injected instruction (attempts the exact escalation/exfil the payload
+demands) using a trusted agent's own key and scope, so every per-tool control passes the
+resulting attempt as legitimate and only the substrate boundary (V1/token, masking, the
+scope/visibility predicate, the reveal-grant CHECK) can refuse it. A fixture that
+ESCALATES or EXFILTRATES is red; where no operator-plane render exists yet, the fixture
+asserts the tool response carries the seeded text as a **data field, never interpreted**,
+and the seeder is recorded. The **REAL-LLM-driven** injection eval (pass@k against a
+steered agent) is the **Stage-E leg**, co-equal with the §3a authoring eval and binding
+before v1 — recorded as an OPEN gate, never faked with a stub LLM at Stage C.
+
 **Gate standing (do not weaken).** This corpus is release-blocking with the same standing
 as the §4 kill-test — "a green result on a hostile fixture fails the release" (ADR-07 §5)
 — and it blocks M5 exactly as the §4 PII sweep does. **If this gate is removed, made
@@ -307,6 +334,11 @@ grant and is audit-rowed.
   `unattributed` — itself a signal surfaced at approval (§7). A seeder outside the
   submitter's scope chain is unrepresentable (ADR-07 step 2a rule), so the set cannot be
   forged to blame another tenant.
+  BUILD-C (C7): the authoring session declares the rows it read via `patch.submit`'s
+  `readLog` argument (§2 BUILD-C), which the gate validates and projects into the Verdict
+  `seeders` set and the admission row; the confused-deputy corpus (§4a) exercises this
+  end-to-end — an overlay patch authored after reading a seeded in-scope row names the
+  third principal, and an external-effect read is recorded `unattributed`, never dropped.
 
 The prior-art proposed-state flow (a catalogued `proposed` row later flipped live) is
 rejected: it is a second landing semantics beside ADR-03 §5's one-transaction admission.

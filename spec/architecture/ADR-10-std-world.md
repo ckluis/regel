@@ -144,6 +144,20 @@ exercise. Each SHIP names its worst failure → containment (grafted from red-pa
 `all`/`race` live in `std/taak` with ADR-05 §5 join semantics; outside workflows they may
 complete inline when every branch resolves without a deferred wake (ADR-04 §2).
 
+BUILD-C (increment C2 — the governance-vocabulary slice the V2/V4/V5 verifiers need is
+added minimal, behind the same seam, mirroring not inventing):
+- **`std/pii`** (§4 item 5, §5 modifier): `Vault<T>` is the pii/vault-routed value type
+  (V2's taint source — the admitted value form of a `pii(...)` field); `mask()` and
+  `reveal()` are the masking + reveal-grant combinators (V2's only sanitizers).
+- **`std/contract`** (§137): `pre`/`post` are the pre/postcondition combinators
+  attachable to a definition (ADR-02 §3 — contracts are subset code in the body, mirrored
+  to `definition.contracts`); V4 enforces their purity, the derivation seam derives a
+  boundary-validator artifact per contract-bearing def.
+- **`std/sql`** (§3 `std/sql` SHIP; §Red-Path "socket-typed value live across await"): a
+  MINIMAL host-resource slice — `Conn` (a live connection handle with no encodable value
+  tag) + `connect()` — is added now purely as the V5 capture-fixture substrate. The full
+  parameterized-query surface (§3 worst-failure: injection/cross-org) lands at Stage D.
+
 ### 4. erf: `resource(...)` v1 surface and exact derivation outputs
 
 Surface: `resource(name, fields, options)` with `options ⊆ {horizon, policy, actions}`;

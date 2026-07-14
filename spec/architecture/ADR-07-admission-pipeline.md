@@ -203,6 +203,28 @@ the proposed catalog model. Each entry: semantics / failure shape / one red-path
   / `DERIVE_PARTIAL{attr}`, `DDL_DESTRUCTIVE{stmt}` / a derived `DROP COLUMN` without
   retire intent ⇒ reject.
 
+BUILD-C (increment C2 — V2/V4/V5 realized as real, scoped verifiers over the typed
+lowered rast, red-path-first; V1/V3/V6 already real from C1):
+- **V2 pii-flow** taints `std/pii.Vault`-typed bindings (the vault route of a `pii(...)`
+  field, §4 item 5) and propagates through local bindings and through a helper whose
+  declared return type is a vault type (the multi-hop case); a tainted value reaching a
+  served definition's return path or a capability-bearing outbound call (`std/mail.send`)
+  without `std/pii.mask`/`reveal` ⇒ `PII_ESCAPE`; a literal given vault type ⇒
+  `PII_LITERAL`. Scope-C RESIDUE: resource-field member-type inference, the log/history/
+  non-vault-column sinks, and destructuring/loop binder scopes are Stage-D — the vault
+  type is the field's admitted value form, so a `Vault`-typed flow is the faithful source.
+- **V4 contracts** finds `std/contract.pre`/`post` clauses in the body; a clause naming a
+  capability ⇒ `CONTRACT_EFFECTFUL`, a clause naming a governance/out-of-scope symbol
+  (`std/policy`/`std/resource`/`std/sql`) ⇒ `CONTRACT_MALFORMED`. The derivation seam
+  (step 5a) derives a `validator` boundary-artifact per contract-bearing def and mirrors
+  the clauses to `definition.contracts` (ADR-02 §3); V3 parity then covers them.
+- **V5 capture** runs the ADR-05 §3 live-variable walk over workflow-tier defs
+  (`Patch.Tier == "workflow"`); a live host-resource binding (`std/sql.Conn`, or a value
+  from a `NonSerial` native like `std/sql.connect`) live across an `await` ⇒
+  `CAPTURE_UNSERIALIZABLE`. The R2 lattice is `cfr.EncodableTags()` — the SINGLE source of
+  truth (ADR-05 §3, below); a host resource maps to no encodable tag. `std/sql` is added
+  minimal (`Conn` + `connect`) as the fixture substrate (ADR-10 §3 BUILD-C).
+
 ### 5. Adversarial harness, versioned with the epoch
 
 - **Hostile corpus** (`gate/redpath/`): one fixture per red-path test in ADR-01..07
@@ -306,6 +328,19 @@ Verdict {
   seeders: [{source_kind, source_ref, scope, seeded_by | "unattributed"}]  -- R1-04: §1 content-seeder set (ADR-12 §6)
 }
 ```
+
+BUILD-C (increment C2 — delta + seeders + verdicts-as-rows realized). The `delta` is
+computed on every run (green, red, and no-op): `capabilities` from V1 (requested/granted,
+and `added_vs_base` = named caps of new-or-changed defs minus the base head def's named
+caps), `pii_surface` from V2 (values reaching a sink, masked or not; `added_vs_base` when
+the owning def changed), `ddl_surface` from the V6 plan (additive statements). A no-op adds
+nothing. The content-seeder set is bound at step 2a from `Patch.ReadLog` and validated
+against the principal's scope chain (out-of-chain ⇒ `SEEDER_OUT_OF_CHAIN`, rejected before
+any row); an external/no-principal source is recorded `unattributed`; a non-MCP (human/CLI)
+submission carries the empty set. On commit the full Verdict is written to
+`admission.verifier_report` (verdicts-as-rows) and `delta`/`seeders` to their own columns.
+Scope-C RESIDUE: `pii_surface.added_vs_base` is diffed at def granularity (a changed def
+re-adds its sinks), not against the base's own per-field pii sinks — Stage-D refines it.
 
 **Blast-radius delta — capability/PII/DDL delta attached to every Verdict (R1-04).** The
 pipeline attaches a machine-computed `delta` to the Verdict on **every** run, green or

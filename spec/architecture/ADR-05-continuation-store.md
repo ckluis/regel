@@ -136,6 +136,15 @@ function; there is no pause-time failure mode by construction. Live host resourc
 (connections, sockets, in-flight promises) are never dialect values at all (R2), so the
 codec has no tag for them — a poison-pill environment is structurally unrepresentable.
 
+BUILD-C (increment C2 — the shared type table is realized as `cfr.EncodableTags()`, the
+SINGLE source of truth V5 consumes): the set is derived from the codec's own `TagValid`
+ceiling, so a tag ADDED to the codec (and its validity predicate) automatically widens the
+lattice V5 admits, and a tag REMOVED narrows it — with a codec-side drift test
+(`TestLatticeCodecDriftAgree`) proving the exported set equals exactly the tags the value
+codec round-trips. A live host resource has no encodable tag (it maps to a sentinel past
+the ceiling), so V5 refuses it against this shared set rather than a second, drift-prone
+list. `std/sql.Conn` is the Stage-C fixture representative of such a resource.
+
 ### 4. Capability tokens across pauses
 
 A capability captured across a pause serializes as its token `(grant_id)` — the

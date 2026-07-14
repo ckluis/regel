@@ -35,9 +35,9 @@ type Entry struct {
 	Body          *rast.Node
 	Hash          string
 	CanonicalText string
-	Intrinsic     string      // "std/mail.send"
+	Intrinsic     string       // "std/mail.send"
 	Native        cek.NativeFn // nil for type-only entries
-	Capability    string      // "" when the binding bears no capability
+	Capability    string       // "" when the binding bears no capability
 	// NonSerial marks a binding or type whose value is a LIVE HOST RESOURCE — a
 	// connection/socket that "is never a dialect value at all, so the codec has
 	// no tag for it" (ADR-05 §3). A binding of such a type (or initialized by
@@ -218,7 +218,7 @@ func buildImage() *Image {
 
 // --- rast node builders ------------------------------------------------------
 
-func noneNode() *rast.Node    { return &rast.Node{Kind: rast.KNone} }
+func noneNode() *rast.Node { return &rast.Node{Kind: rast.KNone} }
 func klist(kids ...*rast.Node) *rast.Node {
 	return &rast.Node{Kind: rast.KList, Kids: kids}
 }

@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS derived_artifact (
   resource_name text NOT NULL,
   scope_kind    smallint NOT NULL CHECK (scope_kind BETWEEN 0 AND 4),
   scope_id      text NOT NULL DEFAULT '',
-  pass          text NOT NULL CHECK (pass IN ('schema','policy','retire')),
+  pass          text NOT NULL CHECK (pass IN ('schema','policy','retire','validator')),
   detail        jsonb NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now()
 );

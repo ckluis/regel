@@ -104,6 +104,18 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 	}
 	mark("lower", "pass")
 
+	// --- 2a content-seeder set: bound from the read-log, validated against the
+	//     AUTHENTICATED principal's scope chain. An out-of-chain seeder is
+	//     unrepresentable — rejected before any row is written (zero trace). ------
+	seeders, seedBad := validateSeeders(patch, auth)
+	if seedBad != nil {
+		mark("seeders", "fail")
+		v.Stages = stages
+		v.Seeders = []Seeder{}
+		return reject(ctx, conn, auth, patch, v, []Diagnostic{*seedBad})
+	}
+	v.Seeders = seeders
+
 	// Grants for the principal (loaded from grant_row at bind time — Stage A).
 	grants, gerr := loadGrants(ctx, conn, auth.Subject())
 	if gerr != nil {
@@ -135,6 +147,20 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 		return Verdict{}, false, nerr
 	}
 	if noop {
+		mark("already-admitted", "pass")
+		v.Outcome = OutcomeAlreadyAdmitted
+		v.AdmissionID = admissionID
+		v.Stages = stages
+		v.Diagnostics = []Diagnostic{}
+		// A no-op changes nothing, so the delta adds nothing vs. base (empty
+		// added_vs_base everywhere) — computed, not faked (ADR-07 §6, R1-04).
+		v.Delta = Delta{}
+		if err := recordReport(ctx, conn, admissionID, 0, stages, "", v); err != nil {
+			if isSerialization(err) {
+				return Verdict{}, true, nil
+			}
+			return Verdict{}, false, err
+		}
 		if err := conn.Commit(ctx); err != nil {
 			if isSerialization(err) {
 				return Verdict{}, true, nil
@@ -142,16 +168,11 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 			return Verdict{}, false, err
 		}
 		committed = true
-		mark("already-admitted", "pass")
-		v.Outcome = OutcomeAlreadyAdmitted
-		v.AdmissionID = admissionID
-		v.Stages = stages
-		v.Diagnostics = []Diagnostic{}
 		return v, false, nil
 	}
 
 	// --- 3 INSERT definition / definition_meta (dep order, rast re-hash) -----
-	if err := insertDefinitions(ctx, conn, lowered, admissionID); err != nil {
+	if err := insertDefinitions(ctx, conn, lowered, admissionID, im); err != nil {
 		if isSerialization(err) {
 			return Verdict{}, true, nil
 		}
@@ -236,6 +257,19 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 	}
 	mark("V6", "pass")
 
+	// --- blast-radius delta (ADR-07 §6, R1-04): a pure projection of what
+	//     V1/V2/V6 already computed vs. the base snapshot. Computed BEFORE the CAS
+	//     moves any pointer, so the base heads are still readable. ---------------
+	touched := collectPiiTouched(lowered, im)
+	delta, dlerr := computeDelta(ctx, conn, lowered, patch, grants, plan, touched, scope, im)
+	if dlerr != nil {
+		if isSerialization(dlerr) {
+			return Verdict{}, true, nil
+		}
+		return Verdict{}, false, dlerr
+	}
+	v.Delta = delta
+
 	// --- 6 apply migration_sql inside the txn (additive only — V6-enforced) ---
 	if plan.MigrationSQL != "" {
 		if _, err := conn.ExecSimple(ctx, plan.MigrationSQL); err != nil {
@@ -277,8 +311,15 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 	}
 	mark("cas", "pass")
 
-	// Persist the verifier report + applied migration_sql on the committed row.
-	if err := recordReport(ctx, conn, admissionID, tsgoMs, stages, plan.MigrationSQL); err != nil {
+	// Complete the Verdict, then persist it whole to the committed admission row —
+	// the full green Verdict (delta + seeders) is retrievable later by admission id
+	// from admission.verifier_report (symmetric with gate_refusal.verdict for red).
+	v.Outcome = OutcomeAdmitted
+	v.Admitted = true
+	v.AdmissionID = admissionID
+	v.Stages = stages
+	v.Diagnostics = []Diagnostic{}
+	if err := recordReport(ctx, conn, admissionID, tsgoMs, stages, plan.MigrationSQL, v); err != nil {
 		if isSerialization(err) {
 			return Verdict{}, true, nil
 		}
@@ -292,12 +333,6 @@ func admitOnce(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Princip
 		return Verdict{}, false, err
 	}
 	committed = true
-
-	v.Outcome = OutcomeAdmitted
-	v.Admitted = true
-	v.AdmissionID = admissionID
-	v.Stages = stages
-	v.Diagnostics = []Diagnostic{}
 	return v, false, nil
 }
 
@@ -508,7 +543,7 @@ VALUES ($1, $2, $3, $4::text[], '{}'::jsonb) RETURNING id`,
 	return id, err
 }
 
-func insertDefinitions(ctx context.Context, q catalog.Querier, lowered []loweredDef, admissionID int64) error {
+func insertDefinitions(ctx context.Context, q catalog.Querier, lowered []loweredDef, admissionID int64, im *Image) error {
 	verify := func(hash string, ast []byte) error {
 		n, err := rast.Decode(ast)
 		if err != nil {
@@ -526,6 +561,7 @@ func insertDefinitions(ctx context.Context, q catalog.Querier, lowered []lowered
 			Kind:          catalogKind(ld.Def.Kind),
 			AST:           rast.Encode(ld.Def.Body),
 			CanonicalText: lower.CanonicalText(ld.Def),
+			Contracts:     contractsMirror(ld.Def, im), // ADR-02 §3 mirror column
 			Deps:          depHashes(ld.Def.Deps),
 			AdmissionID:   admissionID,
 		}
@@ -565,8 +601,22 @@ func isNoop(ctx context.Context, q catalog.Querier, lowered []loweredDef, scope 
 	return true, nil
 }
 
-func recordReport(ctx context.Context, q catalog.Querier, admissionID int64, tsgoMs int64, stages []Stage, migrationSQL string) error {
-	report, err := json.Marshal(map[string]any{"stages": stages})
+func recordReport(ctx context.Context, q catalog.Querier, admissionID int64, tsgoMs int64, stages []Stage, migrationSQL string, v Verdict) error {
+	// The full Verdict is the verifier_report (ADR-07 §6: verdicts-as-rows); the
+	// delta and seeders are ALSO written to their own columns for direct querying.
+	report, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	deltaJSON, err := json.Marshal(v.Delta)
+	if err != nil {
+		return err
+	}
+	seeders := v.Seeders
+	if seeders == nil {
+		seeders = []Seeder{}
+	}
+	seedersJSON, err := json.Marshal(seeders)
 	if err != nil {
 		return err
 	}
@@ -575,8 +625,9 @@ func recordReport(ctx context.Context, q catalog.Querier, admissionID int64, tsg
 		migArg = migrationSQL
 	}
 	_, err = q.Exec(ctx,
-		`UPDATE admission SET tsgo_ms = $1, verifier_report = $2::jsonb, migration_sql = $3 WHERE id = $4`,
-		tsgoMs, string(report), migArg, admissionID)
+		`UPDATE admission SET tsgo_ms = $1, verifier_report = $2::jsonb, migration_sql = $3,
+		    verdict_delta = $4::jsonb, seeders = $5::jsonb WHERE id = $6`,
+		tsgoMs, string(report), migArg, string(deltaJSON), string(seedersJSON), admissionID)
 	return err
 }
 

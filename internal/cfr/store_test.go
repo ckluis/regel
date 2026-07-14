@@ -249,7 +249,9 @@ func TestFamily3GrantFuelIdentical(t *testing.T) {
 	}
 
 	out, claimed, err := ClaimAndResume(ctx, e.conn, contID, 0, kernelUUID(),
-		func(st *cek.State, ch cek.RestartChoice) cek.Outcome { return in.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true}) })
+		func(st *cek.State, ch cek.RestartChoice) cek.Outcome {
+			return in.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true})
+		})
 	if err != nil {
 		t.Fatalf("ClaimAndResume: %v", err)
 	}
@@ -297,7 +299,9 @@ func TestCorruptCFRDB(t *testing.T) {
 		t.Fatalf("PickRestart: %v", err)
 	}
 	_, claimed, err := ClaimAndResume(ctx, e.conn, contID, 0, kernelUUID(),
-		func(st *cek.State, ch cek.RestartChoice) cek.Outcome { return in.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true}) })
+		func(st *cek.State, ch cek.RestartChoice) cek.Outcome {
+			return in.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true})
+		})
 	if !claimed {
 		t.Fatal("expected claim (the CAS wins before decode)")
 	}
@@ -347,7 +351,9 @@ func TestDoubleResumeCAS(t *testing.T) {
 
 	t.Run("sequential", func(t *testing.T) {
 		contID, _ := park()
-		resume := func(st *cek.State, ch cek.RestartChoice) cek.Outcome { return in.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true}) }
+		resume := func(st *cek.State, ch cek.RestartChoice) cek.Outcome {
+			return in.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true})
+		}
 		_, c1, err := ClaimAndResume(ctx, e.conn, contID, 0, kernelUUID(), resume)
 		if err != nil || !c1 {
 			t.Fatalf("first claim: claimed=%v err=%v", c1, err)
@@ -373,7 +379,9 @@ func TestDoubleResumeCAS(t *testing.T) {
 		run := func(i int, db *pgwire.Conn, ii *cek.Interp) {
 			defer wg.Done()
 			_, claimed, err := ClaimAndResume(ctx, db, contID, 0, kernelUUID(),
-				func(st *cek.State, ch cek.RestartChoice) cek.Outcome { return ii.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true}) })
+				func(st *cek.State, ch cek.RestartChoice) cek.Outcome {
+					return ii.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true})
+				})
 			claims[i] = claimed
 			errs[i] = err
 		}
@@ -458,7 +466,9 @@ export function work(n: number): number {
 		t.Fatalf("PickRestart: %v", err)
 	}
 	out, _, err := ClaimAndResume(ctx, e.conn, contID, 0, kernelUUID(),
-		func(st *cek.State, ch cek.RestartChoice) cek.Outcome { return in.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true}) })
+		func(st *cek.State, ch cek.RestartChoice) cek.Outcome {
+			return in.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true})
+		})
 	if err != nil {
 		t.Fatalf("ClaimAndResume: %v", err)
 	}
@@ -501,7 +511,9 @@ func TestProcessRestartResume(t *testing.T) {
 	fresh := e.newConn(t)
 	freshIn := cek.New(catSource{ctx: ctx, conn: fresh}, nil)
 	out, claimed, err := ClaimAndResume(ctx, fresh, contID, 0, kernelUUID(),
-		func(st *cek.State, ch cek.RestartChoice) cek.Outcome { return freshIn.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true}) })
+		func(st *cek.State, ch cek.RestartChoice) cek.Outcome {
+			return freshIn.Resume(ctx, st, cek.Delivery{Restart: &ch}, cek.Principal{IsOperator: true})
+		})
 	if err != nil || !claimed {
 		t.Fatalf("fresh resume: claimed=%v err=%v", claimed, err)
 	}

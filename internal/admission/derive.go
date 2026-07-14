@@ -382,6 +382,19 @@ func deriveResources(ctx context.Context, q catalog.Querier, lowered []loweredDe
 	if err := writeDerivedRows(ctx, q, plan, scope, admissionID); err != nil {
 		return derivationPlan{}, err
 	}
+	// Contract pass (BUILD-C, ADR-07 §4 V4): each contract-bearing definition
+	// derives a boundary-validator artifact — a declared governance artifact V3
+	// parity then covers. The clauses' purity is enforced by V4 at step 5b.
+	for _, ld := range lowered {
+		clauses := findContractClauses(ld.Def, im)
+		if len(clauses) == 0 {
+			continue
+		}
+		detail, _ := json.Marshal(map[string]any{"clauses": clauses})
+		if err := insertArtifact(ctx, q, admissionID, ld.CatalogName, scope, "validator", string(detail)); err != nil {
+			return derivationPlan{}, err
+		}
+	}
 	return plan, nil
 }
 

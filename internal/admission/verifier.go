@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"regel.dev/regel/internal/lower"
+	"regel.dev/regel/internal/rast"
 )
 
 // verifyV1 runs the Stage-A verifier suite (STAGE-A-PLAN pin #2): V1
@@ -85,12 +86,67 @@ var (
 	disableV5 bool
 )
 
-// The suite runs V1..V6 in order at step 5b. V2 (pii-flow), V4 (contracts), and
-// V5 (capture) are increment-C2 seams: they pass trivially now, mount into the
-// same pipeline slot when built, and are clearly marked so no verdict is faked.
-func verifyV2(_ []loweredDef, _ derivationPlan, _ *Image) []Diagnostic { return nil }
-func verifyV4(_ []loweredDef, _ *Image) []Diagnostic                  { return nil }
-func verifyV5(_ []loweredDef, _ Patch, _ *Image) []Diagnostic         { return nil }
+// verifyV2 is pii-flow (ADR-07 §4 V2): a taint analysis over the typed AST. A
+// vault/pii-typed value reaching a boundary sink (the return path of a served
+// definition, or a capability-bearing outbound/log call) without passing through
+// a masking or reveal-grant combinator ⇒ PII_ESCAPE{field, sink}; a vault-typed
+// literal in code ⇒ PII_LITERAL{loc} (the ADR-03 immortality interaction). Taint
+// propagates through local bindings and through a helper whose declared return
+// type is a vault type (the multi-hop case).
+func verifyV2(lowered []loweredDef, _ derivationPlan, im *Image) []Diagnostic {
+	piiReturn := piiReturnMap(lowered)
+	var diags []Diagnostic
+	for _, ld := range lowered {
+		d, _ := verifyV2Def(ld, im, piiReturn)
+		diags = append(diags, d...)
+	}
+	return diags
+}
+
+// verifyV4 is contracts (ADR-07 §4 V4): pre/post combinator clauses must be PURE.
+// A clause that names a capability-bearing binding ⇒ CONTRACT_EFFECTFUL{clause};
+// a clause that names a governance / out-of-scope symbol (a policy/resource/sql
+// binding, never a pure predicate) ⇒ CONTRACT_MALFORMED{def, clause}.
+func verifyV4(lowered []loweredDef, im *Image) []Diagnostic {
+	var diags []Diagnostic
+	for _, ld := range lowered {
+		diags = append(diags, verifyV4Def(ld, im)...)
+	}
+	return diags
+}
+
+// verifyV5 is the ADR-05 §3 capture verifier (ADR-07 §4 V5): for every await in a
+// workflow-tier definition, the live-variable set must lie inside the R2
+// serializable lattice — the exact set the CFR value codec round-trips
+// (cfr.EncodableTags, the shared type table). A live host resource (std/sql.Conn)
+// has no encodable value tag, so held across an await ⇒ CAPTURE_UNSERIALIZABLE.
+func verifyV5(lowered []loweredDef, patch Patch, im *Image) []Diagnostic {
+	var diags []Diagnostic
+	for _, ld := range lowered {
+		if patch.Tier[ld.CatalogName] != "workflow" {
+			continue // capture only matters at workflow tier (ADR-10 §6)
+		}
+		diags = append(diags, verifyV5Def(ld, im)...)
+	}
+	return diags
+}
+
+// verifyV5Def runs the capture walk over one workflow definition's body.
+func verifyV5Def(ld loweredDef, im *Image) []Diagnostic {
+	_, _, body, ok := funcParts(ld.Def)
+	if !ok {
+		return nil
+	}
+	w := &v5walk{
+		im: im, di: newDefInfo(ld.Def),
+		defHash: ld.Def.Hash, catName: ld.CatalogName,
+		atRisk: map[int]bool{},
+	}
+	if body != nil && body.Kind == rast.KBlock && len(body.Kids) > 0 && body.Kids[0] != nil {
+		w.walkStmts(body.Kids[0].Kids)
+	}
+	return w.diags
+}
 
 // verifyV3 is catalog-parity (ADR-07 §4 V3): every declared governance artifact
 // reachable from ≥1 admitted-or-derived execution path in the proposed reference

@@ -105,6 +105,35 @@ CREATE TABLE IF NOT EXISTS continuation_coverage (
   PRIMARY KEY (epoch, frame_kind, cfr_version, decoder)
 );
 
+-- (7) Admission-spam control (ADR-12 §5, ADR-07 §3 R1-07). BUILD-C (increment
+-- C4): the per-principal admission-fuel token bucket and the per-agent-kind
+-- capacity table the pre-BEGIN ADMISSION_BUDGET (budget-exhausted) refusal path
+-- checks and charges. Separate from evaluation fuel. admission_capacity.derived_from
+-- is 'provisional' until the ADR-12 §5 eval P95 sizes it (R1-13); the MCP
+-- increment re-derives it every epoch from the then-current P95.
+CREATE TABLE IF NOT EXISTS admission_capacity (
+  agent_kind     text PRIMARY KEY,
+  capacity       numeric NOT NULL,
+  refill_per_sec numeric NOT NULL,
+  derived_from   text NOT NULL DEFAULT 'provisional'
+);
+CREATE TABLE IF NOT EXISTS admission_fuel (
+  principal      text PRIMARY KEY,
+  capacity       numeric NOT NULL,
+  tokens         numeric NOT NULL,
+  refill_per_sec numeric NOT NULL,
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+-- Provisional per-kind capacities (derived_from='provisional'): humans/system are
+-- effectively unmetered; the agent kind carries the spam-control bucket the MCP
+-- increment re-derives from eval P95. Seeded idempotently.
+INSERT INTO admission_capacity (agent_kind, capacity, refill_per_sec, derived_from) VALUES
+  ('engineer', 10000000, 1000000, 'provisional'),
+  ('tenant',   10000000, 1000000, 'provisional'),
+  ('system',   10000000, 1000000, 'provisional'),
+  ('agent',    100000,   1000,    'provisional')
+ON CONFLICT (agent_kind) DO NOTHING;
+
 -- (8) Derivation tier (BUILD-C: ADR-03 §1 table 8; ADR-07 §1 step 5a + V3/V6).
 -- derived_resource records the last-admitted derived SHAPE per (resource, scope)
 -- so the schema pass diffs the proposed shape against the recorded one (never

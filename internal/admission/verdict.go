@@ -21,6 +21,10 @@ type Verdict struct {
 	RefusalID string `json:"refusal_id,omitempty"`
 	// AdmissionID is set iff the admission committed (admitted / already-admitted).
 	AdmissionID int64 `json:"admission_id,omitempty"`
+	// RetryAfter is the typed backoff (ADR-07 §6 R1-08), set exactly on the three
+	// retryable doors: busy (admission-busy), budget-exhausted (budget-refill),
+	// and retry-exhausted (serialization). Never an out-of-schema key.
+	RetryAfter *RetryAfter `json:"retry_after,omitempty"`
 	// Epoch + BaseSnapshot pin the frozen snapshot the verdict was computed over.
 	Epoch        int    `json:"epoch"`
 	BaseSnapshot string `json:"base_snapshot"`
@@ -82,6 +86,14 @@ const (
 	OutcomeBudgetExhausted = "budget-exhausted" // pre-BEGIN; not reachable in Stage A
 	OutcomeBusy            = "busy"             // pre-BEGIN; not reachable in Stage A
 )
+
+// RetryAfter is the ADR-07 §6 typed retry_after sub-object: a backoff hint plus
+// the cause that produced it. `cause` is a closed set so no consumer sniffs a
+// free string.
+type RetryAfter struct {
+	Millis uint32 `json:"millis"`
+	Cause  string `json:"cause"` // budget-refill | admission-busy | serialization
+}
 
 // Stage is one pipeline stage's outcome for the Verdict timeline.
 type Stage struct {

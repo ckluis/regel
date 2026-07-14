@@ -83,19 +83,20 @@ type loweredDef struct {
 	Def         lower.Definition
 }
 
-// Admit runs the whole ADR-03 §5 / ADR-07 §1 admission pipeline (Stage-A subset)
-// for one patch, over a dedicated connection, and returns the structured Verdict.
-// A non-nil error is an internal fault (DB unavailable, encode failure) that the
-// caller maps to HTTP 500 / a nonzero CLI exit; every ordinary refusal is a
-// Verdict outcome, not an error. Identity and scope are bound from auth, never
-// the patch body (§2a).
-func Admit(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image) (Verdict, error) {
+// admitWithRetries runs the ADR-03 §5 / ADR-07 §1 admission pipeline (Stage-A
+// subset) for one patch, over a dedicated connection, retrying the whole
+// transaction on a serialization conflict up to maxRetries. It is the in/near-txn
+// core; the exported Admit door (backpressure.go) wraps it with the pre-BEGIN
+// admission-control semaphore (busy) and per-principal fuel bucket (budget). A
+// non-nil error is an internal fault; every ordinary refusal is a Verdict.
+func admitWithRetries(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, im *Image) (Verdict, error) {
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		v, retry, err := admitOnce(ctx, conn, patch, auth, im)
 		if err != nil {
 			return Verdict{}, err
 		}
 		if retry {
+			admitRetries.Add(1) // ADR-07 §3 R1-07 benchmark: serialization-retry count
 			continue
 		}
 		return v, nil
@@ -107,6 +108,7 @@ func Admit(ctx context.Context, conn *pgwire.Conn, patch Patch, auth Principal, 
 		Stages:       []Stage{{Stage: "serialize", Status: "fail"}},
 		Epoch:        im.Epoch,
 		BaseSnapshot: time.Now().UTC().Format(time.RFC3339Nano),
+		RetryAfter:   &RetryAfter{Millis: 25, Cause: "serialization"},
 		Diagnostics: []Diagnostic{{
 			StageOrVerifier: "serialize", Code: "SERIALIZATION_RETRY_EXHAUSTED", Severity: "error",
 			Message: "admission lost the serialization race more than the retry budget allows; re-read the head and resubmit",

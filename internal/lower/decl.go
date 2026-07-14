@@ -5,6 +5,7 @@ import (
 
 	shimast "github.com/microsoft/typescript-go/shim/ast"
 	shimscanner "github.com/microsoft/typescript-go/shim/scanner"
+	"regel.dev/regel/internal/mutants"
 	"regel.dev/regel/internal/rast"
 )
 
@@ -57,6 +58,11 @@ func (l *lowerer) errorAt(n *shimast.Node, code string, format string, a ...any)
 }
 
 func (l *lowerer) flushCaptureDiags() {
+	// MUTANT GATE_WEAKEN_CAPTURE_R1 (ADR-07 §5 dir-ii, R1-10): weakening the R1
+	// const-only-capture predicate lets a closure capture a reassigned `let`.
+	if mutants.Active("GATE_WEAKEN_CAPTURE_R1") {
+		return
+	}
 	for _, ev := range l.captures {
 		if ev.entry.reassigned {
 			l.diags = append(l.diags, diagf(CodeCaptureLet, ev.line, ev.col,

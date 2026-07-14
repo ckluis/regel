@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"regel.dev/regel/internal/lower"
+	"regel.dev/regel/internal/mutants"
 	"regel.dev/regel/internal/rast"
 )
 
@@ -32,10 +33,14 @@ func verifyV1(defs []loweredDef, patch Patch, grants map[string]bool, im *Image)
 		declared := setOf(patch.declaredFor(ld.CatalogName))
 
 		// named ⊆ declared: a capability the code can name but did not declare.
-		for _, cap := range sortedKeys(named) {
-			if !declared[cap] {
-				diags = append(diags, capUngranted(ld, cap,
-					fmt.Sprintf("definition names capability %q but does not declare it", cap)))
+		// MUTANT V1_SKIP_DECLARED_CHECK (ADR-07 §5 dir-ii): dropping this loop lets
+		// ambient authority through — a def can name a capability it never declared.
+		if !mutants.Active("V1_SKIP_DECLARED_CHECK") {
+			for _, cap := range sortedKeys(named) {
+				if !declared[cap] {
+					diags = append(diags, capUngranted(ld, cap,
+						fmt.Sprintf("definition names capability %q but does not declare it", cap)))
+				}
 			}
 		}
 		// declared ⊆ grants: a declared capability the principal was not granted.
@@ -159,6 +164,11 @@ func verifyV3(plan derivationPlan) []Diagnostic {
 	policies := append([]policyArtifact(nil), plan.Policies...)
 	sort.Slice(policies, func(i, j int) bool { return policies[i].CatalogName < policies[j].CatalogName })
 	var diags []Diagnostic
+	// MUTANT V3_SKIP_POLICY_PARITY (ADR-07 §5 dir-ii): skipping the parity sweep
+	// lets a declared-but-unwired governance artifact become inert code.
+	if mutants.Active("V3_SKIP_POLICY_PARITY") {
+		return nil
+	}
 	for _, p := range policies {
 		if plan.WiredPolicy[p.DefHash] {
 			continue
@@ -199,7 +209,13 @@ func verifyV6(plan derivationPlan) []Diagnostic {
 			})
 		}
 	}
+	// MUTANT V6_ALLOW_DESTRUCTIVE (ADR-07 §5 dir-ii): skipping the destructive-DDL
+	// sweep lets an inline DROP/rewrite past the additive-only boundary.
+	destructiveOK := mutants.Active("V6_ALLOW_DESTRUCTIVE")
 	for _, rp := range plan.Resources {
+		if destructiveOK {
+			break
+		}
 		for _, stmt := range rp.Destructive {
 			diags = append(diags, Diagnostic{
 				StageOrVerifier: "V6",

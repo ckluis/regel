@@ -9,6 +9,7 @@ import (
 
 	"regel.dev/regel/internal/catalog"
 	"regel.dev/regel/internal/lower"
+	"regel.dev/regel/internal/mutants"
 	"regel.dev/regel/internal/pgwire"
 	"regel.dev/regel/internal/rast"
 	"regel.dev/regel/internal/tsx"
@@ -361,6 +362,15 @@ func lowerPatch(ctx context.Context, q catalog.Querier, patch Patch, scope Scope
 			return "", false
 		}
 		if !ok {
+			// MUTANT RESOLVER_ADMIT_OUT_OF_WORLD (ADR-07 §5 dir-ii, R1-10): the real
+			// resolver refuses an import outside the catalog world (an unresolvable /
+			// squatted name, or a stub-only surface with no admitted definition).
+			// Weakening it to fall back to an in-world sentinel binds the out-of-world
+			// import to a real hash so it "resolves" — a silently-admitted out-of-world
+			// import the hostile corpus must kill.
+			if mutants.Active("RESOLVER_ADMIT_OUT_OF_WORLD") {
+				return outOfWorldSentinel(im), true
+			}
 			return "", false
 		}
 		return r.Hash, true
@@ -427,6 +437,19 @@ func depInsertOrder(defs []loweredDef) []loweredDef {
 		return defs
 	}
 	return out
+}
+
+// outOfWorldSentinel returns a stable in-world std TYPE hash, used ONLY by the
+// RESOLVER_ADMIT_OUT_OF_WORLD mutant to fabricate a resolution for an
+// out-of-world import. Every std type shares the opaque genesis body (image.go),
+// so the first type entry's hash is a real, FK-safe catalog def.
+func outOfWorldSentinel(im *Image) string {
+	for _, e := range im.Entries {
+		if e.DefKind == rast.DefType {
+			return e.Hash
+		}
+	}
+	return ""
 }
 
 func visibilityOf(exported bool) string {

@@ -6,6 +6,7 @@ import (
 	"regel.dev/regel/internal/cek"
 	"regel.dev/regel/internal/cfr"
 	"regel.dev/regel/internal/lower"
+	"regel.dev/regel/internal/mutants"
 	"regel.dev/regel/internal/rast"
 )
 
@@ -255,7 +256,10 @@ func (w *v2walk) checkExpr(n *rast.Node) {
 				if n.Kids[1] != nil {
 					for _, a := range n.Kids[1].Kids {
 						w.collectPiiRefs(a) // a pii value at this sink (masked or not)
-						if w.tainted(a) {
+						// MUTANT V2_DROP_LOG_SINK (ADR-07 §5 dir-ii): dropping the
+						// capability-bearing (outbound/log) sink from the sink-set lets a
+						// vault value flow unmasked into an egress call.
+						if w.tainted(a) && !mutants.Active("V2_DROP_LOG_SINK") {
 							w.report("PII_ESCAPE", "a vault value flows unmasked into the capability sink "+
 								stdIntrinsicOf(callee, w.im)+"; mask() or take a reveal-grant first")
 						}
@@ -498,7 +502,10 @@ func (w *v5walk) refsAtRisk(n *rast.Node) {
 		if b := w.lookup(n.U); b != nil && b.nonSer && w.atRisk[b.id] {
 			// classify tag: a host resource has NO encodable tag (a value one past
 			// the codec ceiling), so it is refused against the shared lattice.
-			if !cfr.EncodableTags()[hostResourceTag()] {
+			// MUTANT V5_ALLOW_ALL_TAGS (ADR-07 §5 dir-ii): treating the host-resource
+			// tag as encodable admits an unserializable value live across an await.
+			encodable := cfr.EncodableTags()[hostResourceTag()] || mutants.Active("V5_ALLOW_ALL_TAGS")
+			if !encodable {
 				w.diags = append(w.diags, Diagnostic{
 					StageOrVerifier: "V5", Code: "CAPTURE_UNSERIALIZABLE", Severity: "error",
 					Subject: w.catName, Loc: Loc{DefHash: w.defHash},

@@ -2,6 +2,7 @@ package lower
 
 import (
 	shimast "github.com/microsoft/typescript-go/shim/ast"
+	"regel.dev/regel/internal/mutants"
 	"regel.dev/regel/internal/rast"
 )
 
@@ -387,6 +388,11 @@ func (l *lowerer) tryStmt(st *shimast.Node, path string) (*rast.Node, int) {
 // floating promise. The full type-driven check (any Promise-typed expression
 // statement) requires checker integration and is a Stage-B verifier concern.
 func (l *lowerer) checkFloatingPromise(st *shimast.Node) {
+	// MUTANT GATE_SKIP_FLOATING_PROMISE (ADR-07 §5 dir-ii, R1-10): skipping this
+	// check lets an un-awaited (un-checkpointed) async effect through the gate.
+	if mutants.Active("GATE_SKIP_FLOATING_PROMISE") {
+		return
+	}
 	call := unparen(st.AsExpressionStatement().Expression)
 	if call == nil || call.Kind != shimast.KindCallExpression {
 		return

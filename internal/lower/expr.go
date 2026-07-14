@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	shimast "github.com/microsoft/typescript-go/shim/ast"
+	"regel.dev/regel/internal/mutants"
 	"regel.dev/regel/internal/rast"
 )
 
@@ -316,6 +317,12 @@ func (l *lowerer) asExpr(n *shimast.Node) *rast.Node {
 	ae := n.AsAsExpression()
 	if isConstTypeRef(ae.Type) {
 		return &rast.Node{Kind: rast.KAsConst, Kids: []*rast.Node{l.expr(ae.Expression, "")}}
+	}
+	// MUTANT GATE_ALLOW_BANNED_SYNTAX (ADR-07 §5 dir-ii, R1-10): widening the
+	// `as`-cast matcher to accept ANY cast (not just `as const`) lets a banned
+	// type-assertion form slip past the relocated ADR-01 §2 subset ban.
+	if mutants.Active("GATE_ALLOW_BANNED_SYNTAX") {
+		return l.expr(ae.Expression, "")
 	}
 	l.errorAt(n, CodeBanAsCast, "`as` cast is banned (except `as const`): use `satisfies` or narrow with `unknown`")
 	return l.expr(ae.Expression, "")

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"regel.dev/regel/internal/lower"
+	"regel.dev/regel/internal/mutants"
 	"regel.dev/regel/internal/rast"
 )
 
@@ -76,6 +77,11 @@ func verifyV4Def(ld loweredDef, im *Image) []Diagnostic {
 	var diags []Diagnostic
 	for _, c := range findContractClauses(ld.Def, im) {
 		effectful, malformed, sym := classifyClause(c.clause, im)
+		// MUTANT V4_ALLOW_EFFECTFUL (ADR-07 §5 dir-ii): allowing an effectful clause
+		// lets a capability run inside what must be a pure boundary predicate.
+		if effectful && mutants.Active("V4_ALLOW_EFFECTFUL") {
+			effectful = false
+		}
 		switch {
 		case effectful:
 			diags = append(diags, Diagnostic{

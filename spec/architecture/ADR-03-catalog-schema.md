@@ -221,6 +221,34 @@ CREATE TABLE agent_key (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- (10) Git projection identity + audit (BUILD-C, increment C6: ADR-09 §4/§3).
+-- ADR-09's inbound door "maps the verified git identity to a catalog principal";
+-- that mapping had no authored DDL, so — on the agent_key pattern (9) above, and
+-- introducing no new identity TYPE — git_identity binds a verified committer
+-- identity (email) to an ordinary principal + the scope its pushes bind at
+-- (ADR-07 step 2a). An unmapped identity is rejected at scope-bind: no admission
+-- row, a gate_refusal row only. Rotation is revoked=true, exactly like agent_key.
+CREATE TABLE git_identity (
+  email       text PRIMARY KEY,                    -- the verified git committer email
+  actor_kind  text NOT NULL DEFAULT 'engineer',
+  actor_id    text NOT NULL,
+  scope_kind  smallint NOT NULL DEFAULT 0 CHECK (scope_kind BETWEEN 0 AND 4),
+  scope_id    text NOT NULL DEFAULT '',
+  revoked     bool NOT NULL DEFAULT false,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+-- projection_audit records self-heal events (ADR-09 §3): when a projection finds
+-- the mirror's main SHA diverged from the computed head (force-push mangle), it
+-- force-restores from the image and writes one row here. The image is truth; the
+-- mirror is a cache; "the repo lags or lies" leaves this durable trace and nothing
+-- else. Append-only event log; no admission is consumed by the mangled state.
+CREATE TABLE projection_audit (
+  id           bigserial PRIMARY KEY,
+  event        text NOT NULL,                       -- 'force-restore'
+  detail       jsonb NOT NULL,                      -- { mangled_sha, restored_sha, ref }
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+
 -- (8) Derivation tier (BUILD-C: ADR-07 §1 step 5a + §4 V3/V6). ADR-07's derivation
 -- seam produces PROPOSED derived rows over base ⊕ patch; ADR-10 §4 lists the v1
 -- pass roster. The seam had no authored DDL for where the derived model lives, so

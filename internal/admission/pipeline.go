@@ -601,11 +601,13 @@ func visibilityOf(exported bool) string {
 // buildTypecheckWorld assembles the hermetic tsgo world (ADR-07 §2): L0 std type
 // surface ⊕ L1 catalogued app definitions ⊕ L2 the in-flight patch modules.
 //
-// STAGE-A RESIDUE: L1 serves one file per definition-name at "/{name}.ts"
-// (the name→path function). App→app imports that address a MODULE aggregate are
-// a Stage-B concern; Stage-A patches import only std (served by L0), so unimported
-// L1 files are inert under bundler resolution. L2 typechecks the submitted source
-// rather than re-rendered canonical text.
+// STAGE-A RESIDUE: L1 serves one file per definition-name at "/"+catalog.NamePath
+// (the ONE name→path function, shared with the ADR-09 projector — one function,
+// two consumers, so typecheck layout and projection layout can never disagree).
+// App→app imports that address a MODULE aggregate are a Stage-B concern; Stage-A
+// patches import only std (served by L0), so unimported L1 files are inert under
+// bundler resolution. L2 typechecks the submitted source rather than re-rendered
+// canonical text.
 func buildTypecheckWorld(ctx context.Context, q catalog.Querier, im *Image, patch Patch, lowered []loweredDef, scope Scope) (map[string]string, []string, error) {
 	files := map[string]string{}
 	// L0
@@ -641,7 +643,7 @@ WHERE np.scope_kind = $1 AND np.scope_id = $2 AND np.name LIKE 'app/%'`,
 		if inPatchNames[name] {
 			continue
 		}
-		files["/"+name+".ts"] = canon
+		files["/"+catalog.NamePath(name)] = canon
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, err

@@ -152,6 +152,79 @@ own principal); the owned in-kernel git remote (computed-on-fetch); signed proje
 commits; incremental/sparse projection for very large catalogs; derived-artifact
 read-only export.
 
+## BUILD-C (increment C6) realizations
+
+The Stage-C build lands the whole ADR against a kernel-owned local bare repository
+(§3 BUILD-C), with these forced interpretations pinned here before any machinery:
+
+1. **Commit granularity = one commit per _projecting_ admission row.** §2 says "one
+   git commit per admission row." At Stage C the projected scope is product +
+   package + `std/` only (§5); an admission that moves no projected pointer
+   (an overlay-only patch, or an already-admitted no-op that still writes an
+   admission row) changes no projected byte, so it contributes **no** commit — its
+   "projection" is the projection of the last projecting admission. `git log` stays
+   the projected _code_ history; the ledger remains the full audit substance. The
+   fold folds over admission rows in `id` order, emitting a commit exactly when the
+   post-admission projected tree differs from the parent's. This keeps
+   `project(ledger prefix) → SHA` a pure, byte-reproducible function.
+
+2. **The name→path function is `catalog.NamePath` (one function, two consumers).**
+   ADR-07's tsgo host (`buildTypecheckWorld`) and this projector both call
+   `catalog.NamePath(name) → "<name>.ts"` (and its inverse `catalog.NameFromPath`);
+   the tsgo world prepends `/`, the projector uses it repo-relative. Layout and
+   typecheck can never disagree because there is one function.
+
+3. **File body = `definition_meta.docstring` ⊕ `definition.canonical_text`.** The
+   stored `canonical_text` is already a complete module with imports regenerated
+   from `deps` (ADR-02 §2, `rast.PrintModule` emits the import block), so the
+   projector prepends the immortal JSDoc docstring and needs nothing else. The
+   projector reads **only catalog rows** (definition, definition_meta,
+   name_pointer_history, admission) — never the in-process image — so `std/` mirror
+   rows (ADR-03 §6, written by genesis) project through the identical path.
+
+4. **Docstring immortality (§Red-Path "Docstring edit").** `definition_meta` is
+   first-wins immortal (ADR-03 §5 step 3; `InsertMeta` is `ON CONFLICT DO NOTHING`),
+   and the docstring is out-of-hash (ADR-02 §2). So a JSDoc-only edit to an
+   already-admitted body re-hashes to the **same** address ⇒ `already-admitted`
+   (a metadata no-op), the `catalog.lock` hash is unchanged, and the projected file
+   keeps the docstring bound at first admission. The projection isolates the
+   docstring as the sole leading block above byte-identical `canonical_text`, so a
+   docstring difference is a diff of that block alone.
+
+5. **`std/` type-name cosmetic residue (named).** Every `std` *type* shares the
+   opaque `unknown` genesis body (image.go residue), so their content addresses
+   collide and one `definition.canonical_text` row backs all of them. The projected
+   `std/<mod>/<Type>.ts` files therefore render that shared canonical text (the
+   first-inserted type's name). This is a pre-existing Stage-A residue, cosmetic to
+   the projection; a Stage-D epoch with distinct signature bodies resolves it.
+   `std/` is read-only projection (§5), never a re-admission input, so it does not
+   affect the round-trip gate.
+
+6. **Rename fidelity via content-addressing.** Regel Stage C has no name-pointer
+   retirement (name removal rides the retire lane residue), so a "rename" is
+   demonstrated as its mechanism: an identical body under a new name re-hashes to
+   the **same** address, so its projected blob is byte-identical (git detects a
+   rename/copy) and `catalog.lock` shows the same hash — renames are metadata in
+   the repo too.
+
+7. **Round-trip covers the re-admittable (app) surface.** "Resubmit every file"
+   (§Red-Path) exercises the product/package `app/*` definitions — the gate's real
+   input surface; every one short-circuits as `already-admitted`. `std/` files are
+   read-only mirror rows (§5), not gate inputs.
+
+8. **Identity mapping table = `git_identity` (ADR-03 §1 BUILD-C).** A verified git
+   identity (committer email) maps to a catalog principal + scope through the
+   `git_identity` binding table, authored in ADR-03 §1 on the `agent_key` pattern.
+   An unmapped identity is rejected at scope-bind: no admission row, a `gate_refusal`
+   row only (`rejected`, principal `git:<email>`). The mapped principal's scope binds
+   per ADR-07 step 2a exactly as every other door.
+
+9. **Self-heal audit = `projection_audit` (ADR-03 §1 BUILD-C).** On every projection
+   the mirror's `main` SHA is compared to the computed head; a mismatch (force-push
+   mangle) force-restores `refs/heads/main` + any missing objects from the recomputed
+   fold and writes a `projection_audit` row (event `force-restore`, the mangled and
+   restored SHAs). No admission consumed the mangled state.
+
 ## Alternatives Considered
 
 - **simplest-thing:** its layout, per-admission commits, locked `main`, and overlay

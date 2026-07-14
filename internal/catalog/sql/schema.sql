@@ -352,6 +352,32 @@ CREATE TABLE IF NOT EXISTS approval_token (
   created_at      timestamptz NOT NULL DEFAULT now()
 );
 
+-- (10) Git projection identity + audit (ADR-03 §1 table 10, BUILD-C increment C6;
+-- ADR-09 §4/§3). git_identity maps a verified git committer email to an ordinary
+-- catalog principal + the scope its pushes bind at (ADR-07 step 2a), on the
+-- agent_key pattern. An unmapped identity is rejected at scope-bind (no admission
+-- row, a gate_refusal row only). Rotation is revoked=true.
+CREATE TABLE IF NOT EXISTS git_identity (
+  email       text PRIMARY KEY,        -- the verified git committer email
+  actor_kind  text NOT NULL DEFAULT 'engineer',
+  actor_id    text NOT NULL,
+  scope_kind  smallint NOT NULL DEFAULT 0 CHECK (scope_kind BETWEEN 0 AND 4),
+  scope_id    text NOT NULL DEFAULT '',
+  revoked     bool NOT NULL DEFAULT false,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- projection_audit is the ADR-09 §3 self-heal event log: when a projection finds
+-- the mirror's main SHA diverged from the computed head (force-push mangle), it
+-- force-restores from the image and writes one row here. Append-only; the image is
+-- truth, the mirror is a cache, and a divergence leaves this durable trace only.
+CREATE TABLE IF NOT EXISTS projection_audit (
+  id         bigserial PRIMARY KEY,
+  event      text NOT NULL,           -- 'force-restore'
+  detail     jsonb NOT NULL,          -- { mangled_sha, restored_sha, ref }
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- STAGE-A-PLAN pin #10 minimal epoch table (ADR-10/ADR-08).
 CREATE TABLE IF NOT EXISTS epoch (
   n                    int PRIMARY KEY,

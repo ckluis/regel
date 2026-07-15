@@ -63,7 +63,7 @@ func TestSessionInvalidationBurst(t *testing.T) {
 	ed.postEvent("input", nameForm, "BURST")
 	ed.postEvent("submit", "", "")
 
-	deadline := time.Now().Add(45 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		n := se.intScalar(t,
 			`SELECT count(*) FROM continuation WHERE id = ANY($1::uuid[]) AND step_seq >= 1`, sids)

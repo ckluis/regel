@@ -29,18 +29,24 @@ type dirtyItem struct {
 	enqueued  time.Time
 }
 
+// maxRedrive bounds how many times a failed drive (a serialization-class abort
+// under fan-out contention) is re-enqueued before it is given up as a straggler.
+const maxRedrive = 40
+
 type invalidationIndex struct {
-	srv   *Server
-	mu    sync.Mutex
-	dirty map[string]time.Time // sessionID -> first-enqueued time (coalescing set)
-	queue chan string
+	srv     *Server
+	mu      sync.Mutex
+	dirty   map[string]time.Time // sessionID -> first-enqueued time (coalescing set)
+	redrive map[string]int       // sessionID -> re-enqueue count (failed-drive backstop)
+	queue   chan string
 }
 
 func newInvalidationIndex(srv *Server) *invalidationIndex {
 	return &invalidationIndex{
-		srv:   srv,
-		dirty: map[string]time.Time{},
-		queue: make(chan string, 4096),
+		srv:     srv,
+		dirty:   map[string]time.Time{},
+		redrive: map[string]int{},
+		queue:   make(chan string, 8192),
 	}
 }
 
@@ -174,22 +180,41 @@ func (ix *invalidationIndex) worker(ctx context.Context) {
 			enq := ix.dirty[sid]
 			delete(ix.dirty, sid)
 			ix.mu.Unlock()
-			ix.driveInvalidation(ctx, sid)
+			failed := ix.driveInvalidation(ctx, sid)
 			addInvalDepth(-1)
 			if !enq.IsZero() {
 				setFanoutLag(time.Since(enq).Milliseconds())
+			}
+			// A failed drive (serialization-class abort under fan-out contention) is
+			// re-enqueued, bounded, so an invalidation is never permanently lost from a
+			// single NOTIFY — the correctness backstop the coalescing set alone lacks.
+			if failed {
+				ix.mu.Lock()
+				n := ix.redrive[sid]
+				ix.mu.Unlock()
+				if n < maxRedrive {
+					ix.mu.Lock()
+					ix.redrive[sid] = n + 1
+					ix.mu.Unlock()
+					ix.enqueue(sid)
+				}
+			} else {
+				ix.mu.Lock()
+				delete(ix.redrive, sid)
+				ix.mu.Unlock()
 			}
 		}
 	}
 }
 
 // driveInvalidation reads the session's current step_seq and drives one invalidation
-// step (a re-render→diff→frame). A dropped claim (session gone, or a concurrent
-// event won) is fine — the next NOTIFY re-drives.
-func (ix *invalidationIndex) driveInvalidation(ctx context.Context, sessionID string) {
+// step (a re-render→diff→frame). It returns true when the drive FAILED with a
+// retryable error (so the worker re-enqueues it); a clean skip (session gone, or a
+// concurrent event already advanced it) returns false.
+func (ix *invalidationIndex) driveInvalidation(ctx context.Context, sessionID string) (failed bool) {
 	conn, err := ix.srv.pool.Acquire(ctx)
 	if err != nil {
-		return
+		return true
 	}
 	var seq int64
 	var status string
@@ -197,13 +222,17 @@ func (ix *invalidationIndex) driveInvalidation(ctx context.Context, sessionID st
 		`SELECT step_seq, status FROM continuation WHERE id=$1 AND kind='session'`,
 		[]any{sessionID}, &seq, &status)
 	ix.srv.pool.Release(conn)
-	if err != nil || !found {
-		return
+	if err != nil {
+		return true
+	}
+	if !found {
+		return false // session gone — nothing to drive
 	}
 	// Only an idle (sleeping/ready) session is invalidation-drivable; a running one
 	// is mid-step and will re-render with fresh data anyway.
 	if status != "sleeping" && status != "ready" {
-		return
+		return false
 	}
-	_, _, _ = ix.srv.driveSession(ctx, sessionID, seq, sessionMsg{Kind: "invalidate"})
+	_, _, derr := ix.srv.driveSession(ctx, sessionID, seq, sessionMsg{Kind: "invalidate"})
+	return derr != nil
 }

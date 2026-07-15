@@ -853,16 +853,26 @@ VALUES ($1, $2, $3, $4::text[], $5, $6::jsonb)`,
 // codeDeadlock is Postgres deadlock_detected.
 const codeDeadlock = "40P01"
 
+// codeInFailedTxn is Postgres in_failed_sql_transaction: a serialization failure
+// (40001) raised inside a multi-statement helper aborts the whole transaction, and
+// any SUBSEQUENT statement on it returns 25P02, MASKING the original 40001. Under
+// heavy concurrent DB load (BUILD-D's reactive fan-out adds this) that mask can be
+// the error the pipeline sees, so it must retry it exactly as it would the
+// underlying 40001 — the same fresh-snapshot retry, bounded by maxRetries.
+const codeInFailedTxn = "25P02"
+
 // isSerialization reports whether err is a concurrency conflict that aborts one
 // admission txn cleanly and is safe to retry against a fresh snapshot. Beyond a
 // bare 40001, two racing admissions to the SAME new name surface their conflict
 // as a pointer-PK deadlock (40P01), a name_pointer unique violation (23505), or
 // an I4 history-window exclusion violation (23P01) — all of which resolve
 // deterministically to stale-base once the winner has committed and the loser
-// retries against it (ADR-03 §5 CAS contract).
+// retries against it (ADR-03 §5 CAS contract). 25P02 is a 40001 masked by a
+// follow-on statement on the aborted txn (BUILD-D: surfaced under reactive load).
 func isSerialization(err error) bool {
 	return pgwire.IsCode(err, pgwire.CodeSerializationFailure) ||
 		pgwire.IsCode(err, codeDeadlock) ||
+		pgwire.IsCode(err, codeInFailedTxn) ||
 		pgwire.IsCode(err, pgwire.CodeUniqueViolation) ||
 		pgwire.IsCode(err, pgwire.CodeExclusionViolation)
 }

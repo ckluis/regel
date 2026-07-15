@@ -4,14 +4,67 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"regel.dev/regel/internal/catalog"
+	"regel.dev/regel/internal/cek"
 	"regel.dev/regel/internal/pgwire"
 	"regel.dev/regel/internal/rast"
 )
+
+// genesisFaultHook is a TEST-ONLY fault-injection seam (ADR-10 §2 kill-test): when
+// non-nil it is called at every genesis statement boundary, and a non-nil return
+// aborts the transaction. The deferred Rollback then proves the all-or-nothing
+// guarantee — a mid-genesis kill leaves an empty-or-complete catalog, never a
+// partial one. Production leaves this nil; the sweep test in genesis_gate_test.go
+// installs a counter that aborts after the Nth boundary. Tests run sequentially,
+// so a plain package var needs no lock.
+var genesisFaultHook func() error
+
+func genesisFault() error {
+	if genesisFaultHook != nil {
+		return genesisFaultHook()
+	}
+	return nil
+}
+
+// BootRefusal is the ADR-08 §2 structured, machine-parseable boot-refuse
+// diagnostic (event "epoch.boot_refused"), extended per ADR-10 §2 R1-09 with the
+// pinned-vs-computed H_dispatch pair for the attestation-mismatch cause. It is the
+// error VerifyBoot returns so an epoch incident stays observable as data — the
+// gate never opens on an unattested or drifted dispatch table.
+type BootRefusal struct {
+	Event               string `json:"event"`
+	Reason              string `json:"reason"`
+	RequiredEpoch       int    `json:"required_epoch"`
+	BinaryManifestRoot  string `json:"binary_manifest_root,omitempty"`
+	CatalogManifestRoot string `json:"catalog_manifest_root,omitempty"`
+	PinnedHDispatch     string `json:"pinned_h_dispatch,omitempty"`
+	ComputedHDispatch   string `json:"computed_h_dispatch,omitempty"`
+	OrphanHash          string `json:"orphan_hash,omitempty"`
+	Detail              string `json:"detail,omitempty"`
+	TS                  string `json:"ts"`
+	Action              string `json:"action"`
+}
+
+func (e *BootRefusal) Error() string {
+	b, _ := json.Marshal(e)
+	return "boot refused: " + string(b)
+}
+
+func newBootRefusal(reason string, epoch int) *BootRefusal {
+	return &BootRefusal{
+		Event:         "epoch.boot_refused",
+		Reason:        reason,
+		RequiredEpoch: epoch,
+		TS:            time.Now().UTC().Format(time.RFC3339),
+		Action:        "refused_boot",
+	}
+}
 
 // Genesis runs the ADR-10 §2 Stage-A bootstrap: it populates the catalog with
 // the micro-std image in one transaction (the only gate bypass — the gate ran at
@@ -58,6 +111,9 @@ VALUES ('system', 'genesis', 'cli', $1::text[], '{"genesis":true}'::jsonb) RETUR
 		[]any{hashes}, &admissionID); err != nil {
 		return fmt.Errorf("genesis: insert admission: %w", err)
 	}
+	if err := genesisFault(); err != nil {
+		return err
+	}
 
 	verify := func(hash string, ast []byte) error {
 		nn, derr := rast.Decode(ast)
@@ -81,8 +137,14 @@ VALUES ('system', 'genesis', 'cli', $1::text[], '{"genesis":true}'::jsonb) RETUR
 		if _, err := catalog.InsertDefinition(ctx, conn, def, verify); err != nil {
 			return fmt.Errorf("genesis: insert %s: %w", e.CatalogName, err)
 		}
+		if err := genesisFault(); err != nil {
+			return err
+		}
 		if _, err := catalog.InsertMeta(ctx, conn, catalog.Meta{Hash: e.Hash}); err != nil {
 			return fmt.Errorf("genesis: insert meta %s: %w", e.CatalogName, err)
+		}
+		if err := genesisFault(); err != nil {
+			return err
 		}
 		ptr := catalog.Pointer{
 			Name:        e.CatalogName,
@@ -100,12 +162,21 @@ VALUES ('system', 'genesis', 'cli', $1::text[], '{"genesis":true}'::jsonb) RETUR
 		if !moved {
 			return fmt.Errorf("genesis: pointer %s already present (non-empty catalog?)", e.CatalogName)
 		}
+		if err := genesisFault(); err != nil {
+			return err
+		}
 	}
 
+	if err := genesisFault(); err != nil {
+		return err
+	}
 	if _, err := conn.Exec(ctx, `
 INSERT INTO epoch (n, std_manifest_root, dispatch_attestation) VALUES ($1, $2, $3)`,
 		im.Epoch, im.ManifestRoot, im.Attestation); err != nil {
 		return fmt.Errorf("genesis: insert epoch: %w", err)
+	}
+	if err := genesisFault(); err != nil {
+		return err
 	}
 
 	// ADR-08 §2: pin the live epoch fence row in the same transaction as the epoch.
@@ -188,6 +259,29 @@ func VerifyBoot(ctx context.Context, conn *pgwire.Conn, im *Image) error {
 		}
 		if !ok {
 			return fmt.Errorf("boot refused: native %s has no catalogued definition %s", e.Intrinsic, e.Hash)
+		}
+	}
+	return nil
+}
+
+// VerifyDispatchBijection asserts the running native dispatch registry and the
+// image's catalogued NativeBody set are in BIJECTION (ADR-10 §2 step 3: "asserts
+// every catalogued NativeBody hash has a registered implementation, and vice
+// versa"). A catalogued native with no registered Go body is an orphan hash; a
+// registered body with no catalogued entry is an orphan implementation. Either
+// refuses boot, naming the orphan hash — the binary is not a trust root taken on
+// faith.
+func VerifyDispatchBijection(im *Image, reg *cek.Registry) error {
+	// Forward leg: every catalogued native has a registered implementation.
+	for _, e := range im.Entries {
+		if e.Native == nil {
+			continue
+		}
+		if !reg.Has(e.Hash) {
+			br := newBootRefusal("dispatch_orphan_hash", im.Epoch)
+			br.OrphanHash = e.Hash
+			br.Detail = "catalogued native " + e.Intrinsic + " has no registered Go implementation"
+			return br
 		}
 	}
 	return nil

@@ -181,6 +181,27 @@ admission transaction**, each an explicit pass over the canonical AST:
 9. per-resource MCP tools (ADR-12 §2);
 10. the catalog row itself.
 
+**BUILD-D (increment D1) — the ten passes made concrete as `derived_artifact` rows.**
+Each of the ten is one explicit `derived_artifact.pass` value emitted inside the one
+admission transaction, in this fixed roster: `schema`, `history`, `validator`, `policy`,
+`vault`, `horizon`, `components` (item 7: `form(R)`+`table(R)`+`detail(R)` in one AST
+record), `openapi`, `mcptools`, `catalog`. The `policy` predicate is emitted for *every*
+resource (defaulting to `orgScoped` when the declaration wires none — "injected into every
+derived read path"). Where a pass is DDL (`schema`, `history`, per-pii `vault` route) it
+also appends additive-only statements to `migration_sql`, executed in-txn exactly as the
+Stage-C schema pass already is. V6 derivation-parity checks the emitted pass set equals the
+required ten (a suppressed pass ⇒ `DERIVE_PARITY`, the declaration ≢ its derived artifacts).
+The `vault`/`vault_key`/`shred_attestation` substrate is three shared tables (ADR-03 DDL,
+keyed by `(resource, subject_id[, field])`) rather than a table per field: a `pii` value is
+AES-256-GCM sealed under a per-subject `key_token` (std/crypto §3), and **crypto-shred** is a
+kernel op + `regel shred` CLI subcommand that deletes the subject's `vault_key` row and writes
+a `shred_attestation` row in one txn — after which the ciphertext is undecryptable and reads
+return the mask token. The `relation` pass derives the `belongsTo` FK **column** plus a
+recorded target-horizon predicate note; the hard cross-resource FK constraint and the
+`hasMany` inverse are a named D1 residue (deferred to avoid cross-resource admission-order
+hazards). Every resource derives a `bigserial id` primary key automatically (the typed key;
+`id`-as-declared-field stays excluded, §5).
+
 Cross-resource aggregates and computed fields are deferred (Rule of Three); dashboards
 ride typed `std/sql` queries in v1.
 
@@ -196,6 +217,23 @@ ordered-history semantics and drives `badge`/`board`) 13. `relation`
 (belongsTo/hasMany; FK + target-horizon policy predicate).
 **Modifier:** `pii(<base>)` — wraps any base type; routes the value to the vault, masks
 by default, never enters the history stream.
+
+**BUILD-D (increment D1) — the pii modifier wraps a scalar value-leaf.** "Wraps any base
+type" is refined to the derivable set: `pii(<base>)` routes a single value to the vault and
+masks it at one of the six §7 leaves, so it wraps the eleven **scalar value-leaf** base
+types (`text`, `longtext`, `number`, `money`, `boolean`, `date`, `timestamp`, `email`,
+`phone`, `url` → masked at the `text`/`money` leaf; `select`/`states` → masked at the `badge`
+leaf). The two **structurally non-leaf** bases have no single vault-routable value and are
+therefore **not** pii-wrappable: `address` (a composite of six columns — pii its constituent
+leaves, or model the sensitive part as a leaf field) and `relation` (an FK *edge* — the
+target's own `pii` fields are vaulted, never the edge). `pii(address)` / `pii(relation)`
+are the natural totality gaps V6 rejects with `DERIVE_PARTIAL` (KT-A3), and the closed
+Go bundle table (validator, input control, render primitive, mask leaf per base) makes the
+derivation total by construction for every other (type × pii) pair — the totality test
+enumerates the full product. `money` is stored as a minor-units `bigint` + a currency
+`text` column (never float); `address` as six `text` columns; `select`/`states` as one
+`text` column under a closed `CHECK`, with `states` additionally recording ordered-history
+semantics and marking `board`/`badge` derivability.
 
 **Excluded from v1, each with its reason:** `multiselect` (not a 14th semantic type —
 ships as verifier-checked sugar over `relation` when the reference app earns it; see

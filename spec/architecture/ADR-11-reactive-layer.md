@@ -183,6 +183,22 @@ so **invalidation respects policy for free**: a change outside a principal's hor
 never wakes their session. A missed dependency is impossible by construction, not by
 test coverage.
 
+**BUILD-D (D3): point-read keys are horizon-qualified.** A point read registers
+`key = "rowId:<id>@<horizon>"` (not a bare `rowId:<id>`), and a mutation publishes
+`NOTIFY (resource, rowId, horizon)` with the writer's horizon; the match is
+`key=rowId:<id>@<horizon> OR key=horizon:<horizon>`. This makes the policy-respecting
+guarantee hold for the *point-read* path too: a session that read the same id under an
+excluding horizon (its render came back empty) subscribed under a different key, so the
+cross-horizon mutation never wakes it. The D3 policy predicate is org-scoping — a resource
+carrying an `org` text field filters reads `WHERE org = :horizon`; a resource without one
+lives in a single global horizon `"*"` (a named residue: richer role predicates are later).
+On an **invalidation** re-render the mount expression is unchanged, so the read-set (and
+subscription set) is identical to what is stored — D3 SKIPS the subscription rewrite on
+invalidations, relieving SSI write-contention on the shared `(resource,key)` index under a
+fan-out storm; the set is rewritten only on an event (which may navigate). The bounded
+drain additionally **re-enqueues a serialization-aborted drive** (bounded), so a single
+NOTIFY never permanently strands a session.
+
 Every admitted mutation's commit publishes `NOTIFY (resource, rowId, horizon)`. Each
 kernel holds the in-memory index `subKey → set(session)` (rebuilt lazily from the
 `subscription` table per ADR-06 cold-start rules), marks matches dirty, and enqueues an
@@ -216,6 +232,19 @@ as an ADR-13 §3 SLO calibrated at M4 (R1-06: fan-out lag is a named golden sign
   ("this record changed — review and resubmit"), **preserving the user's draft** in
   unsaved fields. Last-writer-wins is rejected.
 
+**BUILD-D (D3):** the derived `form` template gains ONE trailing form-level `alert` slot;
+validation failures and the concurrent-edit reconcile patch target it (per-field error
+slots are a named scope reduction for D3, not a per-field slot each). A schema pass adds an
+additive `row_version bigint DEFAULT 0` to every derived base table; the mutation guards
+`WHERE row_version = :base` and increments it, `rowVersion` is the version the form was
+OPENED against (advanced only by a submit — success ⇒ base+1, conflict ⇒ reloaded current
+— never by a re-render), and the D3 validator is an honest type-shape subset of the D1
+`R.parse` bundle (full-rule parity + field optionality are named residues). The session
+event loop is **composed over `cfr.ClaimAndStep`, never forked**: a session-specific arm-CAS
+(sleeping/ready at `step_seq`) then ClaimAndStep, with the event/invalidation delivered via
+the resume closure; a masked-40001 (25P02) inside the resume is retried at the driver, and
+`admission`'s serialization classifier gains the same 25P02 case for its own retry.
+
 ### 8. PII masking on the render path: two layers, one kill-test
 
 **Which layer, decided: both, with distinct jobs.** Static — ADR-07 V2 proves at
@@ -230,6 +259,17 @@ that slot.
 token (plus the grant id when revealed), so no session row, CFR blob, or resync replay
 ever contains plaintext; revealed plaintext exists only in the transient SSE frame sent
 under the live grant.
+
+**BUILD-D (D3): two digests, resolved.** §4's divergence digest and §8's plaintext-free
+snapshot are in tension — the durable snapshot stores the mask *token*, but the client's
+slot map (and its DOM) holds the *display* value (plaintext under a live grant), so a
+single digest cannot be summed over both. D3 splits them: the per-slot **Diff keys on the
+SNAPSHOT (token) map** — so a grant flip (`token`→`token|scope`) or expiry still produces a
+patch and the durable CFR/subscription rows/resync replay stay plaintext-free (the §8
+kill-test) — while the **wire `snapshotHash` is summed over the DISPLAY map**, the exact
+bytes the 15KB client holds and re-sums (§4). Divergence detection therefore compares
+like-with-like; the plaintext-free invariant is unweakened because only the transient frame
+and the client's in-memory map ever carry the revealed value.
 
 **BUILD-D (D2): the token + grant encoding are concrete.** The mask token is
 `"••••·" + <6 hex of FNV-1a-64(resource‖subject‖field)>` — it carries none of the

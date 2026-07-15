@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"regel.dev/regel/internal/admission"
 )
 
 // --- size cap (§5): accrete UI state past 256KB ⇒ truncate, preserve draft -----
@@ -128,6 +130,47 @@ func TestSessionTableView(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("table did not receive the row-1 cell patch: %+v", f)
+	}
+}
+
+// --- the full 13-type D1 resource mounts (acceptance E2E) --------------------
+
+func TestSessionThirteenTypeResourceMounts(t *testing.T) {
+	se := newSessionEnv(t)
+	// D1's 13-type resource (text, longtext, number, money, boolean, date, timestamp,
+	// pii:email, pii:phone, url, address, select, states, relation).
+	src := `import { resource } from "std/resource";
+import { orgScoped } from "std/policy";
+export const Contact = resource({
+  fields: {
+    name: "text", notes: "longtext", score: "number", dealValue: "money",
+    active: "boolean", closedOn: "date", lastSeen: "timestamp",
+    email: "pii:email", phone: "pii:phone", site: "url", hq: "address",
+    tier: "select:bronze|silver|gold", stage: "states:new|active|won|lost",
+    company: "belongsTo:Company"
+  },
+  policy: orgScoped,
+});
+`
+	v := se.admit(t, src, "app/crm", nil)
+	if v.Outcome != admission.OutcomeAdmitted {
+		t.Fatalf("admit Contact: %q (%+v)", v.Outcome, v.Diagnostics)
+	}
+	// Mount the table view (no row needed): first paint renders all 14 field headers.
+	code, body, _ := getWith(t, se.ts.URL+"/ui/app/crm/Contact/table", "human:a", "acme")
+	if code != 200 {
+		t.Fatalf("mount Contact table: %d %s", code, body)
+	}
+	for _, label := range []string{"name", "dealValue", "email", "hq", "tier", "stage", "company"} {
+		if !strings.Contains(body, ">"+label+"<") {
+			t.Fatalf("table first paint missing field %q", label)
+		}
+	}
+	// Mount a detail + a form view too (empty row is fine — a 200 skeleton).
+	for _, kind := range []string{"detail/1", "form/1"} {
+		if code, body, _ := getWith(t, se.ts.URL+"/ui/app/crm/Contact/"+kind, "human:a", "acme"); code != 200 {
+			t.Fatalf("mount Contact %s: %d %s", kind, code, body)
+		}
 	}
 }
 

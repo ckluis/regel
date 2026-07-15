@@ -42,6 +42,21 @@ compares each result to the last-sent value, and frames only the deltas. **The d
 is the dynamic binding slot** — never a DOM subtree, never a VDOM: the interpreter
 (constraint #2) never reconciles a tree; it re-evaluates changed slot expressions only.
 
+**BUILD-D (D2): the pass is concrete.** The static/dynamic split is emitted as an
+inspectable `template` `derived_artifact` (a step-5a derivation), lowering each derived
+`form`/`table`/`detail` component (and each hand-authored component-kind definition) to a
+`ui.Template` = a static skeleton of ADR-10 §7 tier-1 nodes plus indexed dynamic `Slot`s
+`{id, kind∈{setText,setAttr,setValue,spliceList}, exprPath|field, leaf, masked, maskLeaf,
+readSet}`, keyed by the definition hash. Slot ids are `"<mount>.<index>"` (mount path +
+slot index); a keyed-list cell is `"<colSlotId>#<rowKey>"`. The template artifact is
+**parity-checked by V6 as an eleventh derivation pass** alongside ADR-10 §4's ten (a
+resource that suppresses it fails `DERIVE_PARITY`). The template encoding is versioned
+JSON (`ui.TemplateVersion`); the patch frame is the DISTINCT owned binary codec below.
+First paint HTML-escapes every text value — there is no raw-HTML path and no render API
+accepts pre-escaped markup (ADR-10 §7). ARIA rides the skeleton exactly where §7 names it:
+`section`→`role=region`, `nav`, `alert`→`role=alert aria-live`, `dialog`→`aria-modal
+tabindex=-1`, `spinner`→`role=status`.
+
 ### 2. Transport and patch encoding: SSE down, POST up — confirmed
 
 The three-proposal convergence is confirmed, over WebSocket, for regel's own reason: a
@@ -215,6 +230,19 @@ that slot.
 token (plus the grant id when revealed), so no session row, CFR blob, or resync replay
 ever contains plaintext; revealed plaintext exists only in the transient SSE frame sent
 under the live grant.
+
+**BUILD-D (D2): the token + grant encoding are concrete.** The mask token is
+`"••••·" + <6 hex of FNV-1a-64(resource‖subject‖field)>` — it carries none of the
+underlying value, yet distinct masked fields get distinct tokens so the §4 digest tells
+them apart. A revealed slot's snapshot is `token + "|" + <grant scope>` (the grant
+identity is the `grant_row.scope` = `resource|subject|field`; there is no surrogate id),
+so a grant flip shifts the snapshot/digest and expiry re-masks by simply ceasing to
+resolve the plaintext. The reveal grant is a `grant_row` with `capability='pii.reveal'`
+(the `reveal_grant_human_only` CHECK forbids an agent subject) scoped to that triple with
+`expires_at`; a live grant recovers plaintext via the vault (`VaultReveal`) into the frame
+value only and writes one `reveal_audit` row per revealed materialization. The static half
+(V2) is extended so a pii value bound at any component site OTHER than the six masking
+leaves is `PII_NONLEAF_BIND` at admission — a non-leaf render sink never becomes code.
 
 **The no-plaintext-without-grant kill-test:** render every reference-app view over
 seeded PII with no grant; grep every session row, CFR blob, subscription row, and

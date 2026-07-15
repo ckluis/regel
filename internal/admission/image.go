@@ -386,10 +386,16 @@ func moduleStubs() map[string]string {
 		// pii(<base>) modifier over a subset — the full 13 base types land at Stage D
 		// behind the same seam. A resource declares a field map and an optional policy.
 		"/std/resource.ts": "import { Policy } from \"std/policy\";\n" +
+			"export type Base =\n" +
+			"  | \"text\" | \"longtext\" | \"number\" | \"money\" | \"boolean\"\n" +
+			"  | \"date\" | \"timestamp\" | \"email\" | \"phone\" | \"url\" | \"address\";\n" +
 			"export type FieldSpec =\n" +
-			"  | \"text\" | \"longtext\" | \"number\" | \"boolean\" | \"date\" | \"timestamp\"\n" +
-			"  | \"email\" | \"phone\" | \"url\"\n" +
-			"  | \"pii:text\" | \"pii:email\" | \"pii:phone\" | \"pii:address\";\n" +
+			"  | Base\n" +
+			"  | `select:${string}`\n" +
+			"  | `states:${string}`\n" +
+			"  | `belongsTo:${string}`\n" +
+			"  | `hasMany:${string}`\n" +
+			"  | `pii:${Base}`;\n" +
 			"export type ResourceDecl = {\n" +
 			"  fields: { readonly [name: string]: FieldSpec };\n" +
 			"  policy?: Policy;\n" +

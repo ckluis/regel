@@ -31,11 +31,13 @@ import (
 // std/pii mask/reveal and std/contract pre/post passes are increment C2 — room
 // left per ADR-10 naming, not built here.
 
-// fieldSpec is one declared resource field: a base semantic kind and the pii flag.
+// fieldSpec is one declared resource field: a base semantic kind, the pii flag, and
+// the base-specific parameters (select/states enum members; relation [kind, target]).
 type fieldSpec struct {
-	Name string `json:"-"`
-	Base string `json:"base"`
-	PII  bool   `json:"pii"`
+	Name   string   `json:"-"`
+	Base   string   `json:"base"`
+	PII    bool     `json:"pii"`
+	Params []string `json:"params,omitempty"`
 }
 
 // resourceDecl is a parsed erf resource(...) declaration.
@@ -66,11 +68,18 @@ type resourcePlan struct {
 	Decl        resourceDecl
 	TableName   string
 	NewShape    map[string]fieldSpec
-	Additive    []string // additive DDL applied at step 6 (CREATE/ADD COLUMN)
+	Additive    []string // additive DDL applied at step 6 (CREATE/ADD COLUMN/history/vault)
 	Destructive []string // destructive statements — V6 rejects unless retire
 	Partials    []string // attrs with no derivable mask — V6 DERIVE_PARTIAL
 	Retired     []string // fields removed under intent=retire (staged lane)
 	PolicyName  string
+	// VaultRoutes is the pii field names routed to the vault (ADR-10 §4 item 5): a
+	// pii value never lands in a base/history column — only as vault ciphertext.
+	VaultRoutes []string
+	// EmittedPasses is the ordered set of derivation passes this resource emits as
+	// derived_artifact rows (ADR-10 §4). V6 checks it equals the required ten; a
+	// suppressed pass ⇒ DERIVE_PARITY (declaration ≢ derived artifacts).
+	EmittedPasses []string
 }
 
 // derivationPlan is the whole step-5a output, consumed by V3/V6 and step 6.
@@ -170,11 +179,36 @@ func parsePolicy(ld loweredDef, im *Image) (policyArtifact, bool) {
 	return policyArtifact{CatalogName: ld.CatalogName, DefHash: ld.Def.Hash}, true
 }
 
+// parseFieldSpec parses one field spec string (ADR-10 §5). Forms:
+//
+//	<base>                       plain scalar/composite base
+//	select:a|b|c   states:a|b|c  closed enum (states = ordered history)
+//	belongsTo:T    hasMany:T      relation (base "relation", Params=[kind,target])
+//	pii:<spec>                    the pii modifier over any of the above
 func parseFieldSpec(name, spec string) fieldSpec {
+	f := fieldSpec{Name: name}
 	if strings.HasPrefix(spec, "pii:") {
-		return fieldSpec{Name: name, Base: strings.TrimPrefix(spec, "pii:"), PII: true}
+		f.PII = true
+		spec = strings.TrimPrefix(spec, "pii:")
 	}
-	return fieldSpec{Name: name, Base: spec, PII: false}
+	base := spec
+	rest := ""
+	if i := strings.IndexByte(spec, ':'); i >= 0 {
+		base, rest = spec[:i], spec[i+1:]
+	}
+	switch base {
+	case "select", "states":
+		f.Base = base
+		if rest != "" {
+			f.Params = strings.Split(rest, "|")
+		}
+	case "belongsTo", "hasMany":
+		f.Base = "relation"
+		f.Params = []string{base, rest}
+	default:
+		f.Base = base
+	}
+	return f
 }
 
 // objProps returns the KProp children of a KObject (skipping spreads).
@@ -204,36 +238,85 @@ func propKV(prop *rast.Node) (string, *rast.Node) {
 }
 
 // --- the schema/policy passes (pure) -----------------------------------------
+//
+// The field-type bundle table (maskable / columnsFor / colScalarType) lives in
+// fieldtypes.go — the closed ADR-10 §5 roster that makes derivation total.
 
-// maskable reports whether the Stage-C derivation can derive a masking rule for a
-// field. Plain fields need none; a pii(<base>) field needs a rule from the mask
-// table, which at Stage-C scope covers text/email/phone (address masking is C2).
-func maskable(f fieldSpec) bool {
-	if !f.PII {
-		return true
-	}
-	switch f.Base {
-	case "text", "email", "phone":
-		return true
-	default:
-		return false
-	}
+// requiredPasses is the exact ten-artifact derivation roster (ADR-10 §4). V6
+// derivation-parity checks every resource emits precisely these.
+var requiredPasses = []string{
+	"schema", "history", "validator", "policy", "vault",
+	"horizon", "components", "openapi", "mcptools", "catalog",
 }
 
-// colType maps a base semantic kind to its physical Postgres column type.
-func colType(base string) string {
-	switch base {
-	case "number":
-		return "numeric"
-	case "boolean":
-		return "boolean"
-	case "date":
-		return "date"
-	case "timestamp":
-		return "timestamptz"
-	default: // text, longtext, email, phone, url, address
-		return "text"
+// derivationTamper is a TEST-ONLY hook (default nil): the parity red-path sets it to
+// mutate a resourcePlan (drop an EmittedPass, drop a VaultRoute) so the declaration
+// no longer equals its derived artifacts, and V6 rejects with the parity diagnostic.
+// Production leaves it nil; package tests run sequentially, so a plain var is safe.
+var derivationTamper func(rp *resourcePlan)
+
+// checkClause renders a column's inline CHECK, or "".
+func checkClause(c column) string {
+	if c.Check == "" {
+		return ""
 	}
+	return " CHECK (" + c.Check + ")"
+}
+
+// historyDDL derives the per-resource history tier (ADR-10 §4 item 2): a shadow
+// table mirroring the NON-pii columns (pii values live only in the vault, so they are
+// structurally absent from history) plus a SECURITY DEFINER trigger — the
+// regel_write_history pattern — that writes a row on every UPDATE/DELETE. Regenerated
+// idempotently (CREATE IF NOT EXISTS + ADD COLUMN IF NOT EXISTS + CREATE OR REPLACE)
+// so an additive field-add extends history without a destructive rebuild.
+func historyDDL(table string, cols []column) []string {
+	hist := table + "_history"
+	fn := table + "_hist"
+	trg := table + "_hist_trg"
+	var out []string
+	out = append(out, "CREATE TABLE IF NOT EXISTS "+hist+" (\n"+
+		"  history_id bigserial PRIMARY KEY,\n"+
+		"  id bigint NOT NULL,\n"+
+		"  op text NOT NULL,\n"+
+		"  valid_from timestamptz NOT NULL DEFAULT now()\n);")
+	for _, c := range cols {
+		out = append(out, "ALTER TABLE "+hist+" ADD COLUMN IF NOT EXISTS "+
+			quoteIdent(c.Name)+" "+c.Type+";")
+	}
+	// Trigger body: copy id + every non-pii column into the shadow table.
+	colNames := make([]string, 0, len(cols))
+	oldRefs := make([]string, 0, len(cols))
+	for _, c := range cols {
+		colNames = append(colNames, quoteIdent(c.Name))
+		oldRefs = append(oldRefs, "OLD."+quoteIdent(c.Name))
+	}
+	insCols := "id, op"
+	insVals := "OLD.id, TG_OP"
+	if len(colNames) > 0 {
+		insCols = "id, " + strings.Join(colNames, ", ") + ", op"
+		insVals = "OLD.id, " + strings.Join(oldRefs, ", ") + ", TG_OP"
+	}
+	out = append(out, "CREATE OR REPLACE FUNCTION "+fn+"() RETURNS trigger SECURITY DEFINER AS $$\n"+
+		"BEGIN\n"+
+		"  INSERT INTO "+hist+" ("+insCols+") VALUES ("+insVals+");\n"+
+		"  RETURN OLD;\nEND; $$ LANGUAGE plpgsql;")
+	out = append(out, "DROP TRIGGER IF EXISTS "+trg+" ON "+table+";")
+	out = append(out, "CREATE TRIGGER "+trg+" AFTER UPDATE OR DELETE ON "+table+
+		" FOR EACH ROW EXECUTE FUNCTION "+fn+"();")
+	return out
+}
+
+// nonPiiColumns flattens the non-pii base columns of a resource's field set, in
+// sorted field order (deterministic).
+func nonPiiColumns(fields []fieldSpec) []column {
+	var out []column
+	for _, f := range fields { // caller pre-sorts by Name
+		if f.PII {
+			continue
+		}
+		out = append(out, columnsFor(f)...)
+	}
+	return out
 }
 
 // tableSlug derives the deterministic physical table name for a resource.
@@ -269,11 +352,17 @@ func buildPlan(resources []resourceDecl, policies []policyArtifact, base map[str
 		if rd.PolicyHash != "" {
 			plan.WiredPolicy[rd.PolicyHash] = true // policy-wiring pass (b)
 		}
+		// Every resource derives the org/role predicate on every read path (ADR-10 §4
+		// item 4): default orgScoped when the declaration wires none.
+		policyName := rd.PolicyName
+		if policyName == "" {
+			policyName = "orgScoped"
+		}
 		rp := resourcePlan{
 			Decl:       rd,
 			TableName:  tableSlug(rd.CatalogName),
 			NewShape:   map[string]fieldSpec{},
-			PolicyName: rd.PolicyName,
+			PolicyName: policyName,
 		}
 		for _, f := range rd.Fields {
 			rp.NewShape[f.Name] = f
@@ -285,14 +374,25 @@ func buildPlan(resources []resourceDecl, policies []policyArtifact, base map[str
 		sh, hasBase := base[rd.CatalogName]
 
 		if !hasBase {
-			// schema pass (a): a brand-new resource derives one CREATE TABLE.
+			// schema pass: a brand-new resource derives one CREATE TABLE with a typed
+			// bigserial primary key. pii fields derive NO base column (vault-routed).
 			var cols []string
 			for _, f := range rd.Fields { // rd.Fields already sorted by Name
-				if !maskable(f) {
-					rp.Partials = append(rp.Partials, f.Name)
+				if f.Name == "id" || !knownBase(f.Base) {
+					rp.Partials = append(rp.Partials, f.Name) // id reserved; unknown base
 					continue
 				}
-				cols = append(cols, "  "+quoteIdent(f.Name)+" "+colType(f.Base))
+				if f.PII {
+					if !piiWrappable(f.Base) {
+						rp.Partials = append(rp.Partials, f.Name) // KT-A3 totality gap
+						continue
+					}
+					rp.VaultRoutes = append(rp.VaultRoutes, f.Name)
+					continue
+				}
+				for _, c := range columnsFor(f) {
+					cols = append(cols, "  "+quoteIdent(c.Name)+" "+c.Type+checkClause(c))
+				}
 			}
 			stmt := "CREATE TABLE IF NOT EXISTS " + rp.TableName +
 				" (\n  id bigserial PRIMARY KEY"
@@ -302,25 +402,39 @@ func buildPlan(resources []resourceDecl, policies []policyArtifact, base map[str
 			stmt += "\n);"
 			rp.Additive = append(rp.Additive, stmt)
 		} else {
-			// schema pass (a): additive ADD COLUMN for new fields; a removed field
-			// derives a destructive DROP (V6 rejects) unless intent=retire.
+			// schema pass: additive ADD COLUMN for new fields; a removed field derives a
+			// destructive DROP (V6 rejects) unless intent=retire.
 			for _, f := range rd.Fields {
 				old, existed := sh.Fields[f.Name]
 				if !existed {
-					if !maskable(f) {
+					if f.Name == "id" || !knownBase(f.Base) {
 						rp.Partials = append(rp.Partials, f.Name)
 						continue
 					}
-					rp.Additive = append(rp.Additive,
-						"ALTER TABLE "+rp.TableName+" ADD COLUMN IF NOT EXISTS "+
-							quoteIdent(f.Name)+" "+colType(f.Base)+";")
+					if f.PII {
+						if !piiWrappable(f.Base) {
+							rp.Partials = append(rp.Partials, f.Name)
+							continue
+						}
+						rp.VaultRoutes = append(rp.VaultRoutes, f.Name)
+						continue
+					}
+					for _, c := range columnsFor(f) {
+						rp.Additive = append(rp.Additive,
+							"ALTER TABLE "+rp.TableName+" ADD COLUMN IF NOT EXISTS "+
+								quoteIdent(c.Name)+" "+c.Type+checkClause(c)+";")
+					}
 					continue
 				}
+				if f.PII && piiWrappable(f.Base) {
+					rp.VaultRoutes = append(rp.VaultRoutes, f.Name)
+				}
 				if old.Base != f.Base || old.PII != f.PII {
-					// A kind change is a rewrite — destructive, not additive.
+					// A kind change is a rewrite — destructive, not additive. (Enum-member
+					// evolution on select/states is a named D1 residue.)
 					rp.Destructive = append(rp.Destructive,
 						"ALTER TABLE "+rp.TableName+" ALTER COLUMN "+quoteIdent(f.Name)+
-							" TYPE "+colType(f.Base)+";")
+							" TYPE (rewrite of "+old.Base+"→"+f.Base+");")
 				}
 			}
 			removed := make([]string, 0)
@@ -335,9 +449,32 @@ func buildPlan(resources []resourceDecl, policies []policyArtifact, base map[str
 					rp.Retired = append(rp.Retired, name) // staged maintenance lane
 					continue
 				}
-				rp.Destructive = append(rp.Destructive,
-					"ALTER TABLE "+rp.TableName+" DROP COLUMN "+quoteIdent(name)+";")
+				oldF := sh.Fields[name]
+				oldCols := columnsFor(oldF)
+				if len(oldCols) == 0 {
+					// pii/hasMany removal drops vault/relation state, not a base column.
+					rp.Destructive = append(rp.Destructive,
+						"-- retire required: derived field "+quoteIdent(name)+" removal drops vault/relation state")
+					continue
+				}
+				for _, c := range oldCols {
+					rp.Destructive = append(rp.Destructive,
+						"ALTER TABLE "+rp.TableName+" DROP COLUMN "+quoteIdent(c.Name)+";")
+				}
 			}
+		}
+
+		// history tier (ADR-10 §4 item 2): regenerated idempotently from the current
+		// non-pii column set — appended AFTER the schema DDL, only when the schema pass
+		// produced no totality gap (a partial resource never reaches migration).
+		if len(rp.Partials) == 0 {
+			rp.Additive = append(rp.Additive, historyDDL(rp.TableName, nonPiiColumns(rd.Fields))...)
+		}
+
+		// The emitted-pass roster (ADR-10 §4): every resource emits exactly the ten.
+		rp.EmittedPasses = append([]string(nil), requiredPasses...)
+		if derivationTamper != nil {
+			derivationTamper(&rp)
 		}
 
 		applied = append(applied, rp.Additive...)
@@ -421,16 +558,13 @@ func loadDerivedShape(ctx context.Context, q catalog.Querier, name string, scope
 }
 
 // writeDerivedRows upserts the proposed derived_resource shape and inserts the
-// INSPECTABLE derived_artifact records (schema, policy, retire passes).
+// INSPECTABLE derived_artifact records — the ten ADR-10 §4 passes (rp.EmittedPasses),
+// plus the retire pass under intent=retire. Rolled back whole on any later rejection.
 func writeDerivedRows(ctx context.Context, q catalog.Querier, plan derivationPlan, scope Scope, admissionID int64) error {
 	for _, rp := range plan.Resources {
 		fieldsJSON, err := marshalShape(rp.NewShape)
 		if err != nil {
 			return err
-		}
-		var policyArg any
-		if rp.PolicyName != "" {
-			policyArg = rp.PolicyName
 		}
 		if _, err := q.Exec(ctx, `
 INSERT INTO derived_resource
@@ -440,18 +574,17 @@ ON CONFLICT (resource_name, scope_kind, scope_id) DO UPDATE
   SET def_hash=EXCLUDED.def_hash, fields=EXCLUDED.fields, policy_name=EXCLUDED.policy_name,
       table_name=EXCLUDED.table_name, admission_id=EXCLUDED.admission_id, updated_at=now()`,
 			rp.Decl.CatalogName, scope.Kind, scope.ID, rp.Decl.DefHash, fieldsJSON,
-			policyArg, rp.TableName, admissionID); err != nil {
+			rp.PolicyName, rp.TableName, admissionID); err != nil {
 			return err
 		}
 
-		schemaDetail, _ := json.Marshal(map[string]any{
-			"table": rp.TableName, "additive": rp.Additive})
-		if err := insertArtifact(ctx, q, admissionID, rp.Decl.CatalogName, scope, "schema", string(schemaDetail)); err != nil {
-			return err
-		}
-		if rp.PolicyName != "" {
-			polDetail, _ := json.Marshal(map[string]any{"policy": rp.PolicyName})
-			if err := insertArtifact(ctx, q, admissionID, rp.Decl.CatalogName, scope, "policy", string(polDetail)); err != nil {
+		// The ten ADR-10 §4 passes, each an INSPECTABLE derived_artifact row.
+		for _, pass := range rp.EmittedPasses {
+			detail, derr := passDetail(pass, rp, scope)
+			if derr != nil {
+				return derr
+			}
+			if err := insertArtifact(ctx, q, admissionID, rp.Decl.CatalogName, scope, pass, detail); err != nil {
 				return err
 			}
 		}
@@ -463,6 +596,210 @@ ON CONFLICT (resource_name, scope_kind, scope_id) DO UPDATE
 		}
 	}
 	return nil
+}
+
+// passDetail builds the JSON detail for one derivation pass over a resource plan.
+// The shapes are the contract D2 (rendering/masking runtime) consumes: the
+// components pass carries the form/table/detail AST; the vault + validator passes
+// carry the per-pii mask-rule table.
+func passDetail(pass string, rp resourcePlan, scope Scope) (string, error) {
+	fields := sortedFields(rp.NewShape)
+	var v any
+	switch pass {
+	case "schema":
+		v = map[string]any{"table": rp.TableName, "additive": rp.Additive, "vault_routes": nz(rp.VaultRoutes)}
+	case "history":
+		v = map[string]any{"table": rp.TableName + "_history", "function": rp.TableName + "_hist",
+			"trigger": rp.TableName + "_hist_trg", "excludes_pii": nz(rp.VaultRoutes)}
+	case "validator":
+		v = map[string]any{"resource": rp.Decl.CatalogName, "rules": fieldRules(fields)}
+	case "policy":
+		v = map[string]any{"policy": rp.PolicyName, "predicate": "org/role",
+			"injected_into": "read", "target_horizon": relationTargets(fields)}
+	case "vault":
+		v = map[string]any{"vault_table": "vault", "key_table": "vault_key", "routes": vaultRouteRows(fields)}
+	case "horizon":
+		v = map[string]any{"read_scope": map[string]any{"kind": scope.Kind, "id": scope.ID},
+			"invalidation_key": rp.Decl.CatalogName, "subscription_key": rp.Decl.CatalogName}
+	case "components":
+		v = map[string]any{"form": formComponent(rp, fields), "table": tableComponent(rp, fields),
+			"detail": detailComponent(rp, fields)}
+	case "openapi":
+		v = openapiFragment(rp, fields)
+	case "mcptools":
+		short := shortName(rp.Decl.CatalogName)
+		v = map[string]any{"tools": []map[string]any{
+			{"name": short + ".query", "resource": rp.Decl.CatalogName, "op": "read", "masks_pii": true},
+			{"name": short + ".mutate", "resource": rp.Decl.CatalogName, "op": "write", "policy": rp.PolicyName},
+		}, "served_by": "resource.query/mutate"}
+	case "catalog":
+		v = map[string]any{"def_hash": rp.Decl.DefHash, "resource": rp.Decl.CatalogName,
+			"field_count": len(fields), "passes": requiredPasses}
+	default:
+		v = map[string]any{}
+	}
+	b, err := json.Marshal(v)
+	return string(b), err
+}
+
+// sortedFields returns the resource's fields sorted by name (deterministic detail).
+func sortedFields(shape map[string]fieldSpec) []fieldSpec {
+	out := make([]fieldSpec, 0, len(shape))
+	for name, f := range shape {
+		f.Name = name
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// fieldRules is the boundary-validator (R.parse) rule table — one rule per field,
+// from the closed bundle. pii fields also carry their mask leaf.
+func fieldRules(fields []fieldSpec) []map[string]any {
+	out := make([]map[string]any, 0, len(fields))
+	for _, f := range fields {
+		b := fieldBundles[f.Base]
+		r := map[string]any{"name": f.Name, "base": f.Base, "pii": f.PII, "validator": b.Validator}
+		if len(f.Params) > 0 {
+			r["params"] = f.Params
+		}
+		if f.PII {
+			r["mask_leaf"] = b.MaskLeaf
+		}
+		if b.Ordered {
+			r["ordered"] = true
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// vaultRouteRows is the pii → vault mask-rule table (ADR-10 §4 item 5): the finite
+// set of vault-routed fields, each with the §7 leaf its value is masked at.
+func vaultRouteRows(fields []fieldSpec) []map[string]any {
+	out := []map[string]any{}
+	for _, f := range fields {
+		if f.PII && piiWrappable(f.Base) {
+			out = append(out, map[string]any{"field": f.Name, "base": f.Base,
+				"mask_leaf": maskLeafFor(f.Base), "excluded_from_history": true})
+		}
+	}
+	return out
+}
+
+// relationTargets records the target-horizon predicate note per relation field.
+func relationTargets(fields []fieldSpec) []map[string]any {
+	out := []map[string]any{}
+	for _, f := range fields {
+		if f.Base == "relation" {
+			out = append(out, map[string]any{"field": f.Name, "kind": relKind(f),
+				"target": relTarget(f), "predicate": "target.orgScoped"})
+		}
+	}
+	return out
+}
+
+// formComponent / tableComponent / detailComponent are the tier-2 derived surfaces
+// (ADR-10 §7), composed from tier-1 vocabulary records (cek.UITier1) chosen by the
+// field's semantic bundle. Kept as DATA (an AST record); D2 renders it. pii cells are
+// marked masked at their §7 leaf.
+func formComponent(rp resourcePlan, fields []fieldSpec) map[string]any {
+	kids := make([]map[string]any, 0, len(fields))
+	for _, f := range fields {
+		b := fieldBundles[f.Base]
+		props := map[string]any{"name": f.Name, "control": b.Input, "type": f.Base}
+		if f.PII {
+			props["masked"] = true
+			props["mask_leaf"] = b.MaskLeaf
+		}
+		if len(f.Params) > 0 {
+			props["options"] = f.Params
+		}
+		kids = append(kids, map[string]any{"component": b.Input, "props": props})
+	}
+	return map[string]any{"component": "form", "resource": rp.Decl.CatalogName,
+		"policy": rp.PolicyName, "children": kids}
+}
+
+func tableComponent(rp resourcePlan, fields []fieldSpec) map[string]any {
+	cols := make([]map[string]any, 0, len(fields))
+	for _, f := range fields {
+		b := fieldBundles[f.Base]
+		c := map[string]any{"name": f.Name, "render": b.Render}
+		if f.PII {
+			c["masked"] = true
+			c["mask_leaf"] = b.MaskLeaf
+		}
+		if b.Ordered {
+			c["board"] = true // states drives board/badge
+		}
+		cols = append(cols, c)
+	}
+	return map[string]any{"component": "table", "resource": rp.Decl.CatalogName, "columns": cols}
+}
+
+func detailComponent(rp resourcePlan, fields []fieldSpec) map[string]any {
+	rows := make([]map[string]any, 0, len(fields))
+	for _, f := range fields {
+		b := fieldBundles[f.Base]
+		r := map[string]any{"label": f.Name, "render": b.Render}
+		if f.PII {
+			r["masked"] = true
+			r["mask_leaf"] = b.MaskLeaf
+		}
+		rows = append(rows, r)
+	}
+	return map[string]any{"component": "card", "resource": rp.Decl.CatalogName, "rows": rows}
+}
+
+// openapiFragment is the REST + OpenAPI artifact (ADR-10 §4 item 8): a minimal 3.1
+// fragment served by the existing kernel/MCP read/mutate path (no new HTTP routes).
+func openapiFragment(rp resourcePlan, fields []fieldSpec) map[string]any {
+	props := map[string]any{"id": map[string]any{"type": "integer"}}
+	for _, f := range fields {
+		if f.PII {
+			props[f.Name] = map[string]any{"type": "string", "x-masked": true}
+			continue
+		}
+		props[f.Name] = map[string]any{"type": openapiType(f.Base)}
+	}
+	path := "/" + rp.Decl.CatalogName
+	return map[string]any{
+		"openapi": "3.1.0",
+		"paths": map[string]any{
+			path:            map[string]any{"get": map[string]any{"summary": "list"}, "post": map[string]any{"summary": "create"}},
+			path + "/{id}":  map[string]any{"get": map[string]any{"summary": "read"}, "put": map[string]any{"summary": "update"}, "delete": map[string]any{"summary": "delete"}},
+		},
+		"components": map[string]any{"schemas": map[string]any{shortName(rp.Decl.CatalogName): map[string]any{"type": "object", "properties": props}}},
+		"served_by": "kernel/MCP resource.query/mutate",
+	}
+}
+
+func openapiType(base string) string {
+	switch base {
+	case "number", "money":
+		return "number"
+	case "boolean":
+		return "boolean"
+	default:
+		return "string"
+	}
+}
+
+// shortName is the last path segment of a catalog name (e.g. app/crm/Contact → Contact).
+func shortName(catalog string) string {
+	if i := strings.LastIndexByte(catalog, '/'); i >= 0 {
+		return catalog[i+1:]
+	}
+	return catalog
+}
+
+// nz returns a non-nil slice so JSON renders [] not null (stable detail).
+func nz(xs []string) []string {
+	if xs == nil {
+		return []string{}
+	}
+	return xs
 }
 
 func insertArtifact(ctx context.Context, q catalog.Querier, admissionID int64, name string, scope Scope, pass, detail string) error {
@@ -478,7 +815,7 @@ VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
 func marshalShape(shape map[string]fieldSpec) (string, error) {
 	out := map[string]fieldSpec{}
 	for k, v := range shape {
-		out[k] = fieldSpec{Base: v.Base, PII: v.PII}
+		out[k] = fieldSpec{Base: v.Base, PII: v.PII, Params: v.Params}
 	}
 	b, err := json.Marshal(out)
 	if err != nil {

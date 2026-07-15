@@ -67,6 +67,8 @@ func main() {
 		os.Exit(cmdGitSubmit(args))
 	case "git-identity":
 		err = cmdGitIdentity(args)
+	case "shred":
+		err = cmdShred(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -106,6 +108,8 @@ func usage() {
         [--base name=hash ...]
   regel git-identity --email E --actor a1  dev helper: bind a git identity to a principal
         [--scope-id S] [--kind engineer] [--scope-kind N] [--revoke]
+  regel shred --resource NAME --subject ID  crypto-shred a subject's pii vault key
+        [--scope S] [--by principal]        (ciphertext becomes undecryptable)
 
   DSN via REGEL_PG_DSN (default `+defaultDSN+`)
 `)
@@ -731,6 +735,52 @@ ON CONFLICT (email) DO UPDATE SET actor_kind=EXCLUDED.actor_kind, actor_id=EXCLU
 		return err
 	}
 	fmt.Printf("git-identity: bound %s → %s:%s @scope %d:%s\n", *email, *kind, *actor, *scopeKind, *scopeID)
+	return nil
+}
+
+// --- shred (ADR-10 §4 item 5 crypto-shred) -----------------------------------
+
+// cmdShred crypto-shreds a data subject's pii vault key: it resolves the resource's
+// derived table (the vault key), deletes the subject's key row, and writes an
+// attestation in one transaction. After it commits the subject's ciphertext is
+// permanently undecryptable and reads return the mask token.
+func cmdShred(args []string) error {
+	fs := flag.NewFlagSet("shred", flag.ExitOnError)
+	resource := fs.String("resource", "", "derived resource name (e.g. app/crm/Contact)")
+	subject := fs.String("subject", "", "the data subject's row id")
+	scope := fs.String("scope", "product", "the resource scope (product|org.ID|...)")
+	by := fs.String("by", "operator:cli", "the shredding principal")
+	_ = fs.Parse(permute(args, map[string]bool{"resource": true, "subject": true, "scope": true, "by": true}))
+	if *resource == "" || *subject == "" {
+		return fmt.Errorf("shred: need --resource NAME and --subject ID")
+	}
+	sk, sid := scopeParts(*scope)
+
+	ctx, cancel := rootCtx()
+	defer cancel()
+	conn, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// The vault keys on the derived physical table name (the stable per-resource key).
+	var table string
+	ok, err := conn.QueryRow(ctx,
+		`SELECT table_name FROM derived_resource WHERE resource_name=$1 AND scope_kind=$2 AND scope_id=$3`,
+		[]any{*resource, sk, sid}, &table)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("shred: no derived resource %q at scope %s", *resource, *scope)
+	}
+	attID, n, err := admission.CryptoShred(ctx, conn, table, *subject, *by)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("shred: %s subject %s — %d key(s) destroyed, attestation #%d (ciphertext now undecryptable)\n",
+		*resource, *subject, n, attID)
 	return nil
 }
 

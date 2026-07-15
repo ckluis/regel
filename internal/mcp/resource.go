@@ -93,7 +93,9 @@ func queryResource(ctx context.Context, conn *pgwire.Conn, chain catalog.Chain, 
 	if err != nil || !ok {
 		return nil, false, err
 	}
-	cols := sortedFieldNames(di.Fields)
+	// pii fields are vault-routed (BUILD-D): they have NO base column, so they are
+	// never SELECTed — they materialize as the mask token from the field map alone.
+	cols := nonPiiFieldNames(di.Fields)
 	selCols := []string{"id"}
 	selCols = append(selCols, cols...)
 	quoted := make([]string, len(selCols))
@@ -132,10 +134,11 @@ func queryResource(ctx context.Context, conn *pgwire.Conn, chain catalog.Chain, 
 		}
 	}
 	sort.Strings(masked)
-	maskedSet := map[string]bool{}
-	for _, m := range masked {
-		maskedSet[m] = true
+	type pending struct {
+		row map[string]any
+		id  string
 	}
+	var pend []pending
 	for rows.Next() {
 		dest := make([]any, len(selCols))
 		holders := make([]string, len(selCols))
@@ -148,16 +151,29 @@ func queryResource(ctx context.Context, conn *pgwire.Conn, chain catalog.Chain, 
 		}
 		row := map[string]any{}
 		for i, c := range selCols {
-			if maskedSet[c] && !maskLeakForRedPath {
-				row[c] = maskToken // PII masked ALWAYS — no plaintext leaves the plane
-			} else {
-				row[c] = holders[i]
-			}
+			row[c] = holders[i] // selCols are id + non-pii base columns only
 		}
-		out = append(out, row)
+		pend = append(pend, pending{row: row, id: holders[0]})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, err
+	}
+	// pii fields are vault-routed (BUILD-D): they have no base column. They
+	// materialize as the mask token by default; the load-bearing leak demo reveals the
+	// vault ciphertext to prove masking is the control (never in normal operation).
+	for _, p := range pend {
+		for _, m := range masked {
+			if maskLeakForRedPath {
+				pt, _, verr := admission.VaultReveal(ctx, conn, di.TableName, p.id, m)
+				if verr != nil {
+					return nil, false, verr
+				}
+				p.row[m] = pt
+			} else {
+				p.row[m] = maskToken // PII masked ALWAYS — no plaintext leaves the plane
+			}
+		}
+		out = append(out, p.row)
 	}
 	return map[string]any{"resource": makeQName(resource0(resource), di.ScopeKind, di.ScopeID),
 		"rows": out, "masked_fields": masked}, true, nil
@@ -193,18 +209,23 @@ func mutateResource(ctx context.Context, conn *pgwire.Conn, p admission.Principa
 	if err := ensureRowVersion(ctx, conn, di.TableName); err != nil {
 		return nil, err
 	}
-	cols := sortedFieldNames(di.Fields)
-	allowed := map[string]bool{}
-	for _, c := range cols {
-		allowed[c] = true
-	}
-	// Only declared columns may be written (identifier allow-list).
+	// pii fields (BUILD-D) are vault-routed: their values NEVER become a base column —
+	// they are sealed into the vault keyed by the row id after the base write.
+	cols := nonPiiFieldNames(di.Fields)
 	var setCols []string
 	var setVals []any
 	for _, c := range cols {
 		if v, present := values[c]; present {
 			setCols = append(setCols, c)
 			setVals = append(setVals, fmt.Sprintf("%v", v))
+		}
+	}
+	piiWrites := map[string]string{}
+	for name, f := range di.Fields {
+		if f.PII {
+			if v, present := values[name]; present {
+				piiWrites[name] = fmt.Sprintf("%v", v)
+			}
 		}
 	}
 
@@ -228,6 +249,9 @@ func mutateResource(ctx context.Context, conn *pgwire.Conn, p admission.Principa
 		var newID int64
 		var ver int
 		if _, err := conn.QueryRow(ctx, q, args, &newID, &ver); err != nil {
+			return nil, err
+		}
+		if err := vaultWrites(ctx, conn, di.TableName, newID, piiWrites); err != nil {
 			return nil, err
 		}
 		return map[string]any{"ok": true, "id": newID, "rowVersion": ver}, nil
@@ -256,6 +280,9 @@ func mutateResource(ctx context.Context, conn *pgwire.Conn, p admission.Principa
 		if !found {
 			return map[string]any{"ok": false, "error": "VERSION_CONFLICT"}, nil
 		}
+		if err := vaultWrites(ctx, conn, di.TableName, id, piiWrites); err != nil {
+			return nil, err
+		}
 		return map[string]any{"ok": true, "id": id, "rowVersion": ver}, nil
 
 	default:
@@ -278,6 +305,30 @@ func sortedFieldNames(fields map[string]derivedField) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// nonPiiFieldNames returns the declared fields that have a physical base column —
+// every field EXCEPT the pii ones (which are vault-routed, BUILD-D).
+func nonPiiFieldNames(fields map[string]derivedField) []string {
+	out := make([]string, 0, len(fields))
+	for k, f := range fields {
+		if !f.PII {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// vaultWrites seals each pii value into the vault keyed by the row id (subject) —
+// the derived write path's pii routing (ADR-10 §4 item 5).
+func vaultWrites(ctx context.Context, conn *pgwire.Conn, table string, id int64, writes map[string]string) error {
+	for field, pt := range writes {
+		if err := admission.VaultPut(ctx, conn, table, fmt.Sprintf("%d", id), field, pt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // quoteIdent double-quotes a SQL identifier (used only on the declared-field

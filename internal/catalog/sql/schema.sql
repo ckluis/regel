@@ -157,12 +157,66 @@ CREATE TABLE IF NOT EXISTS derived_artifact (
   resource_name text NOT NULL,
   scope_kind    smallint NOT NULL CHECK (scope_kind BETWEEN 0 AND 4),
   scope_id      text NOT NULL DEFAULT '',
-  pass          text NOT NULL CHECK (pass IN ('schema','policy','retire','validator')),
+  -- BUILD-D (ADR-10 §4): the ten-pass derivation roster. The Stage-C set
+  -- (schema/policy/retire/validator) is extended with the seven remaining ADR-10
+  -- §4 passes (history, vault, horizon, components, openapi, mcptools, catalog).
+  pass          text NOT NULL CHECK (pass IN
+                  ('schema','policy','retire','validator',
+                   'history','vault','horizon','components','openapi','mcptools','catalog')),
   detail        jsonb NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS derived_artifact_resource_idx
   ON derived_artifact (resource_name, scope_kind, scope_id);
+-- Bring a pre-existing derived_artifact CHECK up to the BUILD-D pass roster.
+DO $$
+DECLARE cn text;
+BEGIN
+  SELECT c.conname INTO cn FROM pg_constraint c
+  WHERE c.conrelid = 'derived_artifact'::regclass AND c.contype = 'c'
+    AND pg_get_constraintdef(c.oid) LIKE '%pass%'
+    AND pg_get_constraintdef(c.oid) NOT LIKE '%history%';
+  IF cn IS NOT NULL THEN
+    EXECUTE 'ALTER TABLE derived_artifact DROP CONSTRAINT ' || quote_ident(cn);
+    ALTER TABLE derived_artifact ADD CONSTRAINT derived_artifact_pass_check CHECK (pass IN
+      ('schema','policy','retire','validator',
+       'history','vault','horizon','components','openapi','mcptools','catalog'));
+  END IF;
+END $$;
+
+-- (8b) Vault substrate (BUILD-D, ADR-10 §4 item 5 / §5 pii modifier). A pii field's
+-- value NEVER lands in the derived base table nor its history — it is AES-256-GCM
+-- sealed under a PER-SUBJECT key token and stored ciphertext-only here, keyed by
+-- (resource, subject_id[, field]). Shared tables (not one per field): the derivation
+-- emits a per-resource `vault` ROUTE artifact naming which fields route here.
+CREATE TABLE IF NOT EXISTS vault (
+  resource   text NOT NULL,
+  subject_id text NOT NULL,          -- the base row's id, as text
+  field      text NOT NULL,
+  ciphertext text NOT NULL,          -- hex(nonce ‖ AES-256-GCM ciphertext)
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (resource, subject_id, field)
+);
+-- Per-subject key row: the opaque key_token feeds the AEAD KDF (std/crypto §3). The
+-- key material is never a dialect value; deleting this row is CRYPTO-SHRED — the
+-- ciphertext above becomes permanently undecryptable (the subject's key is gone).
+CREATE TABLE IF NOT EXISTS vault_key (
+  resource   text NOT NULL,
+  subject_id text NOT NULL,
+  key_token  text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (resource, subject_id)
+);
+-- Crypto-shred audit spine: one append-only row per shredded subject (ADR-10 §4
+-- item 5 "writes an attestation row").
+CREATE TABLE IF NOT EXISTS shred_attestation (
+  id          bigserial PRIMARY KEY,
+  resource    text NOT NULL,
+  subject_id  text NOT NULL,
+  keys_shredded int NOT NULL,
+  shredded_by text NOT NULL,
+  shredded_at timestamptz NOT NULL DEFAULT now()
+);
 
 -- ADR-05 §2 continuation store.
 CREATE TABLE IF NOT EXISTS continuation (

@@ -204,9 +204,41 @@ func verifyV6(plan derivationPlan) []Diagnostic {
 				Subject:         rp.Decl.CatalogName,
 				Loc:             Loc{DefHash: rp.Decl.DefHash},
 				Message: fmt.Sprintf("derivation is partial over attribute %q: a pii field of this base kind "+
-					"has no masking rule derivable at this epoch", attr),
-				Fix: "use a maskable pii base (text/email/phone) or drop the pii modifier",
+					"has no masking rule / vault route derivable at this epoch (a composite address or "+
+					"relation edge is not a single vaultable value)", attr),
+				Fix: "pii a scalar value-leaf base (text/longtext/number/money/boolean/date/timestamp/email/phone/url/select/states), or drop the pii modifier",
 			})
+		}
+		// KT-A3 internal arm: every derivable pii field MUST carry a vault route AND a
+		// mask rule; a pii field whose route was suppressed ⇒ DERIVE_PARTIAL (the row
+		// never exists). Under normal derivation this always holds — the parity red-path
+		// suppresses a route to prove the control load-bearing.
+		routed := setOf(rp.VaultRoutes)
+		for _, f := range sortedFields(rp.NewShape) {
+			if f.PII && piiWrappable(f.Base) && !routed[f.Name] {
+				diags = append(diags, Diagnostic{
+					StageOrVerifier: "V6", Code: "DERIVE_PARTIAL", Severity: "error",
+					Subject: rp.Decl.CatalogName, Loc: Loc{DefHash: rp.Decl.DefHash},
+					Message: fmt.Sprintf("derivation is partial over pii attribute %q: its form/table derivation "+
+						"lacks a vault route (KT-A3) — the value has no sealed home", f.Name),
+					Fix: "derive a vault route for every pii field (the value must never reach a base or history column)",
+				})
+			}
+		}
+		// Parity: the emitted derived-artifact passes must equal the required ten
+		// (ADR-10 §4). A suppressed pass ⇒ the declaration ≢ its derived artifacts.
+		emitted := setOf(rp.EmittedPasses)
+		for _, want := range requiredPasses {
+			if !emitted[want] {
+				diags = append(diags, Diagnostic{
+					StageOrVerifier: "V6", Code: "DERIVE_PARITY", Severity: "error",
+					Subject: rp.Decl.CatalogName, Loc: Loc{DefHash: rp.Decl.DefHash},
+					Message: fmt.Sprintf("derivation parity failure: the declared resource emits %d/%d artifacts — "+
+						"pass %q is missing, so the declaration is not equal to its derived artifacts",
+						len(rp.EmittedPasses), len(requiredPasses), want),
+					Fix: "every resource must emit exactly the ten ADR-10 §4 derivation passes",
+				})
+			}
 		}
 	}
 	// MUTANT V6_ALLOW_DESTRUCTIVE (ADR-07 §5 dir-ii): skipping the destructive-DDL

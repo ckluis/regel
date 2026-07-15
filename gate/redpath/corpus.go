@@ -201,10 +201,13 @@ export const Deal = resource({
 		// prelude admits Deal{title,owner}; the main submission drops owner.
 		Name: "v6-ddl-destructive", Component: "V6", ThreatClass: "ddl.destructive",
 		Module: "app/dd", ExpectCode: "DDL_DESTRUCTIVE", BaseName: "Deal",
+		// owner is a plain (non-pii) column: BUILD-D routes pii values to the vault, so
+		// a pii field has no base column to DROP — the destructive fixture drops a real
+		// column to derive the inline DROP COLUMN V6 must reject.
 		Prelude: `import { resource } from "std/resource";
 import { orgScoped } from "std/policy";
 export const Deal = resource({
-  fields: { title: "text", owner: "pii:text" },
+  fields: { title: "text", owner: "text" },
   policy: orgScoped,
 });
 `,

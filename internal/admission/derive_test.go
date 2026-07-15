@@ -153,8 +153,9 @@ func TestV6DdlDestructiveZeroTrace(t *testing.T) {
 	ctx := ctxT(t)
 
 	// Admit Deal{title, owner}, then re-admit Deal{title} (owner removed) with no
-	// retire intent: the schema pass derives a DROP COLUMN, which V6 rejects.
-	v1, err := admit(ctx, w.conn, dealSrc(`title: "text", owner: "pii:text"`), "app/dd", engineer("dev"), nil)
+	// retire intent: the schema pass derives a DROP COLUMN, which V6 rejects. owner is
+	// a plain column (BUILD-D routes pii to the vault — a pii field has no base column).
+	v1, err := admit(ctx, w.conn, dealSrc(`title: "text", owner: "text"`), "app/dd", engineer("dev"), nil)
 	if err != nil || v1.Outcome != OutcomeAdmitted {
 		t.Fatalf("first admit: %v / %q (%+v)", err, v1.Outcome, v1.Diagnostics)
 	}
@@ -196,7 +197,7 @@ func TestV6AdditiveFieldAddAdmits(t *testing.T) {
 	}
 	head := dealHead(t, w, "app/add/Deal")
 
-	v2, err := admit(ctx, w.conn, dealSrc(`title: "text", owner: "pii:text"`), "app/add", engineer("dev"), func(p *Patch) {
+	v2, err := admit(ctx, w.conn, dealSrc(`title: "text", owner: "text"`), "app/add", engineer("dev"), func(p *Patch) {
 		p.BaseHashes = map[string]string{"app/add/Deal": head}
 	})
 	if err != nil {
@@ -268,9 +269,10 @@ func TestDerivationDeterministicPure(t *testing.T) {
 		return []resourceDecl{{
 			CatalogName: "app/x/Deal",
 			DefHash:     "r1_deal",
-			// deliberately unsorted on input — buildPlan must sort.
+			// deliberately unsorted on input — buildPlan must sort. All non-pii, since a
+			// pii field (BUILD-D) routes to the vault and derives no additive column.
 			Fields: []fieldSpec{
-				{Name: "owner", Base: "text", PII: true},
+				{Name: "zebra", Base: "text"},
 				{Name: "title", Base: "text"},
 				{Name: "amount", Base: "number"},
 			},
@@ -285,10 +287,10 @@ func TestDerivationDeterministicPure(t *testing.T) {
 		t.Fatalf("plan not deterministic:\n%+v\n%+v", p1, p2)
 	}
 	// The additive ADD COLUMNs come out in sorted field order, every time.
-	if !strings.Contains(p1.MigrationSQL, "amount") || !strings.Contains(p1.MigrationSQL, "owner") {
+	if !strings.Contains(p1.MigrationSQL, "amount") || !strings.Contains(p1.MigrationSQL, "zebra") {
 		t.Fatalf("expected additive columns, got %q", p1.MigrationSQL)
 	}
-	if strings.Index(p1.MigrationSQL, "amount") > strings.Index(p1.MigrationSQL, "owner") {
+	if strings.Index(p1.MigrationSQL, "amount") > strings.Index(p1.MigrationSQL, "zebra") {
 		t.Fatalf("additive DDL not in sorted order: %q", p1.MigrationSQL)
 	}
 }

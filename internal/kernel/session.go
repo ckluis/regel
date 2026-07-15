@@ -481,10 +481,11 @@ VALUES ($1::uuid,'session',$2,$3,$4,('\x'||$5)::bytea,
 }
 
 // parseView splits a /ui view path into (resource, kind, rowId). Forms:
-//   <resource>/table                — horizon list
-//   <resource>/detail/<id>          — point read
-//   <resource>/form/<id>            — edit form
-//   <resource>/form                 — create form (no row)
+//
+//	<resource>/table                — horizon list
+//	<resource>/detail/<id>          — point read
+//	<resource>/form/<id>            — edit form
+//	<resource>/form                 — create form (no row)
 func parseView(view string) (resource, kind, rowID string, err error) {
 	view = strings.Trim(view, "/")
 	parts := strings.Split(view, "/")

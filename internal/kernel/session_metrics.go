@@ -31,7 +31,7 @@ func sseMetricsSnapshot() SSEMetrics {
 	}
 }
 
-func incResyncs()             { atomic.AddInt64(&mResyncsTotal, 1) }
-func incFramesSent()          { atomic.AddInt64(&mFramesSent, 1) }
-func addInvalDepth(n int64)   { atomic.AddInt64(&mInvalidationDepth, n) }
-func setFanoutLag(ms int64)   { atomic.StoreInt64(&mFanoutLagMS, ms) }
+func incResyncs()           { atomic.AddInt64(&mResyncsTotal, 1) }
+func incFramesSent()        { atomic.AddInt64(&mFramesSent, 1) }
+func addInvalDepth(n int64) { atomic.AddInt64(&mInvalidationDepth, n) }
+func setFanoutLag(ms int64) { atomic.StoreInt64(&mFanoutLagMS, ms) }

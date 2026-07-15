@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"regel.dev/regel/internal/admission"
 	"regel.dev/regel/internal/cek"
@@ -32,11 +33,12 @@ type sessionMsg struct {
 	Value  string
 }
 
-// stepFaultHook is a TEST-ONLY seam (default nil): a non-nil hook run at the top of
-// the session resume closure that may return an error to simulate a kernel death
-// between claim and checkpoint (the whole SERIALIZABLE step then rolls back — no
-// mutation, no frame, no step_seq advance commits).
-var stepFaultHook func(sessionID string) error
+// stepFaultHook is a TEST-ONLY seam (default nil): a non-nil hook run AFTER the
+// mutation inside the session step. It may poison the open transaction and return
+// an error to simulate a kernel death between claim and checkpoint — the whole
+// SERIALIZABLE step then rolls back (mutation included), no frame, no step_seq
+// advance commits, and the next event resumes from the prior checkpoint.
+var stepFaultHook func(ctx context.Context, conn *pgwire.Conn, sessionID string) error
 
 // armSession flips a message-parked session (sleeping/ready at step_seq=atSeq) to
 // 'ready' so ClaimAndStep can claim it — the session analogue of a channel wake.
@@ -73,28 +75,38 @@ func (s *Server) driveSession(ctx context.Context, sessionID string, atSeq int64
 	}
 
 	var frame *ui.Frame
+	var resumeErr error
 	resume := func(state *cek.State, _ cek.Delivery, _ cek.Principal) cek.Outcome {
-		if stepFaultHook != nil {
-			if e := stepFaultHook(sessionID); e != nil {
-				return cek.Outcome{Kind: cek.OutError, Err: e}
-			}
-		}
 		out, f, e := s.runSessionStep(ctx, conn, sessionID, atSeq, state, msg)
 		if e != nil {
+			resumeErr = e
 			return cek.Outcome{Kind: cek.OutError, Err: e}
 		}
 		frame = f
 		return out
 	}
 
+	// The session step is one SERIALIZABLE transaction (ClaimAndStep). A 40001
+	// raised INSIDE the resume closure aborts the txn and surfaces to us as a masked
+	// 25P02 (the checkpoint's parkFailed writes hit the aborted txn), which
+	// cfr.RetrySerializable does not recognize — so we own the retry here, keying on
+	// the serialization class OR the resume's captured 40001. A rolled-back step
+	// reverts the row to its armed (ready, step_seq=atSeq) state, so the retry re-claims.
 	var claimed bool
-	stepErr := cfr.RetrySerializable(ctx, "session-step", func(int) error {
-		frame = nil
-		o, c, e := cfr.ClaimAndStep(ctx, conn, s.stepEnv(30), s.interp, sessionID, atSeq, resume)
+	var stepErr error
+	for attempt := 0; attempt < 12; attempt++ {
+		frame, resumeErr = nil, nil
+		_, c, e := cfr.ClaimAndStep(ctx, conn, s.stepEnv(30), s.interp, sessionID, atSeq, resume)
 		claimed = c
-		_ = o
-		return e
-	})
+		stepErr = e
+		if e == nil {
+			break
+		}
+		if !sessionRetryable(e) && !sessionRetryable(resumeErr) {
+			return nil, claimed, e
+		}
+		sessionBackoff(ctx, attempt)
+	}
 	if stepErr != nil {
 		return nil, claimed, stepErr
 	}
@@ -125,6 +137,11 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 	}
 	if err := s.applyMsg(ctx, conn, vm, sess, msg); err != nil {
 		return cek.Outcome{}, nil, err
+	}
+	if stepFaultHook != nil {
+		if e := stepFaultHook(ctx, conn, sessionID); e != nil {
+			return cek.Outcome{}, nil, e // simulated death: the whole step rolls back
+		}
 	}
 
 	_, next, subs, _, rows, err := renderView(ctx, conn, vm, sess, mc)
@@ -160,8 +177,14 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 	// mount and advanced ONLY by submitForm (success ⇒ base+1, conflict ⇒ reloaded
 	// current), never by an ordinary re-render, so optimistic concurrency holds.
 
-	if err := writeSubscriptions(ctx, conn, sessionID, subs); err != nil {
-		return cek.Outcome{}, nil, err
+	// On an INVALIDATION the mount expression is unchanged, so the read-set — and
+	// thus the subscription set — is identical to what is already stored; rewriting
+	// it would only add SSI write-contention on the shared (resource,key) index under
+	// a fan-out storm. Rewrite subscriptions only on an EVENT (which may navigate).
+	if msg.Kind != "invalidate" {
+		if err := writeSubscriptions(ctx, conn, sessionID, subs); err != nil {
+			return cek.Outcome{}, nil, err
+		}
 	}
 	if err := s.checkSizeCap(sess); err != nil {
 		return cek.Outcome{}, nil, err
@@ -173,6 +196,25 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 		Wake:  &cek.Wake{Kind: cek.WakeMessage, Channel: sessionID},
 	}
 	return out, frame, nil
+}
+
+// sessionRetryable reports whether err is a serialization-class abort worth
+// retrying the whole session step: 40001 (serialization), 40P01 (deadlock), or
+// 25P02 (a transaction aborted by an earlier — masked — 40001 inside the resume).
+func sessionRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	return pgwire.IsCode(err, "40001") || pgwire.IsCode(err, "40P01") || pgwire.IsCode(err, "25P02")
+}
+
+// sessionBackoff sleeps a small jittered backoff between step retries.
+func sessionBackoff(ctx context.Context, attempt int) {
+	d := time.Duration(2<<uint(min(attempt, 6))) * time.Millisecond
+	select {
+	case <-ctx.Done():
+	case <-time.After(d):
+	}
 }
 
 // --- message application (events + mutations) ---------------------------------

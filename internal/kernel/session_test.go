@@ -75,14 +75,14 @@ func tblSlug(name string) string {
 // --- browser-shaped client harness -------------------------------------------
 
 type harness struct {
-	t        *testing.T
-	base     string
-	sid      string
-	cursor   uint64
-	slots    map[string]string
-	digest   ui.Digest
-	resyncs  int
-	corrupt  string // slotId to corrupt on next applied frame ("" = none)
+	t       *testing.T
+	base    string
+	sid     string
+	cursor  uint64
+	slots   map[string]string
+	digest  ui.Digest
+	resyncs int
+	corrupt string // slotId to corrupt on next applied frame ("" = none)
 }
 
 var slotRE = regexp.MustCompile(`data-slot="([^"]+)"[^>]*>([^<]*)<`)

@@ -181,4 +181,3 @@ func (e *procEnv) stepOnceProc(t *testing.T, bin, id string, extraEnv []string) 
 	}
 	return string(out)
 }
-

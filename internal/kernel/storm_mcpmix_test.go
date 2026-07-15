@@ -24,7 +24,7 @@ import (
 // hammers the SAME PG through the real MCP door (ServeStdio, one gate) with:
 //   - patch.submit {commit:true}  — the real admission gate transaction,
 //   - patch.submit {commit:false} — the rolled-back dry-run,
-//   both of which pass the pre-BEGIN S=2 admission semaphore (excess ⇒ ADMISSION_BUSY),
+//     both of which pass the pre-BEGIN S=2 admission semaphore (excess ⇒ ADMISSION_BUSY),
 //   - resource.mutate — a derived-row write that does NOT take the semaphore, so it is
 //     un-shed concurrent write pressure racing the reactor's step transactions.
 //

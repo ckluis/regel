@@ -467,6 +467,15 @@ func buildPlan(resources []resourceDecl, policies []policyArtifact, base map[str
 			}
 		}
 
+		// row_version tier (BUILD-D D3, ADR-11 §7): every derived base table carries an
+		// optimistic-concurrency counter the form mutation guards `WHERE row_version=:base`
+		// and increments on write. Additive + idempotent, so it upgrades existing tables
+		// and never rebuilds. Emitted before history so a new resource has it from row one.
+		if len(rp.Partials) == 0 {
+			rp.Additive = append(rp.Additive,
+				"ALTER TABLE "+rp.TableName+" ADD COLUMN IF NOT EXISTS row_version bigint NOT NULL DEFAULT 0;")
+		}
+
 		// history tier (ADR-10 §4 item 2): regenerated idempotently from the current
 		// non-pii column set — appended AFTER the schema DDL, only when the schema pass
 		// produced no totality gap (a partial resource never reaches migration).

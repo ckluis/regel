@@ -290,6 +290,21 @@ BEGIN
   END IF;
 END $$;
 
+-- (8d) Reactive-layer session subscriptions (BUILD-D D3, ADR-11 §5/§6). A UI
+-- session is a continuation row kind='session'; its subscription set — the
+-- (resource, key) dependencies its last render read through erf.read/list — lives
+-- here, maintained by the render/checkpoint transaction. key='rowId:<id>' for a
+-- point read, key='horizon:<scope>' for a list read (the same horizon the policy
+-- filter uses, so invalidation respects policy for free). ON DELETE CASCADE so the
+-- idle-TTL sweep (delete the session row) drops its subscriptions atomically.
+CREATE TABLE IF NOT EXISTS subscription (
+  session_id uuid NOT NULL REFERENCES continuation(id) ON DELETE CASCADE,
+  resource   text NOT NULL,
+  key        text NOT NULL,
+  PRIMARY KEY (session_id, resource, key)
+);
+CREATE INDEX IF NOT EXISTS subscription_dep_idx ON subscription (resource, key);
+
 -- ADR-05 §5 BUILD-B: channel messages. A receive claims the oldest undelivered
 -- message on its channel; a send claims the oldest matching sleeping receiver.
 CREATE TABLE IF NOT EXISTS channel_message (

@@ -157,30 +157,36 @@ CREATE TABLE IF NOT EXISTS derived_artifact (
   resource_name text NOT NULL,
   scope_kind    smallint NOT NULL CHECK (scope_kind BETWEEN 0 AND 4),
   scope_id      text NOT NULL DEFAULT '',
-  -- BUILD-D (ADR-10 §4): the ten-pass derivation roster. The Stage-C set
-  -- (schema/policy/retire/validator) is extended with the seven remaining ADR-10
-  -- §4 passes (history, vault, horizon, components, openapi, mcptools, catalog).
+  -- BUILD-D (ADR-10 §4): the ten-pass derivation roster + the D2 render 'template'
+  -- pass (ADR-11 §1 static/dynamic split, an ADR-07 step-5a derivation). The
+  -- Stage-C set (schema/policy/retire/validator) is extended with the seven
+  -- remaining ADR-10 §4 passes (history, vault, horizon, components, openapi,
+  -- mcptools, catalog) and the ADR-11 render 'template'.
   pass          text NOT NULL CHECK (pass IN
                   ('schema','policy','retire','validator',
-                   'history','vault','horizon','components','openapi','mcptools','catalog')),
+                   'history','vault','horizon','components','openapi','mcptools','catalog',
+                   'template')),
   detail        jsonb NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS derived_artifact_resource_idx
   ON derived_artifact (resource_name, scope_kind, scope_id);
--- Bring a pre-existing derived_artifact CHECK up to the BUILD-D pass roster.
+-- Bring a pre-existing derived_artifact CHECK up to the BUILD-D + D2 pass roster
+-- (detection keys on the newest member, 'template', so a Stage-C or a
+-- BUILD-D-without-template constraint is both upgraded).
 DO $$
 DECLARE cn text;
 BEGIN
   SELECT c.conname INTO cn FROM pg_constraint c
   WHERE c.conrelid = 'derived_artifact'::regclass AND c.contype = 'c'
     AND pg_get_constraintdef(c.oid) LIKE '%pass%'
-    AND pg_get_constraintdef(c.oid) NOT LIKE '%history%';
+    AND pg_get_constraintdef(c.oid) NOT LIKE '%template%';
   IF cn IS NOT NULL THEN
     EXECUTE 'ALTER TABLE derived_artifact DROP CONSTRAINT ' || quote_ident(cn);
     ALTER TABLE derived_artifact ADD CONSTRAINT derived_artifact_pass_check CHECK (pass IN
       ('schema','policy','retire','validator',
-       'history','vault','horizon','components','openapi','mcptools','catalog'));
+       'history','vault','horizon','components','openapi','mcptools','catalog',
+       'template'));
   END IF;
 END $$;
 
@@ -217,6 +223,22 @@ CREATE TABLE IF NOT EXISTS shred_attestation (
   shredded_by text NOT NULL,
   shredded_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- (8c) Reveal audit spine (BUILD-D D2, ADR-11 §8). Every RENDER-time reveal of a
+-- masking-leaf slot under a live grant writes one append-only row here: the
+-- plaintext appears only in the transient frame, but the ACT of revealing is
+-- durably audited. Distinct from shred_attestation (which records key destruction).
+CREATE TABLE IF NOT EXISTS reveal_audit (
+  id          bigserial PRIMARY KEY,
+  resource    text NOT NULL,
+  subject_id  text NOT NULL,          -- the data subject (base row id)
+  field       text NOT NULL,
+  principal   text NOT NULL,          -- the render principal holding the grant
+  grant_scope text NOT NULL,          -- the grant_row.scope consumed (resource|subject|field)
+  revealed_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS reveal_audit_subject_idx
+  ON reveal_audit (resource, subject_id, field);
 
 -- ADR-05 §2 continuation store.
 CREATE TABLE IF NOT EXISTS continuation (

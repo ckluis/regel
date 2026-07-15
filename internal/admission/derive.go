@@ -242,11 +242,14 @@ func propKV(prop *rast.Node) (string, *rast.Node) {
 // The field-type bundle table (maskable / columnsFor / colScalarType) lives in
 // fieldtypes.go — the closed ADR-10 §5 roster that makes derivation total.
 
-// requiredPasses is the exact ten-artifact derivation roster (ADR-10 §4). V6
-// derivation-parity checks every resource emits precisely these.
+// requiredPasses is the exact derivation roster: the ten ADR-10 §4 passes plus the
+// ADR-11 §1 render 'template' pass (BUILD-D D2 — the static/dynamic split lowering,
+// a step-5a derivation). V6 derivation-parity checks every resource emits precisely
+// these; a suppressed pass ⇒ DERIVE_PARITY.
 var requiredPasses = []string{
 	"schema", "history", "validator", "policy", "vault",
 	"horizon", "components", "openapi", "mcptools", "catalog",
+	"template",
 }
 
 // derivationTamper is a TEST-ONLY hook (default nil): the parity red-path sets it to
@@ -624,6 +627,10 @@ func passDetail(pass string, rp resourcePlan, scope Scope) (string, error) {
 	case "components":
 		v = map[string]any{"form": formComponent(rp, fields), "table": tableComponent(rp, fields),
 			"detail": detailComponent(rp, fields)}
+	case "template":
+		// ADR-11 §1 static/dynamic split: lower the derived form/table/detail to
+		// immutable render templates (static skeleton + indexed dynamic slots).
+		v = lowerTemplates(rp, fields)
 	case "openapi":
 		v = openapiFragment(rp, fields)
 	case "mcptools":

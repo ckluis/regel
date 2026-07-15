@@ -222,15 +222,19 @@ type subKey struct {
 	Key      string
 }
 
-func rowIDKey(id string) string    { return "rowId:" + id }
-func horizonKey(hz string) string  { return "horizon:" + hz }
+// rowIDKey scopes a point-read subscription by BOTH the row id and the reader's
+// horizon, so a mutation published under one horizon never wakes a session that
+// read the same id under a different (excluding) horizon — policy-respecting
+// invalidation for free (ADR-11 §6).
+func rowIDKey(id, horizon string) string { return "rowId:" + id + "@" + horizon }
+func horizonKey(hz string) string        { return "horizon:" + hz }
 
 // erfRead is the point-read native (ADR-11 §6): it reads ONE row of a resource by
 // id under the policy predicate (org-scoped), building RenderData for a detail/form
 // render and recording (resource, key=rowId) into the subscription set. Returns
 // ok=false when the row is absent or outside the session's horizon (policy denies).
 func erfRead(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, rowID, horizon string, subs *[]subKey) (ui.RenderData, string, bool, error) {
-	*subs = append(*subs, subKey{Resource: vm.Resource, Key: rowIDKey(rowID)})
+	*subs = append(*subs, subKey{Resource: vm.Resource, Key: rowIDKey(rowID, horizon)})
 	sel := []string{"id::text", "coalesce(row_version,0)::text"}
 	names := []string{}
 	for _, f := range vm.Fields {
@@ -454,9 +458,9 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon stri
 		}()
 		if _, e := conn.Exec(ctx, `
 INSERT INTO continuation (id, kind, root_def_hash, epoch, format_ver, frames, wake, status, principal, step_seq)
-VALUES ($1,'session',$2,$3,$4,('\x'||$5)::bytea,
-  jsonb_build_object('kind','message','channel',$1::text),'sleeping',$6::jsonb,0)`,
-			sessionID, sess.DefHash, epochOrOne(s.epoch), cfr.FormatVersion, hexOf(frames), principalJSON); e != nil {
+VALUES ($1::uuid,'session',$2,$3,$4,('\x'||$5)::bytea,
+  jsonb_build_object('kind','message','channel',$7::text),'sleeping',$6::jsonb,0)`,
+			sessionID, sess.DefHash, epochOrOne(s.epoch), cfr.FormatVersion, hexOf(frames), principalJSON, sessionID); e != nil {
 			return e
 		}
 		if e := writeSubscriptions(ctx, conn, sessionID, subs); e != nil {

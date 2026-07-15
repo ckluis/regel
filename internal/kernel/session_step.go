@@ -127,7 +127,7 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 		return cek.Outcome{}, nil, err
 	}
 
-	_, next, subs, rowVersion, rows, err := renderView(ctx, conn, vm, sess, mc)
+	_, next, subs, _, rows, err := renderView(ctx, conn, vm, sess, mc)
 	if err != nil {
 		return cek.Outcome{}, nil, err
 	}
@@ -156,9 +156,9 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 
 	sess.LastSnap = newSnap
 	sess.setDigest(dig)
-	if sess.Kind != "table" {
-		sess.RowVersion = rowVersion
-	}
+	// NB: sess.RowVersion is the version the form was OPENED against — it is set at
+	// mount and advanced ONLY by submitForm (success ⇒ base+1, conflict ⇒ reloaded
+	// current), never by an ordinary re-render, so optimistic concurrency holds.
 
 	if err := writeSubscriptions(ctx, conn, sessionID, subs); err != nil {
 		return cek.Outcome{}, nil, err
@@ -257,8 +257,14 @@ func (s *Server) submitForm(ctx context.Context, conn *pgwire.Conn, vm *viewMeta
 			return err
 		}
 		if res.RowsAffected == 0 {
-			// Concurrent edit (ADR-11 §7): reject-and-reconcile. Draft preserved.
+			// Concurrent edit (ADR-11 §7): reject-and-reconcile. Draft preserved; the
+			// form is re-based on the CURRENT row_version so a reviewed resubmit lands.
 			sess.UILocal["__alert__"] = "this record changed — review and resubmit"
+			var cur int64
+			_, _ = conn.QueryRow(ctx,
+				`SELECT coalesce(row_version,0) FROM `+quoteIdent(vm.Table)+` WHERE id=$1`,
+				[]any{sess.RowID}, &cur)
+			sess.RowVersion = strconv.FormatInt(cur, 10)
 			return nil
 		}
 	}
@@ -268,6 +274,7 @@ func (s *Server) submitForm(ctx context.Context, conn *pgwire.Conn, vm *viewMeta
 	}
 	sess.UILocal["__alert__"] = ""
 	sess.Draft = map[string]string{}
+	sess.RowVersion = strconv.FormatInt(base+1, 10) // this form now owns the new version
 	return nil
 }
 

@@ -121,7 +121,7 @@ func (ix *invalidationIndex) matchingSessions(ctx context.Context, resource, row
 	rows, err := conn.Query(ctx, `
 SELECT DISTINCT session_id::text FROM subscription
  WHERE resource=$1 AND (key=$2 OR key=$3)`,
-		resource, rowIDKey(rowID), horizonKey(horizon))
+		resource, rowIDKey(rowID, horizon), horizonKey(horizon))
 	if err != nil {
 		return nil, err
 	}

@@ -31,6 +31,7 @@ var (
 var All = []Mutant{
 	{Name: "V1_SKIP_DECLARED_CHECK", Component: "V1", Weakens: "V1 capability-audit: skips the named ⊆ declared check"},
 	{Name: "V2_DROP_LOG_SINK", Component: "V2", Weakens: "V2 pii-flow: drops the capability-bearing (outbound/log) sink from the sink-set"},
+	{Name: "V2_ALLOW_NONLEAF_BIND", Component: "V2", Weakens: "V2 pii-flow: allows a pii value bound at a non-leaf component site (ADR-10 §7 render-path sink)"},
 	{Name: "V3_SKIP_POLICY_PARITY", Component: "V3", Weakens: "V3 catalog-parity: skips the declared-but-unwired policy check"},
 	{Name: "V4_ALLOW_EFFECTFUL", Component: "V4", Weakens: "V4 contracts: allows a capability-bearing (effectful) contract clause"},
 	{Name: "V5_ALLOW_ALL_TAGS", Component: "V5", Weakens: "V5 capture: treats the host-resource tag as encodable (admits any capture)"},

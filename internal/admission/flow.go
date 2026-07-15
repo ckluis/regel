@@ -287,6 +287,22 @@ func (w *v2walk) checkExpr(n *rast.Node) {
 					}
 				}
 			}
+			// Component non-leaf sink (ADR-10 §7 / ADR-11 §8, BUILD-D D2): the six
+			// masking leaves are the ONLY value-binding sinks. A pii value bound at
+			// any OTHER tier-1 component site (props or children) is an unmasked bind
+			// that never becomes maskable code — V2's chartered pii-flow duty rejects
+			// it at admission. MUTANT V2_ALLOW_NONLEAF_BIND (ADR-07 §5 dir-ii): allowing
+			// a non-leaf bind lets a vault value render unmasked.
+			if comp := uiComponentOf(callee, w.im); comp != "" && !cek.MaskingLeaves[comp] {
+				if n.Kids[1] != nil {
+					for _, a := range n.Kids[1].Kids {
+						if w.tainted(a) && !mutants.Active("V2_ALLOW_NONLEAF_BIND") {
+							w.report("PII_NONLEAF_BIND", "a vault value is bound at the non-leaf component "+
+								comp+"; pii may bind only at the six masking leaves (text/badge/money/avatar/field/table)")
+						}
+					}
+				}
+			}
 		}
 	}
 	for _, k := range n.Kids {

@@ -129,6 +129,24 @@ export function leak(owner: Vault<string>): string {
 `,
 	},
 
+	{
+		// BUILD-D D2 (ADR-10 §7 / ADR-11 §8): a custom component-kind definition
+		// binding a pii value at a NON-leaf component site. The six masking leaves
+		// (text/badge/money/avatar/field/table) are the ONLY value-binding sinks; a
+		// heading is not one, so binding pii into its props is an unmasked bind V2
+		// must reject. Kills V2_ALLOW_NONLEAF_BIND: only the non-leaf sink check
+		// catches this — the value never reaches a capability sink or a served return
+		// (a UINode is not a vault value), so no other V2 arm sees it.
+		Name: "v2-pii-nonleaf-component", Component: "V2", ThreatClass: "pii.nonleaf_bind",
+		Module: "app/nonleaf", ExpectCode: "PII_NONLEAF_BIND",
+		Source: `import { heading } from "std/ui";
+import type { Vault } from "std/pii";
+export function badge(owner: Vault<string>) {
+  return heading({ title: owner });
+}
+`,
+	},
+
 	// --- V3 catalog-parity --------------------------------------------------
 	{
 		Name: "v3-policy-unwired", Component: "V3", ThreatClass: "parity.unwired",

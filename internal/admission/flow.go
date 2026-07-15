@@ -193,6 +193,20 @@ func (w *v2walk) tainted(n *rast.Node) bool {
 	return false
 }
 
+// uiComponentOf returns the std/ui component name a callee KRef constructs, or "".
+// A std/ui.* call builds a UINode render tree (ADR-10 §7), which is where the D2
+// render-path masking obligation lives — the six masking leaves are the ONLY
+// value-binding sinks, checked below.
+func uiComponentOf(callee *rast.Node, im *Image) string {
+	if callee == nil || callee.Kind != rast.KRef {
+		return ""
+	}
+	if e := im.ByHash[callee.Str]; e != nil && e.Module == "std/ui" {
+		return e.Export
+	}
+	return ""
+}
+
 // taintedCall classifies a call result: mask()/reveal() sanitize (clean); a pii-
 // returning app helper taints; otherwise it propagates argument taint.
 func (w *v2walk) taintedCall(call *rast.Node) bool {
@@ -203,6 +217,13 @@ func (w *v2walk) taintedCall(call *rast.Node) bool {
 	switch stdIntrinsicOf(callee, w.im) {
 	case "std/pii.mask", "std/pii.reveal":
 		return false // sanitizer
+	}
+	// A std/ui component constructor returns a UINode render tree, not a vault
+	// value: pii masking is a leaf-render obligation discharged at the component
+	// SINK (checkExpr, ADR-11 §8), not a data-flow taint that propagates through the
+	// node's result. So a component's result is never itself tainted. (BUILD-D D2.)
+	if uiComponentOf(callee, w.im) != "" {
+		return false
 	}
 	if callee != nil && callee.Kind == rast.KRef && w.piiReturn[callee.Str] {
 		return true // helper whose declared return type is pii

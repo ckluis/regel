@@ -2,6 +2,7 @@ package cek
 
 import (
 	"context"
+	"sort"
 
 	"regel.dev/regel/internal/mutants"
 )
@@ -38,6 +39,22 @@ func (r *Registry) Register(hash string, fn NativeFn) { r.fns[hash] = fn }
 func (r *Registry) lookup(hash string) (NativeFn, bool) {
 	fn, ok := r.fns[hash]
 	return fn, ok
+}
+
+// Has reports whether a hash has a registered native — the dispatch-bijection
+// probe (ADR-10 §2 step 3): a catalogued NativeBody hash absent here is an orphan.
+func (r *Registry) Has(hash string) bool { _, ok := r.fns[hash]; return ok }
+
+// Hashes returns the sorted set of registered native hashes. The reverse leg of
+// the dispatch bijection walks this to prove no registered impl lacks a catalog
+// entry (ADR-10 §2: "and vice versa").
+func (r *Registry) Hashes() []string {
+	out := make([]string, 0, len(r.fns))
+	for h := range r.fns {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Effect is one recorded effect intent — the effect-class trace ADR-04 §6.5

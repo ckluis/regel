@@ -38,6 +38,12 @@ type Entry struct {
 	Intrinsic     string       // "std/mail.send"
 	Native        cek.NativeFn // nil for type-only entries
 	Capability    string       // "" when the binding bears no capability
+	// EffectClass is the ADR-10 §6 effect class a capability-bearing native
+	// declares, verifier-visible: "read" (inline, no checkpoint), "write" (SQL +
+	// checkpoint in one step transaction), "external" (an outbox intent, delivered
+	// effectively-once), or "" for a pure/type binding. The metadata + lookup land
+	// now (this increment); await-as-checkpoint ENFORCEMENT lands at D4.
+	EffectClass string
 	// NonSerial marks a binding or type whose value is a LIVE HOST RESOURCE — a
 	// connection/socket that "is never a dialect value at all, so the codec has
 	// no tag for it" (ADR-05 §3). A binding of such a type (or initialized by
@@ -47,14 +53,15 @@ type Entry struct {
 
 // Image is the whole compiled genesis image.
 type Image struct {
-	Entries          []*Entry
-	ByHash           map[string]*Entry
-	CapabilityByHash map[string]string // capability-bearing std hashes → capability
-	NonSerialByHash  map[string]bool   // host-resource type/native hashes (V5, ADR-05 §3)
-	ModuleStubs      map[string]string // "/std/mail.ts" → L0 stub text
-	ManifestRoot     string            // SHA-256 over sorted (name,hash)
-	Attestation      string            // H_dispatch (ADR-10 §2)
-	Epoch            int
+	Entries           []*Entry
+	ByHash            map[string]*Entry
+	CapabilityByHash  map[string]string // capability-bearing std hashes → capability
+	EffectClassByHash map[string]string // capability-bearing std hashes → effect class (ADR-10 §6)
+	NonSerialByHash   map[string]bool   // host-resource type/native hashes (V5, ADR-05 §3)
+	ModuleStubs       map[string]string // "/std/mail.ts" → L0 stub text
+	ManifestRoot      string            // SHA-256 over sorted (name,hash)
+	Attestation       string            // H_dispatch (ADR-10 §2)
+	Epoch             int
 }
 
 var (
@@ -67,6 +74,12 @@ func BuildImage() *Image {
 	imageOnce.Do(func() { imageInst = buildImage() })
 	return imageInst
 }
+
+// EffectClassOf returns the ADR-10 §6 effect class a std native declares
+// ("read"/"write"/"external"), or "" for a pure/type binding or an unknown hash.
+// The verifier-visible metadata lands now; await-as-checkpoint enforcement (D4)
+// consumes this lookup.
+func (im *Image) EffectClassOf(hash string) string { return im.EffectClassByHash[hash] }
 
 // Registry builds a fresh native dispatch registry (hash → Go function) from the
 // image — the kernel populates the interpreter with this at genesis/boot.
@@ -90,13 +103,14 @@ func nativeStub(_ *cek.Host, _ []cek.Value) (cek.Value, *cek.NativePark) {
 
 // roster is the fixed Stage-A micro-std vocabulary.
 type rosterEntry struct {
-	module     string
-	export     string
-	defKind    rast.DefKind
-	catKind    string
-	native     cek.NativeFn
-	capability string
-	nonSerial  bool
+	module      string
+	export      string
+	defKind     rast.DefKind
+	catKind     string
+	native      cek.NativeFn
+	capability  string
+	effectClass string
+	nonSerial   bool
 }
 
 func buildImage() *Image {
@@ -143,8 +157,9 @@ func buildImage() *Image {
 		// non-serial result is keyed by hash (NonSerialByHash).
 		{module: "std/sql", export: "Conn", defKind: rast.DefType, catKind: "type"},
 		{module: "std/sql", export: "connect", defKind: rast.DefNative, catKind: "function", native: nativeStub, nonSerial: true},
-		// std/mail (send — capability "mail.send", the V1 fixture target)
-		{module: "std/mail", export: "send", defKind: rast.DefNative, catKind: "function", native: cek.StdMailSend, capability: "mail.send"},
+		// std/mail (send — capability "mail.send", the V1 fixture target; effect
+		// class external per ADR-10 §6: the step transaction writes an outbox intent).
+		{module: "std/mail", export: "send", defKind: rast.DefNative, catKind: "function", native: cek.StdMailSend, capability: "mail.send", effectClass: "external"},
 		// std/policy (BUILD-C, ADR-10 §4 item 4): the governance policy vocabulary
 		// the derivation wires into every read path — V3 catalog-parity's subject.
 		// orgScoped is the product-scope org/role predicate; policy(name) declares a
@@ -162,13 +177,68 @@ func buildImage() *Image {
 		{module: "std/wf", export: "all", defKind: rast.DefNative, catKind: "function", native: cek.StdWfAll},
 		{module: "std/wf", export: "race", defKind: rast.DefNative, catKind: "function", native: cek.StdWfRace},
 	}
+	// --- Stage-D std/ world completion (ADR-10 §3 SHIP roster, BUILD-D D0) -------
+	// The remaining 14-battery SHIP roster, added MINIMAL-but-real. Later Stage-D
+	// increments own erf DERIVATION (D3), rendering + reactive runtime (D1/D2), and
+	// the real taak natives (D4/D5); D0 lands the ROSTER (rows, dispatch, L0 surface,
+	// effect-class metadata) so admitted code can import and typecheck the world.
+	roster = append(roster,
+		// std/identity (ADR-10 §3 SHIP): orgs → users → roles → sessions → API keys
+		// ship in core. Types + minimal read natives; the policy/audit machinery that
+		// builds on it is later. currentUser/currentOrg are reads of session context.
+		rosterEntry{module: "std/identity", export: "Org", defKind: rast.DefType, catKind: "type"},
+		rosterEntry{module: "std/identity", export: "User", defKind: rast.DefType, catKind: "type"},
+		rosterEntry{module: "std/identity", export: "Role", defKind: rast.DefType, catKind: "type"},
+		rosterEntry{module: "std/identity", export: "Session", defKind: rast.DefType, catKind: "type"},
+		rosterEntry{module: "std/identity", export: "ApiKey", defKind: rast.DefType, catKind: "type"},
+		rosterEntry{module: "std/identity", export: "currentUser", defKind: rast.DefNative, catKind: "function", native: nativeStub, effectClass: "read"},
+		rosterEntry{module: "std/identity", export: "currentOrg", defKind: rast.DefNative, catKind: "function", native: nativeStub, effectClass: "read"},
+		// std/http (ADR-10 §3 SHIP minimal): outbound call is a CAPABILITY, effect
+		// class external (V2 treats it as a sink; ADR-06 dispatcher delivers).
+		rosterEntry{module: "std/http", export: "get", defKind: rast.DefNative, catKind: "function", native: cek.StdHTTPGet, capability: "http.get", effectClass: "external"},
+		rosterEntry{module: "std/http", export: "post", defKind: rast.DefNative, catKind: "function", native: cek.StdHTTPPost, capability: "http.post", effectClass: "external"},
+		// std/time (ADR-10 §3 SHIP): now() reads the clock inline (effect class read);
+		// sleep already lives in std/taak (wakes are rows, ADR-05 §7).
+		rosterEntry{module: "std/time", export: "now", defKind: rast.DefNative, catKind: "function", native: cek.StdTimeNow, effectClass: "read"},
+		// std/money (ADR-10 §3/§5 SHIP): decimal money as a minor-units bigint +
+		// currency record — NO float. money() constructs, format() renders.
+		rosterEntry{module: "std/money", export: "Money", defKind: rast.DefType, catKind: "type"},
+		rosterEntry{module: "std/money", export: "money", defKind: rast.DefNative, catKind: "function", native: cek.StdMoney},
+		rosterEntry{module: "std/money", export: "format", defKind: rast.DefNative, catKind: "function", native: cek.StdMoneyFormat},
+		// std/crypto (ADR-10 §3 SHIP intrinsic-only): vetted AEAD over Go crypto; no
+		// key material is a dialect value — the key is referenced by a token string.
+		rosterEntry{module: "std/crypto", export: "aeadSeal", defKind: rast.DefNative, catKind: "function", native: cek.StdAeadSeal},
+		rosterEntry{module: "std/crypto", export: "aeadOpen", defKind: rast.DefNative, catKind: "function", native: cek.StdAeadOpen},
+		// std/test (ADR-10 §3 SHIP): fake registration, minimal — a fake is an
+		// admitted row checked against the intrinsic's contracts (later).
+		rosterEntry{module: "std/test", export: "fake", defKind: rast.DefNative, catKind: "function", native: nativeStub},
+		// std/log (ADR-10 §3 SHIP tiny): write() is a sink, effect class external —
+		// the log sink is in V2's sink set (a pii log line ⇒ V2 reject on the caller).
+		rosterEntry{module: "std/log", export: "write", defKind: rast.DefNative, catKind: "function", native: cek.StdLogWrite, effectClass: "external"},
+		// std/erf (ADR-10 §3 SHIP): read/list as STUBS for now — D3 implements the
+		// erf read surface. Type-only Row + nativeStub reads (effect class read).
+		rosterEntry{module: "std/erf", export: "Row", defKind: rast.DefType, catKind: "type"},
+		rosterEntry{module: "std/erf", export: "read", defKind: rast.DefNative, catKind: "function", native: nativeStub, effectClass: "read"},
+		rosterEntry{module: "std/erf", export: "list", defKind: rast.DefNative, catKind: "function", native: nativeStub, effectClass: "read"},
+	)
+	// std/ui: the closed 25 tier-1 semantic components (ADR-10 §7). Each is a native
+	// constructor returning a plain {component, props, children} record over the
+	// existing encodable tags, so CFR capture of UI state round-trips unchanged. The
+	// six masking leaves are marked in cek.MaskingLeaves (D2 owns masking behavior).
+	for _, name := range cek.UITier1 {
+		roster = append(roster, rosterEntry{
+			module: "std/ui", export: name, defKind: rast.DefNative,
+			catKind: "function", native: cek.UINative(name),
+		})
+	}
 
 	im := &Image{
-		ByHash:           map[string]*Entry{},
-		CapabilityByHash: map[string]string{},
-		NonSerialByHash:  map[string]bool{},
-		ModuleStubs:      moduleStubs(),
-		Epoch:            1,
+		ByHash:            map[string]*Entry{},
+		CapabilityByHash:  map[string]string{},
+		EffectClassByHash: map[string]string{},
+		NonSerialByHash:   map[string]bool{},
+		ModuleStubs:       moduleStubs(),
+		Epoch:             1,
 	}
 	for _, r := range roster {
 		intrinsic := r.module + "." + r.export
@@ -203,12 +273,16 @@ func buildImage() *Image {
 			Intrinsic:     intrinsic,
 			Native:        r.native,
 			Capability:    r.capability,
+			EffectClass:   r.effectClass,
 			NonSerial:     r.nonSerial,
 		}
 		im.Entries = append(im.Entries, e)
 		im.ByHash[hash] = e
 		if r.capability != "" {
 			im.CapabilityByHash[hash] = r.capability
+		}
+		if r.effectClass != "" {
+			im.EffectClassByHash[hash] = r.effectClass
 		}
 		if r.nonSerial {
 			im.NonSerialByHash[hash] = true
@@ -327,5 +401,54 @@ func moduleStubs() map[string]string {
 			"export declare const send: <T>(channel: string, value: T) => void;\n" +
 			"export declare const all: <T>(thunks: (() => T)[]) => T[];\n" +
 			"export declare const race: <T>(thunks: (() => T)[]) => T;\n",
+		// std/identity L0 (BUILD-D, ADR-10 §3). Opaque identity value types + the
+		// minimal session reads; the policy/audit surface builds on these later.
+		"/std/identity.ts": "export type Org = { readonly __org: string };\n" +
+			"export type User = { readonly __user: string };\n" +
+			"export type Role = { readonly __role: string };\n" +
+			"export type Session = { readonly __session: string };\n" +
+			"export type ApiKey = { readonly __apiKey: string };\n" +
+			"export declare const currentUser: () => User;\n" +
+			"export declare const currentOrg: () => Org;\n",
+		// std/http L0 (BUILD-D, ADR-10 §3 minimal): outbound capability calls.
+		"/std/http.ts": "export declare const get: (url: string) => { intent: string; url: string };\n" +
+			"export declare const post: (url: string, body: string) => { intent: string; url: string };\n",
+		// std/time L0 (BUILD-D, ADR-10 §3): now() reads the clock; sleep is std/taak.
+		"/std/time.ts": "export declare const now: () => number;\n",
+		// std/money L0 (BUILD-D, ADR-10 §5): decimal money — minor-units bigint +
+		// currency, NO float. money() constructs, format() renders.
+		"/std/money.ts": "export type Money = { readonly minorUnits: bigint; readonly currency: string };\n" +
+			"export declare const money: (minorUnits: bigint, currency: string) => Money;\n" +
+			"export declare const format: (m: Money) => string;\n",
+		// std/crypto L0 (BUILD-D, ADR-10 §3 intrinsic-only): AEAD keyed by an opaque
+		// token string — no key material is a dialect value.
+		"/std/crypto.ts": "export declare const aeadSeal: (keyToken: string, plaintext: string) => string;\n" +
+			"export declare const aeadOpen: (keyToken: string, ciphertext: string) => string;\n",
+		// std/test L0 (BUILD-D, ADR-10 §3): fake registration, minimal.
+		"/std/test.ts": "export declare const fake: (name: string, impl: unknown) => unknown;\n",
+		// std/log L0 (BUILD-D, ADR-10 §3 tiny): write() is a sink (V2's sink set).
+		"/std/log.ts": "export declare const write: (message: string) => void;\n",
+		// std/erf L0 (BUILD-D, ADR-10 §3): read/list stubs — D3 implements the surface.
+		"/std/erf.ts": "export type Row = { readonly __erf: string };\n" +
+			"export declare const read: (resource: string, id: string) => Row;\n" +
+			"export declare const list: (resource: string) => Row[];\n",
+		// std/ui L0 (BUILD-D, ADR-10 §7): the closed 25 tier-1 components. Each is a
+		// constructor over {component, props, children}; the roster is generated so
+		// the stub can never drift from cek.UITier1.
+		"/std/ui.ts": uiModuleStub(),
 	}
+}
+
+// uiModuleStub builds the std/ui L0 surface from cek.UITier1 (ADR-10 §7): the
+// UINode node shape plus one constructor declaration per tier-1 component, so the
+// stub and the dispatch roster are generated from the SAME closed list.
+func uiModuleStub() string {
+	var b strings.Builder
+	b.WriteString("export type UIProps = { readonly [k: string]: unknown };\n")
+	b.WriteString("export type UINode = { readonly component: string; readonly props: UIProps; readonly children: UINode[] };\n")
+	for _, name := range cek.UITier1 {
+		b.WriteString("export declare const " + name +
+			": (props?: UIProps, children?: UINode[]) => UINode;\n")
+	}
+	return b.String()
 }

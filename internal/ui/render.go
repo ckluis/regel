@@ -163,6 +163,37 @@ func renderNode(b *strings.Builder, t *Template, n *Node, data RenderData, mc *M
 	b.WriteString("</" + el.tag + ">")
 }
 
+// RenderRow renders ONE keyed table/list row to HTML + its row-qualified slot
+// state, for a spliceList add (§2). resource is the mask key (the physical table).
+// It locates the template's keyed-list row subtree; a template with no list yields
+// empty output.
+func RenderRow(t *Template, resource string, row RowData, mc *MaskCtx) (string, map[string]Materialized) {
+	rowNode := findListRow(t, t.Root)
+	if rowNode == nil {
+		return "", map[string]Materialized{}
+	}
+	state := map[string]Materialized{}
+	var b strings.Builder
+	renderRow(&b, t, rowNode, resource, row, mc, state)
+	return b.String(), state
+}
+
+// findListRow returns the per-row subtree of the template's keyed-list node.
+func findListRow(t *Template, n *Node) *Node {
+	if n == nil {
+		return nil
+	}
+	if n.List >= 0 {
+		return n.Row
+	}
+	for _, c := range n.Children {
+		if r := findListRow(t, c); r != nil {
+			return r
+		}
+	}
+	return nil
+}
+
 // renderRow expands one row subtree, minting row-qualified slot ids so each cell
 // is independently diffable and digestible.
 func renderRow(b *strings.Builder, t *Template, row *Node, resource string, rd RowData, mc *MaskCtx, state map[string]Materialized) {

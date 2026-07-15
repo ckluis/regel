@@ -58,7 +58,7 @@ func lowerForm(rp resourcePlan, fields []fieldSpec) *ui.Template {
 		Version: ui.TemplateVersion, DefHash: rp.Decl.DefHash, Kind: "form",
 		Resource: rp.Decl.CatalogName, Mount: "form",
 	}
-	rows := make([]*ui.Node, 0, len(fields))
+	rows := make([]*ui.Node, 0, len(fields)+1)
 	for i, f := range fields {
 		b := fieldBundles[f.Base]
 		id := slotIDFor("form", i)
@@ -72,6 +72,15 @@ func lowerForm(rp resourcePlan, fields []fieldSpec) *ui.Template {
 			ui.Leaf(b.Input, i),
 		))
 	}
+	// A form-level alert slot (ADR-11 §7): server-authoritative validation failures
+	// and the concurrent-edit reject-and-reconcile ("this record changed") patch
+	// target it. Indexed last so the per-field value slots keep their field index.
+	alertIdx := len(fields)
+	t.Slots = append(t.Slots, ui.Slot{
+		ID: slotIDFor("form", alertIdx), Kind: "setText", Field: "__alert__", Leaf: "alert",
+		ReadSet: []ui.ReadKey{{Resource: rp.Decl.CatalogName, KeyClass: "rowId"}},
+	})
+	rows = append(rows, ui.Leaf("alert", alertIdx))
 	t.Root = ui.Static("section", rows...)
 	return t
 }

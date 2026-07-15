@@ -291,6 +291,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		"epoch":     s.epoch,
 		"draining":  s.Draining(),
 		"metrics":   cfr.MetricsSnapshot(),
+		"sse":       sseMetricsSnapshot(),
 	})
 }
 

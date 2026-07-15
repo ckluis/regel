@@ -28,7 +28,12 @@ type Server struct {
 	epoch    int             // pinned catalog epoch, read at boot after VerifyBoot (ADR-06 §6)
 	draining atomic.Bool     // set by the epoch fence: 503 on new work
 	mirror   *gitproj.Mirror // optional ADR-09 git projection mirror (nil ⇒ no projection)
+	hub      *sseHub         // ADR-11 §2 per-session SSE ring + fan-out (in-memory cache)
+	invIndex *invalidationIndex
 }
+
+// sse returns the kernel's SSE hub (ADR-11 §2).
+func (s *Server) sse() *sseHub { return s.hub }
 
 // New builds a kernel over a live pool. It verifies boot parity (ADR-10 §2:
 // std-manifest root + dispatch attestation match the pinned epoch) before
@@ -55,7 +60,9 @@ func New(ctx context.Context, pool *pgwire.Pool) (*Server, error) {
 	pool.Release(conn)
 	src := &catalogSource{pool: pool}
 	interp := cek.New(src, image.Registry())
-	return &Server{pool: pool, interp: interp, image: image, kernelID: admissionUUID(), epoch: epoch}, nil
+	s := &Server{pool: pool, interp: interp, image: image, kernelID: admissionUUID(), epoch: epoch, hub: newSSEHub()}
+	s.invIndex = newInvalidationIndex(s)
+	return s, nil
 }
 
 // SetMirror wires an ADR-09 git projection mirror. After a green admission the
@@ -91,6 +98,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /continuation/{id}/restart", s.handleRestart)
 	mux.HandleFunc("POST /channel/{channel}/send", s.handleChannelSend)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	// ADR-11 reactive layer (BUILD-D D3): mount, SSE down, POST up, resync.
+	mux.HandleFunc("GET /ui/{view...}", s.handleMount)
+	mux.HandleFunc("GET /session/{id}/events", s.handleSessionEvents)
+	mux.HandleFunc("POST /session/{id}/event", s.handleSessionEvent)
+	mux.HandleFunc("POST /session/{id}/resync", s.handleSessionResync)
+	mux.HandleFunc("GET /session/client.js", s.handleClientJS)
 	return mux
 }
 

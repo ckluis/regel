@@ -75,8 +75,12 @@ func TestD2TemplatePassAndFirstPaint(t *testing.T) {
 	if len(detail.Slots) != nFields {
 		t.Fatalf("detail slots = %d, want %d (one per field)", len(detail.Slots), nFields)
 	}
-	if len(form.Slots) != nFields {
-		t.Fatalf("form slots = %d, want %d", len(form.Slots), nFields)
+	// form: one value slot per field, plus the trailing §7 form alert slot (D3).
+	if len(form.Slots) != nFields+1 {
+		t.Fatalf("form slots = %d, want %d", len(form.Slots), nFields+1)
+	}
+	if last := form.Slots[nFields]; last.Leaf != "alert" || last.Field != "__alert__" {
+		t.Fatalf("form must end with the alert slot, got %+v", last)
 	}
 	// table: slot 0 is the keyed-list body (spliceList), then one column per field.
 	if len(table.Slots) != nFields+1 || table.Slots[0].Kind != "spliceList" {

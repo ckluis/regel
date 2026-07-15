@@ -212,13 +212,24 @@ func VerifyBoot(ctx context.Context, conn *pgwire.Conn, im *Image) error {
 	if !found {
 		return fmt.Errorf("boot: no epoch %d row (run genesis first)", im.Epoch)
 	}
+	// H_dispatch attestation: recompute from the running image (im.Attestation is
+	// computed at build over the binary's own dispatch table) and compare to the
+	// value pinned in the epoch row. A mismatch is a tampered/swapped dispatch
+	// table — the structured epoch.boot_refused diagnostic names pinned vs computed
+	// (ADR-10 §2 R1-09, ADR-08 §2). The gate never opens on an unattested table.
 	if storedAttest != im.Attestation {
-		return fmt.Errorf("boot refused: dispatch attestation mismatch (pinned %s, computed %s)",
-			storedAttest, im.Attestation)
+		br := newBootRefusal("dispatch_attestation_mismatch", im.Epoch)
+		br.PinnedHDispatch = storedAttest
+		br.ComputedHDispatch = im.Attestation
+		br.Detail = "the running dispatch table does not match the epoch-pinned attestation"
+		return br
 	}
 	if storedRoot != im.ManifestRoot {
-		return fmt.Errorf("boot refused: std-manifest root mismatch (pinned %s, binary %s)",
-			storedRoot, im.ManifestRoot)
+		br := newBootRefusal("manifest_root_mismatch", im.Epoch)
+		br.CatalogManifestRoot = storedRoot
+		br.BinaryManifestRoot = im.ManifestRoot
+		br.Detail = "the epoch-pinned std-manifest root does not match the binary"
+		return br
 	}
 
 	// Recompute the manifest root from the catalog's std pointers and compare.
@@ -243,8 +254,11 @@ func VerifyBoot(ctx context.Context, conn *pgwire.Conn, im *Image) error {
 	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
 	catalogRoot := hex.EncodeToString(sum[:])
 	if catalogRoot != im.ManifestRoot {
-		return fmt.Errorf("boot refused: catalog std set does not match binary (catalog root %s, binary %s)",
-			catalogRoot, im.ManifestRoot)
+		br := newBootRefusal("catalog_manifest_root_mismatch", im.Epoch)
+		br.CatalogManifestRoot = catalogRoot
+		br.BinaryManifestRoot = im.ManifestRoot
+		br.Detail = "the catalog std set does not match the binary"
+		return br
 	}
 
 	// Per-native: every dispatched hash is catalogued (dispatch bijection floor).
@@ -258,8 +272,21 @@ func VerifyBoot(ctx context.Context, conn *pgwire.Conn, im *Image) error {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("boot refused: native %s has no catalogued definition %s", e.Intrinsic, e.Hash)
+			br := newBootRefusal("dispatch_orphan_hash", im.Epoch)
+			br.OrphanHash = e.Hash
+			br.Detail = "native " + e.Intrinsic + " has no catalogued definition"
+			return br
 		}
+	}
+
+	// Dispatch bijection (ADR-10 §2 step 3): the running native registry and the
+	// catalogued NativeBody set must be in bijection — no orphan hash, no orphan
+	// implementation. The registry the kernel runs is im.Registry(), so this
+	// exercises the check on the shipped image; the gate test drives the tampered
+	// registries that prove it REFUSES. (Residue: the two are built from one source,
+	// so production is structurally in bijection — the check is the standing proof.)
+	if err := VerifyDispatchBijection(im, im.Registry()); err != nil {
+		return err
 	}
 	return nil
 }
@@ -281,6 +308,21 @@ func VerifyDispatchBijection(im *Image, reg *cek.Registry) error {
 			br := newBootRefusal("dispatch_orphan_hash", im.Epoch)
 			br.OrphanHash = e.Hash
 			br.Detail = "catalogued native " + e.Intrinsic + " has no registered Go implementation"
+			return br
+		}
+	}
+	// Reverse leg: every registered implementation has a catalogued native entry.
+	catalogued := map[string]bool{}
+	for _, e := range im.Entries {
+		if e.Native != nil {
+			catalogued[e.Hash] = true
+		}
+	}
+	for _, h := range reg.Hashes() {
+		if !catalogued[h] {
+			br := newBootRefusal("dispatch_orphan_implementation", im.Epoch)
+			br.OrphanHash = h
+			br.Detail = "registered native has no catalogued definition"
 			return br
 		}
 	}

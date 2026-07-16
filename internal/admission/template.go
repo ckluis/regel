@@ -20,12 +20,132 @@ import (
 // per field); the form binds input controls (value slots); the table binds a keyed
 // row list (spliceList) over per-column text cells.
 func lowerTemplates(rp resourcePlan, fields []fieldSpec) map[string]any {
-	return map[string]any{
-		"version": ui.TemplateVersion,
-		"detail":  lowerDetail(rp, fields),
-		"form":    lowerForm(rp, fields),
-		"table":   lowerTable(rp, fields),
+	out := map[string]any{
+		"version":   ui.TemplateVersion,
+		"detail":    lowerDetail(rp, fields),
+		"form":      lowerForm(rp, fields),
+		"table":     lowerTable(rp, fields),
+		"dashboard": lowerDashboard(rp, fields),
 	}
+	// BUILD-E (D2): board(R) is derivable ONLY when the resource carries a states
+	// field (the ADR-10 §7 board(R, groupBy) surface; the board-derivability flag
+	// rides the states() columns per STAGE-D §13.2). A stateless resource emits no
+	// board key — the mount path surfaces that as a clean derivation refusal, never
+	// a crash. These two surfaces ride the EXISTING `template` derivation pass (more
+	// keys in the one bundle), so requiredPasses / V6 DERIVE_PARITY are unchanged;
+	// board/dashboard are conditional (states/aggregate) and so could never be
+	// unconditional required passes anyway.
+	if sf, ok := statesField(fields); ok {
+		out["board"] = lowerBoard(rp, fields, sf)
+	}
+	return out
+}
+
+// statesField returns the resource's states field (the ordered-history enum that
+// makes board(R) derivable), if any. A resource has at most one board axis in v1.
+func statesField(fields []fieldSpec) (fieldSpec, bool) {
+	for _, f := range fields {
+		if f.Base == "states" {
+			return f, true
+		}
+	}
+	return fieldSpec{}, false
+}
+
+// boardTitleField picks the card's title field: the first non-pii scalar text
+// field that is neither the states axis nor the org policy column, so a card shows
+// something a human reads. "" when the resource has no such field (card = badge only).
+func boardTitleField(fields []fieldSpec, states fieldSpec) string {
+	for _, f := range fields {
+		if f.PII || f.Name == states.Name || f.Name == "org" {
+			continue
+		}
+		if b := fieldBundles[f.Base]; b.Render == "text" {
+			return f.Name
+		}
+	}
+	return ""
+}
+
+// lowerBoard lowers a states-bearing resource to a KANBAN board template (ADR-10
+// §7 board(R, groupBy), ADR-11 §1): a grid of one column per states member, each a
+// keyed-list of cards grouped by the states field. A row moving between states is a
+// spliceList remove from the old column + add to the new — the live kanban move
+// patched through the SAME session machinery derived form/table/detail use.
+func lowerBoard(rp resourcePlan, fields []fieldSpec, states fieldSpec) *ui.Template {
+	t := &ui.Template{
+		Version: ui.TemplateVersion, DefHash: rp.Decl.DefHash, Kind: "board",
+		Resource: rp.Decl.CatalogName, Mount: "board", GroupBy: states.Name,
+	}
+	title := boardTitleField(fields, states)
+	statesBundle := fieldBundles[states.Base]
+	root := ui.Static("grid")
+	for j, member := range states.Params {
+		listIdx := len(t.Slots)
+		t.Slots = append(t.Slots, ui.Slot{
+			ID: slotIDFor("board.col", j), Kind: "spliceList", Group: member,
+			ReadSet: []ui.ReadKey{{Resource: rp.Decl.CatalogName, KeyClass: "horizon"}},
+		})
+		cells := make([]*ui.Node, 0, 2)
+		if title != "" {
+			cellIdx := len(t.Slots)
+			t.Slots = append(t.Slots, ui.Slot{
+				ID: slotIDFor("board.title", j), Kind: "setText", Field: title, Leaf: "text",
+				ReadSet: []ui.ReadKey{{Resource: rp.Decl.CatalogName, KeyClass: "horizon"}},
+			})
+			cells = append(cells, ui.Leaf("text", cellIdx))
+		}
+		badgeIdx := len(t.Slots)
+		t.Slots = append(t.Slots, ui.Slot{
+			ID: slotIDFor("board.badge", j), Kind: "setText", Field: states.Name, Leaf: statesBundle.Render,
+			ReadSet: []ui.ReadKey{{Resource: rp.Decl.CatalogName, KeyClass: "horizon"}},
+		})
+		cells = append(cells, ui.Leaf(statesBundle.Render, badgeIdx))
+		card := ui.Static("card", cells...)
+		col := ui.Static("section", ui.Static("heading", ui.Lit(member)), ui.KeyedList("list", listIdx, card))
+		root.Children = append(root.Children, col)
+	}
+	t.Root = root
+	return t
+}
+
+// lowerDashboard lowers a resource to a DASHBOARD of stat tiles (ADR-10 §7
+// dashboard = grid of stat tiles): a total-count tile, one count tile per enum
+// (states/select) member, and one sum tile per money field. Each tile is a setText
+// slot over a synthetic aggregate field (`count:__total__`, `count:<field>:<member>`,
+// `sum:<field>`) the kernel fills from a horizon-scoped SELECT-only aggregate read;
+// the horizon ReadSet subscribes the tile so a mutation re-aggregates it live.
+func lowerDashboard(rp resourcePlan, fields []fieldSpec) *ui.Template {
+	t := &ui.Template{
+		Version: ui.TemplateVersion, DefHash: rp.Decl.DefHash, Kind: "dashboard",
+		Resource: rp.Decl.CatalogName, Mount: "dashboard",
+	}
+	hz := []ui.ReadKey{{Resource: rp.Decl.CatalogName, KeyClass: "horizon"}}
+	root := ui.Static("grid")
+	tile := func(caption, field, leaf string) {
+		idx := len(t.Slots)
+		t.Slots = append(t.Slots, ui.Slot{
+			ID: slotIDFor("dashboard", idx), Kind: "setText", Field: field, Leaf: leaf, ReadSet: hz,
+		})
+		root.Children = append(root.Children, ui.Static("card",
+			ui.Static("label", ui.Lit(caption)),
+			ui.Leaf(leaf, idx),
+		))
+	}
+	tile("total", "count:__total__", "text")
+	for _, f := range fields {
+		if f.Base == "states" || f.Base == "select" {
+			for _, m := range f.Params {
+				tile(f.Name+": "+m, "count:"+f.Name+":"+m, "text")
+			}
+		}
+	}
+	for _, f := range fields {
+		if f.Base == "money" && !f.PII {
+			tile("Σ "+f.Name, "sum:"+f.Name, "money")
+		}
+	}
+	return t
 }
 
 // lowerDetail: card > (stack: label + render-leaf) per field. Slot i binds field i.

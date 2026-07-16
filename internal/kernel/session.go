@@ -36,15 +36,15 @@ import (
 // fields (Digest, RowVersion) ride as decimal strings so nothing exceeds the
 // {record,string} value lattice — widening the CFR lattice is out of scope here.
 type sessionCFR struct {
-	View       string            `json:"view"`      // the /ui view path
-	Kind       string            `json:"kind"`      // "detail" | "form" | "table"
-	Resource   string            `json:"resource"`  // catalog resource name (subscription/invalidation key)
+	View       string            `json:"view"`                // the /ui view path
+	Kind       string            `json:"kind"`                // "detail" | "form" | "table"
+	Resource   string            `json:"resource"`            // catalog resource name (subscription/invalidation key)
 	Component  string            `json:"component,omitempty"` // BUILD-E D3: hand-authored component catalog name (Kind=="component")
-	Table      string            `json:"table"`     // physical table (mask + read key)
-	DefHash    string            `json:"def_hash"`  // template definition hash
-	RowID      string            `json:"row_id"`    // detail/form subject id ("" for table/create)
-	Principal  string            `json:"principal"` // render principal (mask ctx)
-	Horizon    string            `json:"horizon"`   // org/scope horizon (policy predicate value)
+	Table      string            `json:"table"`               // physical table (mask + read key)
+	DefHash    string            `json:"def_hash"`            // template definition hash
+	RowID      string            `json:"row_id"`              // detail/form subject id ("" for table/create)
+	Principal  string            `json:"principal"`           // render principal (mask ctx)
+	Horizon    string            `json:"horizon"`             // org/scope horizon (policy predicate value)
 	RowVersion string            `json:"row_version"`
 	Draft      map[string]string `json:"draft"`     // form draft (field -> value), preserved across reconcile
 	UILocal    map[string]string `json:"ui_local"`  // UI-local state (open dialog, etc.)
@@ -129,8 +129,16 @@ type viewMeta struct {
 	Dashboard  *ui.Template // BUILD-E D2: stat tiles over aggregates
 }
 
-// loadViewMeta resolves a resource's derived shape + render templates.
-func loadViewMeta(ctx context.Context, conn *pgwire.Conn, resource string) (*viewMeta, error) {
+// loadViewMeta resolves a resource's derived shape + render templates. When asOf
+// is non-nil (BUILD-E scenario d — as-of rollback observed through the UI), the
+// TEMPLATE artifact is resolved AS-OF that instant: the derived_artifact table is
+// append-only with a created_at, so the latest template row created at or before
+// asOf is the schema/behavior the world had then. A field-add admitted after asOf
+// is thus invisible to an as-of mount (its slots are simply absent), while a live
+// (asOf==nil) mount resolves the current head template. The row-shape fields come
+// from derived_resource (upserted, latest) — they gate data reads/validation, not
+// what the as-of first paint renders; the template slots do that.
+func loadViewMeta(ctx context.Context, conn *pgwire.Conn, resource string, asOf *time.Time) (*viewMeta, error) {
 	var fieldsJSON, table, policy string
 	ok, err := conn.QueryRow(ctx,
 		`SELECT fields::text, table_name, coalesce(policy_name,'') FROM derived_resource
@@ -157,9 +165,15 @@ func loadViewMeta(ctx context.Context, conn *pgwire.Conn, resource string) (*vie
 	sort.Slice(vm.Fields, func(i, j int) bool { return vm.Fields[i].Name < vm.Fields[j].Name })
 
 	var raw2 string
-	ok, err = conn.QueryRow(ctx,
-		`SELECT detail::text FROM derived_artifact WHERE resource_name=$1 AND pass='template'
-		 ORDER BY id DESC LIMIT 1`, []any{resource}, &raw2)
+	if asOf != nil {
+		ok, err = conn.QueryRow(ctx,
+			`SELECT detail::text FROM derived_artifact WHERE resource_name=$1 AND pass='template'
+			 AND created_at <= $2 ORDER BY id DESC LIMIT 1`, []any{resource, *asOf}, &raw2)
+	} else {
+		ok, err = conn.QueryRow(ctx,
+			`SELECT detail::text FROM derived_artifact WHERE resource_name=$1 AND pass='template'
+			 ORDER BY id DESC LIMIT 1`, []any{resource}, &raw2)
+	}
 	if err != nil || !ok {
 		return nil, fmt.Errorf("session: no template artifact for %q (ok=%v err=%v)", resource, ok, err)
 	}
@@ -591,7 +605,7 @@ type mountResult struct {
 // mountSession resolves a view, renders first paint, and creates the session
 // continuation row + its subscriptions in ONE transaction (ADR-11 §5). The row is
 // message-parked on its own id channel; eventSeq starts at step_seq 0.
-func (s *Server) mountSession(ctx context.Context, view, principal, horizon, component string) (mountResult, error) {
+func (s *Server) mountSession(ctx context.Context, view, principal, horizon, component string, asOf *time.Time) (mountResult, error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return mountResult{}, err
@@ -614,7 +628,7 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon, com
 	if perr != nil {
 		return mountResult{}, perr
 	}
-	vm, err := loadViewMeta(ctx, conn, resource)
+	vm, err := loadViewMeta(ctx, conn, resource, asOf)
 	if err != nil {
 		return mountResult{}, err
 	}

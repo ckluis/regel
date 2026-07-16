@@ -61,7 +61,7 @@ func compSlotForField(t *testing.T, srv *Server, compName, resource, field strin
 		t.Fatal(err)
 	}
 	defer srv.pool.Release(conn)
-	vm, err := loadViewMeta(ctx, conn, resource)
+	vm, err := loadViewMeta(ctx, conn, resource, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

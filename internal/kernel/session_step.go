@@ -127,7 +127,7 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 	if err != nil {
 		return cek.Outcome{}, nil, err
 	}
-	vm, err := loadViewMeta(ctx, conn, sess.Resource)
+	vm, err := loadViewMeta(ctx, conn, sess.Resource, nil)
 	if err != nil {
 		return cek.Outcome{}, nil, err
 	}

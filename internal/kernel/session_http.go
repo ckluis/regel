@@ -36,7 +36,19 @@ func (s *Server) handleMount(w http.ResponseWriter, r *http.Request) {
 	// BUILD-E D3: ?component=<catalogName> overlays a hand-authored component into
 	// the (detail) slot over the view's resource row.
 	component := r.URL.Query().Get("component")
-	res, err := s.mountSession(r.Context(), view, principal, horizon, component)
+	// BUILD-E scenario d: ?as_of=<RFC3339> resolves the template AS-OF that instant
+	// (append-only derived_artifact), so the first paint renders the schema/behavior
+	// the world had then — a rollback observed through the UI. Absent ⇒ head (live).
+	var asOf *time.Time
+	if a := r.URL.Query().Get("as_of"); a != "" {
+		t, e := time.Parse(time.RFC3339, a)
+		if e != nil {
+			http.Error(w, "mount: bad as_of: "+e.Error(), http.StatusBadRequest)
+			return
+		}
+		asOf = &t
+	}
+	res, err := s.mountSession(r.Context(), view, principal, horizon, component, asOf)
 	if err != nil {
 		http.Error(w, "mount: "+err.Error(), http.StatusBadRequest)
 		return
@@ -232,7 +244,10 @@ func (s *Server) resyncSession(ctx context.Context, sessionID string) (resyncRes
 	if serr != nil {
 		return resyncResult{}, serr
 	}
-	vm, verr := loadViewMeta(ctx, conn, sess.Resource)
+	// Resync/live steps resolve the HEAD template (asOf nil). An as-of mount is a
+	// read-only historical FIRST PAINT (BUILD-E scenario d); subsequent live steps
+	// track head — documented cut, not a correctness gap for a point-in-time view.
+	vm, verr := loadViewMeta(ctx, conn, sess.Resource, nil)
 	if verr != nil {
 		return resyncResult{}, verr
 	}

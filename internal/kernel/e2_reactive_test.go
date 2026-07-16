@@ -58,7 +58,7 @@ func boardColSlot(t *testing.T, srv *Server, resource, member string) string {
 		t.Fatal(err)
 	}
 	defer srv.pool.Release(conn)
-	vm, err := loadViewMeta(ctx, conn, resource)
+	vm, err := loadViewMeta(ctx, conn, resource, nil)
 	if err != nil || vm.Board == nil {
 		t.Fatalf("no board template for %s (err=%v)", resource, err)
 	}
@@ -79,7 +79,7 @@ func dashSlot(t *testing.T, srv *Server, resource, field string) string {
 		t.Fatal(err)
 	}
 	defer srv.pool.Release(conn)
-	vm, err := loadViewMeta(ctx, conn, resource)
+	vm, err := loadViewMeta(ctx, conn, resource, nil)
 	if err != nil || vm.Dashboard == nil {
 		t.Fatalf("no dashboard template for %s (err=%v)", resource, err)
 	}
@@ -149,7 +149,7 @@ func boardCellSlot(t *testing.T, srv *Server, resource, member string) string {
 	ctx := context.Background()
 	conn, _ := srv.pool.Acquire(ctx)
 	defer srv.pool.Release(conn)
-	vm, _ := loadViewMeta(ctx, conn, resource)
+	vm, _ := loadViewMeta(ctx, conn, resource, nil)
 	// The title cell shares the column's index; find the setText slot whose id
 	// carries the same trailing index as the column's spliceList slot.
 	var colIdx string

@@ -85,7 +85,8 @@ type RunReq struct {
 	GovCeiling int64         // trusted step ceiling (0 → DefaultGovernorCeiling)
 	GovWall    time.Duration // trusted wall deadline (0 → DefaultGovernorWall)
 	Principal  Principal
-	RootEnv    *Env // optional capability root; nil → empty root
+	RootEnv    *Env       // optional capability root; nil → empty root
+	AsOf       *time.Time // eval as-of read context, propagated to std/sql (ADR-10 §4)
 }
 
 // machine is the live CEK state (ADR-04 §2). Registers C/E/K are (defHash/path/
@@ -153,7 +154,7 @@ func (in *Interp) newMachine(ctx context.Context, req RunReq) (*machine, error) 
 	if err != nil {
 		return nil, err
 	}
-	host := &Host{ctx: ctx, reg: in.reg, Principal: req.Principal}
+	host := &Host{ctx: ctx, reg: in.reg, Principal: req.Principal, reader: in.reader, asOf: req.AsOf}
 	m := &machine{
 		in:      in,
 		defHash: req.DefHash,

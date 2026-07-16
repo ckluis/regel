@@ -155,6 +155,7 @@ func (s *Server) Eval(ctx context.Context, req EvalRequest) (EvalResult, error) 
 		Args:      req.Args,
 		Tier:      req.Tier,
 		Fuel:      req.Fuel,
+		AsOf:      req.AsOf, // propagate the eval's as-of read context to std/sql (ADR-10 §4)
 		Principal: cek.Principal{Subject: "eval", IsOperator: true},
 	})
 

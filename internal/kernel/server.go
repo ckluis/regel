@@ -76,6 +76,9 @@ func New(ctx context.Context, pool *pgwire.Pool) (*Server, error) {
 	pool.Release(conn)
 	src := &catalogSource{pool: pool}
 	interp := cek.New(src, image.Registry())
+	// Wire the read-only DB seam std natives reach rows through (ADR-10 §3 identity
+	// reads, §4 std/sql queries). SELECT-only by construction — it never writes.
+	interp.SetReader(&dbReader{pool: pool})
 	s := &Server{pool: pool, interp: interp, image: image, kernelID: admissionUUID(), epoch: epoch, hub: newSSEHub()}
 	s.invIndex = newInvalidationIndex(s)
 	return s, nil

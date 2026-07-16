@@ -29,8 +29,9 @@ func (m MapSource) Load(hash string) (*rast.Node, error) {
 // so caching is unconditionally safe — ADR-03 I6), and the native dispatch
 // registry (ADR-04 §5).
 type Interp struct {
-	src DefSource
-	reg *Registry
+	src    DefSource
+	reg    *Registry
+	reader Reader // read-only DB seam for std natives (ADR-10 §3/§4); nil in unit tests
 
 	mu    sync.RWMutex
 	cache map[string]*rast.Node
@@ -43,6 +44,11 @@ func New(src DefSource, reg *Registry) *Interp {
 	}
 	return &Interp{src: src, reg: reg, cache: map[string]*rast.Node{}}
 }
+
+// SetReader wires the read-only DB seam std natives (identity, std/sql) reach rows
+// through (ADR-10 §3/§4). The kernel calls this once at boot; unit tests leave it
+// unset (a read-needing native then fails closed rather than fabricating a row).
+func (in *Interp) SetReader(r Reader) { in.reader = r }
 
 // loadAST returns the cached AST for a definition hash, loading it once.
 func (in *Interp) loadAST(hash string) (*rast.Node, error) {

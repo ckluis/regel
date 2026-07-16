@@ -472,6 +472,23 @@ CREATE TABLE IF NOT EXISTS git_identity (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- (11) std/identity row-backed identity (ADR-10 §3, STAGE-E D6a). user_account maps
+-- an evaluating principal (the CFR Principal.Subject, e.g. 'user:alice' or an org
+-- member id) to its user + org, so admitted CRM code's identity.currentUser() /
+-- currentOrg() are REAL per-principal reads, not stubs. Minimal but row-backed: no
+-- hardcoded identity anywhere — an unmapped principal reads back null. Seeded via
+-- ordinary INSERTs (the org/user provisioning surface builds on this later).
+CREATE TABLE IF NOT EXISTS user_account (
+  subject     text PRIMARY KEY,        -- the CFR principal subject this row backs
+  user_id     text NOT NULL,           -- stable user id (opaque)
+  org_id      text NOT NULL DEFAULT '',
+  org_name    text NOT NULL DEFAULT '',
+  email       text NOT NULL DEFAULT '',
+  display_name text NOT NULL DEFAULT '',
+  roles       text NOT NULL DEFAULT '',  -- comma-separated role slugs
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- projection_audit is the ADR-09 §3 self-heal event log: when a projection finds
 -- the mirror's main SHA diverged from the computed head (force-push mangle), it
 -- force-restores from the image and writes one row here. Append-only; the image is

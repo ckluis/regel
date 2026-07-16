@@ -170,6 +170,13 @@ func buildImage() *Image {
 		// non-serial result is keyed by hash (NonSerialByHash).
 		{module: "std/sql", export: "Conn", defKind: rast.DefType, catKind: "type"},
 		{module: "std/sql", export: "connect", defKind: rast.DefNative, catKind: "function", native: nativeStub, nonSerial: true},
+		// BUILD-E (D1, ADR-10 §4): the typed parameterized-query surface. query is a
+		// capability-gated (`sql.query`) SELECT-only read against the derived resource
+		// tables — read-safe by construction (a non-SELECT fails closed at the native
+		// boundary), effect class read (inline, no checkpoint), honoring the eval's
+		// as-of read context. Row is the opaque row type the query returns.
+		{module: "std/sql", export: "Row", defKind: rast.DefType, catKind: "type"},
+		{module: "std/sql", export: "query", defKind: rast.DefNative, catKind: "function", native: cek.StdSQLQuery, capability: "sql.query", effectClass: "read"},
 		// std/mail (send — capability "mail.send", the V1 fixture target; effect
 		// class external per ADR-10 §6: the step transaction writes an outbox intent).
 		{module: "std/mail", export: "send", defKind: rast.DefNative, catKind: "function", native: cek.StdMailSend, capability: "mail.send", effectClass: "external"},
@@ -204,8 +211,11 @@ func buildImage() *Image {
 		rosterEntry{module: "std/identity", export: "Role", defKind: rast.DefType, catKind: "type"},
 		rosterEntry{module: "std/identity", export: "Session", defKind: rast.DefType, catKind: "type"},
 		rosterEntry{module: "std/identity", export: "ApiKey", defKind: rast.DefType, catKind: "type"},
-		rosterEntry{module: "std/identity", export: "currentUser", defKind: rast.DefNative, catKind: "function", native: nativeStub, effectClass: "read"},
-		rosterEntry{module: "std/identity", export: "currentOrg", defKind: rast.DefNative, catKind: "function", native: nativeStub, effectClass: "read"},
+		// BUILD-E (D6a): currentUser/currentOrg are now ROW-BACKED reads of the
+		// evaluating principal's user_account row (ADR-10 §3), not stubs — the read
+		// seam is cek.Reader (nil in unit tests ⇒ null, never a fake).
+		rosterEntry{module: "std/identity", export: "currentUser", defKind: rast.DefNative, catKind: "function", native: cek.StdIdentityCurrentUser, effectClass: "read"},
+		rosterEntry{module: "std/identity", export: "currentOrg", defKind: rast.DefNative, catKind: "function", native: cek.StdIdentityCurrentOrg, effectClass: "read"},
 		// std/http (ADR-10 §3 SHIP minimal): outbound call is a CAPABILITY, effect
 		// class external (V2 treats it as a sink; ADR-06 dispatcher delivers).
 		rosterEntry{module: "std/http", export: "get", defKind: rast.DefNative, catKind: "function", native: cek.StdHTTPGet, capability: "http.get", effectClass: "external"},
@@ -392,8 +402,13 @@ func moduleStubs() map[string]string {
 			"export declare const mask: <T>(v: Vault<T>) => string;\n" +
 			"export declare const reveal: <T>(v: Vault<T>, grant: string) => T;\n",
 		// std/sql L0 (BUILD-C, ADR-10 §3 minimal): Conn is a live host-resource handle.
+		// BUILD-E (D1, ADR-10 §4): query is the typed parameterized SELECT-only surface.
+		// A Row is an opaque record of string-keyed scalar columns; params bind as $1…$n
+		// (no string SQL is interpolable — the read-safety guarantee).
 		"/std/sql.ts": "export type Conn = { readonly __conn: string };\n" +
-			"export declare const connect: () => Conn;\n",
+			"export type Row = { readonly [column: string]: string };\n" +
+			"export declare const connect: () => Conn;\n" +
+			"export declare const query: (conn: Conn, sql: string, params: (string | number)[]) => Row[];\n",
 		"/std/mail.ts": "export declare const send: (to: string, subject: string) => " +
 			"{ intent: string; to: string; subject: string };\n",
 		// std/policy L0 (BUILD-C, ADR-10 §4). A Policy is an opaque governance
@@ -428,10 +443,14 @@ func moduleStubs() map[string]string {
 			"export declare const send: <T>(channel: string, value: T) => void;\n" +
 			"export declare const all: <T>(thunks: (() => T)[]) => T[];\n" +
 			"export declare const race: <T>(thunks: (() => T)[]) => T;\n",
-		// std/identity L0 (BUILD-D, ADR-10 §3). Opaque identity value types + the
-		// minimal session reads; the policy/audit surface builds on these later.
-		"/std/identity.ts": "export type Org = { readonly __org: string };\n" +
-			"export type User = { readonly __user: string };\n" +
+		// std/identity L0 (BUILD-D, ADR-10 §3; BUILD-E D6a). User/Org expose the
+		// row-backed fields currentUser/currentOrg read from user_account, so admitted
+		// CRM code can do real per-user logic (u.org, u.roles). The stub shape does not
+		// affect the type hash (types share the opaque `unknown` genesis body), so
+		// enriching it is not an epoch change. currentUser/currentOrg read the evaluating
+		// principal (a runtime null for an unmapped principal is the documented edge).
+		"/std/identity.ts": "export type Org = { readonly id: string; readonly name: string };\n" +
+			"export type User = { readonly id: string; readonly org: string; readonly email: string; readonly name: string; readonly roles: string };\n" +
 			"export type Role = { readonly __role: string };\n" +
 			"export type Session = { readonly __session: string };\n" +
 			"export type ApiKey = { readonly __apiKey: string };\n" +

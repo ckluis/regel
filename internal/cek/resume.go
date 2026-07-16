@@ -56,7 +56,7 @@ func (in *Interp) Resume(ctx context.Context, st *State, d Delivery, p Principal
 		mode:      st.Mode,
 		val:       st.Val,
 		sig:       st.Sig,
-		host:      &Host{ctx: ctx, reg: in.reg, Principal: p},
+		host:      &Host{ctx: ctx, reg: in.reg, Principal: p, reader: in.reader},
 		tier:      st.Tier,
 		fuelSteps: st.FuelSteps,
 		fuelAlloc: st.FuelAlloc,

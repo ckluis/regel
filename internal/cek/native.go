@@ -3,9 +3,27 @@ package cek
 import (
 	"context"
 	"sort"
+	"time"
 
 	"regel.dev/regel/internal/mutants"
 )
+
+// Reader is the read-only DB seam a std native reaches rows through (ADR-10 §3
+// identity reads, §4 std/sql queries). The kernel implements it over the catalog
+// pool; unit tests leave it nil (a native that needs it fails closed, never a fake
+// row). Every method is SELECT-only / read-safe by construction — a Reader NEVER
+// writes, so a native holding one cannot mutate state outside the step transaction.
+type Reader interface {
+	// Identity returns the evaluating principal's user or org record as a flat
+	// column map (nil if none). kind ∈ {"user","org"}. Row-backed: no hardcoded
+	// identity — an unmapped principal yields nil, not a synthetic user.
+	Identity(ctx context.Context, kind, subject string) (map[string]any, error)
+	// Query runs a parameterized SELECT (read-only) and returns rows as column
+	// maps, honoring asOf as the eval's read context (mirroring the erf read path:
+	// data reads are live under the policy horizon; asOf pins the read snapshot).
+	// It MUST reject a non-SELECT statement (read-safe by construction).
+	Query(ctx context.Context, asOf *time.Time, sql string, params []any) ([]map[string]any, error)
+}
 
 // NativeFn is a native (std / AOT) function dispatched by definition hash
 // (ADR-04 §5, §7 Value ABI). A non-nil *NativePark return means the call parks:
@@ -91,6 +109,10 @@ type Host struct {
 	reg       *Registry
 	Principal Principal
 	Effects   []Effect
+	// reader is the read-only DB seam (nil in unit tests) and asOf is the eval's
+	// as-of read context propagated to std/sql queries (ADR-10 §4).
+	reader Reader
+	asOf   *time.Time
 }
 
 // Ctx exposes the run context to natives.

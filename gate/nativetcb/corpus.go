@@ -220,6 +220,9 @@ var AuthorityInventory = []Disposition{
 	{Native: "std/erf.list",
 		CaughtBy:   "effect-order conformance gate (read-declared) + V3 policy predicate on the derived read path",
 		TrustedFor: "the collection-read authority is bounded by the injected policy predicate"},
+	{Native: "std/sql.query",
+		CaughtBy:   "V1 capability-audit (sql.query declared+granted) + the SELECT-only native boundary (isReadOnlySQL fails a non-SELECT closed) + effect-order conformance gate (read-declared: a recorded effect fails closed)",
+		TrustedFor: "the parameterized read authority: the caller's SQL text is trusted to carry the org/policy predicate the query author wrote — v1 std/sql does not yet inject a policy predicate the way erf reads do (a cross-org SELECT is bounded by the capability grant + the SELECT-only surface, not by an auto-injected WHERE org clause). Named residue: policy-predicate injection into std/sql reads is a later increment"},
 	// --- irreducible kernel/crypto/derivation authority (class-level) ----------
 	{Native: "std/crypto.aeadSeal",
 		CaughtBy:   "",

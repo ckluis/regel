@@ -158,6 +158,30 @@ added minimal, behind the same seam, mirroring not inventing):
   tag) + `connect()` — is added now purely as the V5 capture-fixture substrate. The full
   parameterized-query surface (§3 worst-failure: injection/cross-org) lands at Stage D.
 
+**BUILD-E (D1) — the typed parameterized-query surface lands.** `std/sql.query(conn, sql,
+params)` is added to the genesis roster: a capability-gated (`sql.query`), SELECT-only read
+against the derived resource tables, effect class `read` (inline, no checkpoint). Read-safe
+by construction is realized in two layers, matching this §3 row's "no string SQL is
+expressible": (i) params bind as `$1…$n` (never string-interpolated), and (ii) the native
+boundary rejects any non-SELECT statement (`isReadOnlySQL`: SELECT-prefix after comment
+strip, no embedded `;`, no `FOR UPDATE/SHARE` lock clause) and **fails closed** with a
+`sql.write_refused` durable condition — an admitted def issuing an UPDATE never reaches
+Postgres. The capability gate mirrors `std/mail.send`: an ungranted, non-operator caller
+parks on `capability.revoked` with no read performed. Reads run under the eval's **as-of**
+read context (propagated to the `cek.Reader` seam); as the erf read path does, data reads
+are live under the policy horizon while as-of pins the read snapshot (REPEATABLE READ). The
+`cek.Reader` seam is the read-only door natives reach rows through (nil in unit tests ⇒ a
+read-needing native fails closed, never a fabricated row) — it is SELECT-only and never
+writes, so it adds no effect authority to the native TCB.
+
+**BUILD-E (D6a) — `std/identity.currentUser/currentOrg` are row-backed.** They read the
+evaluating principal's `user_account` row (`subject` PK → `user_id`, `org_id`, `email`,
+`display_name`, `roles`; ADR-03 DDL, authored in `schema.sql` §11) through the same
+`cek.Reader` seam, keyed on `Principal.Subject`. Two different principals resolve to two
+different users (or null for an unmapped principal) — no hardcoded identity remains. This
+is the minimal read of "session context" §3 named; the org/user provisioning surface that
+seeds the table builds on it later. `std/test.fake` stays a stub (named residue).
+
 ### 4. erf: `resource(...)` v1 surface and exact derivation outputs
 
 Surface: `resource(name, fields, options)` with `options ⊆ {horizon, policy, actions}`;

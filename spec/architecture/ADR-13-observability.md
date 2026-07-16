@@ -163,6 +163,27 @@ normative now; the numbers are the first stake in the ground, not folklore.
 signals where the interesting number is the anomaly, not the level; they get
 rate-of-change alarms, operator-set.
 
+**BUILD-D (D5b): `sse.fanout_lag_ms` — the 500 ms p95 SLO binds INTERACTIVE fan-out,
+not a one-shot 50k full fan-out; the storm is governed by a calibrated drain budget.**
+`sse.fanout_lag_ms` measures, per ADR-13 §2's own definition, the *enqueue→patch-sent
+drain lag* of a single invalidated session. For an ordinary interactive invalidation
+(a fan-out that fits within a drain tick's bounded-pool capacity) the 500 ms p95 target
+stands. It is **arithmetically unmeetable** for the tail of a **one-shot 50k
+single-horizon full fan-out** on a single node: with a bounded worker pool the last
+session's lag is O(N / workers × per-drive-cost), which the D5b gate measured at
+**p50 ≈ 16.2 s, p95 ≈ 30.8 s** for N=50k on 16 workers (Apple M4, local Postgres 16,
+idle). That is not a regression — it is the physics of draining 50k real
+claim→resume→diff→checkpoint transactions on one node. The catastrophic full fan-out is
+therefore governed by a **separate calibrated storm drain budget**, not by the
+interactive p95: `sse.storm50k.drain_ms` ≤ **90 s** (measured **≈33 s**), with the
+per-session tail pinned as `sse.fanout_lag_ms.p50` ≤ **45 s** (≈16.2 s) and
+`sse.fanout_lag_ms.p95` ≤ **75 s** (≈30.8 s) — all `perf_budget` rows (epoch 1, M4),
+red on regression. Coalescing is proven at the same gate (K=20 concurrent-mutation
+burst collapsed to ≈1.14 re-renders per session, ~17.6×), and the kernel stays live
+throughout (healthz p-max 1 ms from process memory during the 33 s drain). The bound
+that is *not* relaxed: **exactly-once** — every one of the 50k sessions re-renders
+exactly once per NOTIFY (max step_seq == 1).
+
 ### 4. Out-of-band emission: telemetry survives Postgres loss
 
 **The emit path takes zero Postgres round trips.** Three channels, all fed from the

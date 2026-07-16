@@ -179,28 +179,28 @@ CREATE TABLE IF NOT EXISTS derived_artifact (
   pass          text NOT NULL CHECK (pass IN
                   ('schema','policy','retire','validator',
                    'history','vault','horizon','components','openapi','mcptools','catalog',
-                   'template')),
+                   'template','component_template')),
   detail        jsonb NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS derived_artifact_resource_idx
   ON derived_artifact (resource_name, scope_kind, scope_id);
--- Bring a pre-existing derived_artifact CHECK up to the BUILD-D + D2 pass roster
--- (detection keys on the newest member, 'template', so a Stage-C or a
--- BUILD-D-without-template constraint is both upgraded).
+-- Bring a pre-existing derived_artifact CHECK up to the BUILD-D + D2/E pass roster
+-- (detection keys on the newest member, 'component_template', so a Stage-C, a
+-- BUILD-D-without-template, or a D2-without-component_template constraint is upgraded).
 DO $$
 DECLARE cn text;
 BEGIN
   SELECT c.conname INTO cn FROM pg_constraint c
   WHERE c.conrelid = 'derived_artifact'::regclass AND c.contype = 'c'
     AND pg_get_constraintdef(c.oid) LIKE '%pass%'
-    AND pg_get_constraintdef(c.oid) NOT LIKE '%template%';
+    AND pg_get_constraintdef(c.oid) NOT LIKE '%component_template%';
   IF cn IS NOT NULL THEN
     EXECUTE 'ALTER TABLE derived_artifact DROP CONSTRAINT ' || quote_ident(cn);
     ALTER TABLE derived_artifact ADD CONSTRAINT derived_artifact_pass_check CHECK (pass IN
       ('schema','policy','retire','validator',
        'history','vault','horizon','components','openapi','mcptools','catalog',
-       'template'));
+       'template','component_template'));
   END IF;
 END $$;
 

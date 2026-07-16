@@ -544,6 +544,25 @@ func deriveResources(ctx context.Context, q catalog.Querier, lowered []loweredDe
 			return derivationPlan{}, err
 		}
 	}
+	// Hand-authored component pass (BUILD-E D3, ADR-11 §1 / ADR-10 §7): a def whose
+	// body composes the tier-1 vocabulary lowers to a `component_template` artifact —
+	// the SAME static/dynamic split derived form/table/detail ride, so a bespoke
+	// component renders + patches through the identical session machinery. This is a
+	// per-DEFINITION artifact, not a resource pass, so requiredPasses / V6
+	// DERIVE_PARITY are untouched.
+	for _, ld := range lowered {
+		ct, ok := lowerComponent(ld, im)
+		if !ok {
+			continue
+		}
+		detail, derr := ct.Encode()
+		if derr != nil {
+			return derivationPlan{}, derr
+		}
+		if err := insertArtifact(ctx, q, admissionID, ld.CatalogName, scope, "component_template", string(detail)); err != nil {
+			return derivationPlan{}, err
+		}
+	}
 	return plan, nil
 }
 

@@ -530,3 +530,118 @@ func loadContinuationResult(t *testing.T, e *procEnv, id string) int64 {
 	}
 	return int64(v.N)
 }
+
+// --- D4 ADR-05 TEST: kill -9 mid-step of a std/taak workflow -----------------
+
+// taakKillWorkflow exercises the D4 authoring surface across a kill -9: std/taak
+// sleep (durable checkpoint), an external log.write effect per iteration (an
+// outbox intent the dispatcher delivers effectively-once), and a std/taak receive
+// at the end (a message wake that must survive the restart). The result
+// aggregates across steps so a wrong resume yields a wrong value.
+const taakKillWorkflow = `import { sleep, receive } from "std/taak";
+import { write } from "std/log";
+export function w(): number {
+  let acc = 0;
+  for (let i = 0; i < 4; i++) {
+    let c = 0;
+    for (let j = 0; j < 300000; j++) { c = c + 1; }
+    acc = acc + (i + 1) * 1000 + (c - 300000);
+    write("step");
+    sleep(100);
+  }
+  const bonus: number = receive("taakdone");
+  return acc + bonus;
+}`
+
+func (sp *serveProc) channelSend(t *testing.T, channel string, value string) {
+	t.Helper()
+	code, body := httpPost(t, sp.baseURL+"/channel/"+channel+"/send",
+		`{"value":`+value+`}`, map[string]string{"X-Regel-Actor": "operator:op"})
+	if code != 200 {
+		t.Fatalf("channel send %s: %d %q", channel, code, body)
+	}
+}
+
+func TestKill9TaakWorkflowRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("kill-9 process test is heavy (builds + spawns servers)")
+	}
+	const wantResult = int64(10042) // 1000+2000+3000+4000 + bonus 42
+	const wantOutbox = int64(4)     // four log.write external intents
+
+	killEnv := newProcEnv(t)
+	killEnv.admit(t, taakKillWorkflow, "app/taakkill", "w")
+	srvA := killEnv.spawnServe(t, 2, 100*time.Millisecond)
+	killID := srvA.startWorkflow(t, "app/taakkill/w")
+
+	// Wait for an in-flight step (a committed effect + a running task) then SIGKILL.
+	deadline := time.Now().Add(30 * time.Second)
+	var killMoment string
+	for time.Now().Before(deadline) {
+		outN := killEnv.scalar(t, `SELECT count(*) FROM outbox WHERE continuation_id=$1`, killID)
+		running := killEnv.scalar(t, `SELECT count(*) FROM task WHERE status='running'`)
+		st := killEnv.text(t, `SELECT status FROM continuation WHERE id=$1`, killID)
+		if outN >= 1 && running >= 1 {
+			killMoment = fmt.Sprintf("outbox=%d running_tasks=%d status=%s", outN, running, st)
+			break
+		}
+		if st == "done" {
+			t.Fatal("workflow finished before a kill window opened")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if killMoment == "" {
+		t.Fatal("no kill window observed")
+	}
+	pid := srvA.sigkill(t)
+	t.Logf("KILL: SIGKILL taak kernel A pid=%d at [%s]", pid, killMoment)
+
+	// Kernel B (fresh process, same DB) reaps and resumes.
+	srvB := killEnv.spawnServe(t, 2, 100*time.Millisecond)
+
+	// The workflow drains its loop then parks on receive("taakdone"). Send the bonus.
+	pdl := time.Now().Add(30 * time.Second)
+	for time.Now().Before(pdl) {
+		kind := killEnv.text(t, `SELECT wake->>'kind' FROM continuation WHERE id=$1`, killID)
+		st := killEnv.text(t, `SELECT status FROM continuation WHERE id=$1`, killID)
+		if st == "sleeping" && kind == "message" {
+			break
+		}
+		if st == "done" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	srvB.channelSend(t, "taakdone", "42")
+
+	waitContinuationStatus(t, killEnv, killID, "done", 30*time.Second)
+	killVal := loadContinuationResult(t, killEnv, killID)
+	killN := killEnv.scalar(t, `SELECT count(*) FROM outbox WHERE continuation_id=$1`, killID)
+	reoffers := healthzReoffers(t, srvB.healthz(t))
+
+	// The dispatcher delivered every external intent effectively-once: each of the
+	// four log.write outbox rows is marked delivered_at (a deliver task ran).
+	delivered := killEnv.scalar(t,
+		`SELECT count(*) FROM outbox WHERE continuation_id=$1 AND delivered_at IS NOT NULL`, killID)
+	deadDeliver := killEnv.scalar(t, `SELECT count(*) FROM task WHERE kind='deliver' AND status='dead'`)
+	t.Logf("RESUME (kernel B): id=%s result=%d outbox=%d delivered=%d reoffers=%d",
+		killID, killVal, killN, delivered, reoffers)
+
+	if killVal != wantResult {
+		t.Fatalf("taak kill result = %d, want %d", killVal, wantResult)
+	}
+	if killN != wantOutbox {
+		t.Fatalf("outbox = %d, want exactly %d (no double, no missing effect)", killN, wantOutbox)
+	}
+	if delivered != wantOutbox {
+		t.Fatalf("delivered = %d, want %d (dispatcher must deliver every intent once)", delivered, wantOutbox)
+	}
+	if deadDeliver != 0 {
+		t.Fatalf("dead deliver tasks = %d, want 0", deadDeliver)
+	}
+	if reoffers < 1 {
+		t.Fatalf("reoffers = %d, want >0 (stranded step re-offered)", reoffers)
+	}
+	t.Logf("TAAK KILL-9 VERIFIED: sleep+receive survived restart, result=%d, %d effects delivered once",
+		killVal, delivered)
+}

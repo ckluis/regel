@@ -45,6 +45,38 @@ func UndefV() Value { return undef() }
 // Num returns the number payload and whether v is a number.
 func (v Value) Num() (float64, bool) { return v.N, v.Tag == TagF64 }
 
+// Field reads a record field by key (exported for the store's message-match
+// evaluation, BUILD-D). Returns (_, false) for a non-record or a missing key.
+func (v Value) Field(key string) (Value, bool) {
+	if v.Tag != TagRecord {
+		return Value{}, false
+	}
+	return v.rec().get(key)
+}
+
+// Elems returns the array elements and whether v is an array.
+func (v Value) Elems() ([]Value, bool) {
+	if v.Tag != TagArray {
+		return nil, false
+	}
+	return v.arr().Elems, true
+}
+
+// RecordV builds a record Value from ordered (key, value) pairs (exported for
+// tests and message construction).
+func RecordV(keys []string, vals []Value) Value {
+	r := newRecord()
+	for i, k := range keys {
+		if i < len(vals) {
+			r.set(k, vals[i])
+		}
+	}
+	return recVal(r)
+}
+
+// ArrayV builds an array Value (exported for tests and message construction).
+func ArrayV(elems []Value) Value { return arrVal(&ArrayObj{Elems: elems}) }
+
 // Str returns the string payload and whether v is a string.
 func (v Value) StrVal() (string, bool) { return v.S, v.Tag == TagStr }
 

@@ -88,6 +88,10 @@ func (im *Image) Registry() *cek.Registry {
 	for _, e := range im.Entries {
 		if e.Native != nil {
 			reg.Register(e.Hash, e.Native)
+			// BUILD-D D4: publish the declared effect class so the machine can enforce
+			// the ADR-10 §6 std-conformance gate (a read-declared native that records
+			// a write/external effect is caught and failed closed).
+			reg.SetEffectClass(e.Hash, e.EffectClass)
 		}
 	}
 	return reg
@@ -118,11 +122,20 @@ func buildImage() *Image {
 		// std/iter (grammar-owed: Iter<T>, keys — ADR-01)
 		{module: "std/iter", export: "Iter", defKind: rast.DefType, catKind: "type"},
 		{module: "std/iter", export: "keys", defKind: rast.DefNative, catKind: "function", native: cek.StdKeys},
-		// std/taak (all, race, signal, sleep signatures)
-		{module: "std/taak", export: "all", defKind: rast.DefNative, catKind: "function", native: nativeStub},
-		{module: "std/taak", export: "race", defKind: rast.DefNative, catKind: "function", native: nativeStub},
-		{module: "std/taak", export: "signal", defKind: rast.DefNative, catKind: "function", native: nativeStub},
-		{module: "std/taak", export: "sleep", defKind: rast.DefNative, catKind: "function", native: nativeStub},
+		// std/taak (BUILD-D D4, ADR-10 §6): the REAL v1 workflow-authoring surface.
+		// The taak.* natives reuse the StdWf* machinery (one implementation, two
+		// module names — the hashes differ because the NativeBody intrinsic symbol
+		// differs, so both dispatch to the same Go body). signal writes the durable
+		// condition + restart rows and parks manual (ADR-05 §6); onChange parks on an
+		// event wake (ADR-05 §5). taak is the authoring surface; std/wf remains the
+		// Stage-B alias so existing workflows keep resolving.
+		{module: "std/taak", export: "sleep", defKind: rast.DefNative, catKind: "function", native: cek.StdWfSleep},
+		{module: "std/taak", export: "receive", defKind: rast.DefNative, catKind: "function", native: cek.StdWfReceive},
+		{module: "std/taak", export: "send", defKind: rast.DefNative, catKind: "function", native: cek.StdWfSend},
+		{module: "std/taak", export: "all", defKind: rast.DefNative, catKind: "function", native: cek.StdWfAll},
+		{module: "std/taak", export: "race", defKind: rast.DefNative, catKind: "function", native: cek.StdWfRace},
+		{module: "std/taak", export: "signal", defKind: rast.DefNative, catKind: "function", native: cek.StdTaakSignal},
+		{module: "std/taak", export: "onChange", defKind: rast.DefNative, catKind: "function", native: cek.StdTaakOnChange},
 		// std/contract (requires, ensures) — purity enforced by V4 (Stage B)
 		{module: "std/contract", export: "requires", defKind: rast.DefNative, catKind: "function", native: cek.StdContractRequires},
 		{module: "std/contract", export: "ensures", defKind: rast.DefNative, catKind: "function", native: cek.StdContractEnsures},
@@ -355,10 +368,18 @@ func moduleStubs() map[string]string {
 	return map[string]string{
 		"/std/iter.ts": "export type Iter<T> = { value: T; done: boolean };\n" +
 			"export declare const keys: (obj: unknown) => string[];\n",
-		"/std/taak.ts": "export declare const all: (xs: unknown[]) => unknown;\n" +
-			"export declare const race: (xs: unknown[]) => unknown;\n" +
-			"export declare const signal: (cls: string, restarts: unknown) => unknown;\n" +
-			"export declare const sleep: (ms: number) => void;\n",
+		// std/taak L0 (BUILD-D D4, ADR-10 §6): the real workflow-authoring surface.
+		// receive takes an optional {path, equals} match predicate; onChange parks on
+		// a derived-resource change; signal writes a durable condition + restarts.
+		"/std/taak.ts": "export type Match = { path: string; equals: unknown };\n" +
+			"export type Restart = { name: string; label: string; capability?: string };\n" +
+			"export declare const sleep: (ms: number) => void;\n" +
+			"export declare const receive: <T>(channel: string, match?: Match) => T;\n" +
+			"export declare const send: <T>(channel: string, value: T) => void;\n" +
+			"export declare const all: <T>(thunks: (() => T)[]) => T[];\n" +
+			"export declare const race: <T>(thunks: (() => T)[]) => T;\n" +
+			"export declare const signal: (cls: string, restarts: Restart[], payload?: unknown) => unknown;\n" +
+			"export declare const onChange: (resource: string, keys?: string[]) => void;\n",
 		"/std/contract.ts": "export declare const requires: (cond: boolean) => boolean;\n" +
 			"export declare const ensures: (cond: boolean) => boolean;\n" +
 			"export declare const pre: (cond: boolean) => void;\n" +

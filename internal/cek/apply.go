@@ -363,7 +363,18 @@ func (m *machine) performNative(f *Frame, hash string, args []Value) (Outcome, b
 	if !ok {
 		return m.fault("no native registered for %s", hash)
 	}
+	// ADR-10 §6 std-conformance gate (BUILD-D D4): a capability whose declared
+	// effect class is `read` performs no durable effect — the kernel runs it inline
+	// with no checkpoint. If its native body records a write/external effect, the
+	// declaration is a lie; catch it and FAIL CLOSED (the accidental-bug version of
+	// the §8 effect-order threat class; the adversarial seed is D5's TCB harness).
+	declClass := m.in.reg.effectClass(hash)
+	effectsBefore := len(m.host.Effects)
 	v, park := fn(m.host, args)
+	if declClass == "read" && len(m.host.Effects) > effectsBefore {
+		got := m.host.Effects[effectsBefore].Class
+		return m.fault("conformance: read-declared native %s recorded effect %q (effect-class violation)", hash, got)
+	}
 	if park != nil {
 		// Both park kinds re-enter at this call point in Apply mode on resume: pop
 		// FrCall, park m at the call, and snapshot. ParkWake carries a wake trigger

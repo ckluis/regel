@@ -24,16 +24,32 @@ type NativePark struct {
 }
 
 // Registry maps a definition hash to its native implementation. The kernel
-// populates it at genesis (ADR-10 §2).
+// populates it at genesis (ADR-10 §2). It also carries each native's DECLARED
+// effect class (ADR-10 §6: read/write/external), verifier-visible metadata that
+// drives the await-as-checkpoint conformance gate (§6 std-conformance).
 type Registry struct {
-	fns map[string]NativeFn
+	fns     map[string]NativeFn
+	classes map[string]string // hash → declared effect class ("read"/"write"/"external")
 }
 
 // NewRegistry builds an empty registry.
-func NewRegistry() *Registry { return &Registry{fns: map[string]NativeFn{}} }
+func NewRegistry() *Registry {
+	return &Registry{fns: map[string]NativeFn{}, classes: map[string]string{}}
+}
 
 // Register binds a hash to a native implementation.
 func (r *Registry) Register(hash string, fn NativeFn) { r.fns[hash] = fn }
+
+// SetEffectClass records a native's declared effect class (ADR-10 §6). The image
+// calls this from EffectClassByHash so the machine can enforce §6 conformance.
+func (r *Registry) SetEffectClass(hash, class string) {
+	if class != "" {
+		r.classes[hash] = class
+	}
+}
+
+// effectClass returns the declared effect class for a hash, or "" if none.
+func (r *Registry) effectClass(hash string) string { return r.classes[hash] }
 
 // lookup returns the native for a hash, if any.
 func (r *Registry) lookup(hash string) (NativeFn, bool) {
@@ -241,13 +257,114 @@ func StdWfSleep(h *Host, args []Value) (Value, *NativePark) {
 	return undef(), &NativePark{Wake: &Wake{Kind: WakeTimer, DelayMS: int64(args[0].N)}}
 }
 
-// StdWfReceive parks on a message wake (wf.receive(channel)); resume delivers the
-// message payload value.
+// StdWfReceive parks on a message wake (receive(channel, match?)); resume delivers
+// the message payload value. The optional second argument is a structural match
+// predicate {path, equals} (BUILD-D, ADR-05 §5): a receiver with a predicate claims
+// the oldest UNDELIVERED message whose payload matches; a non-matching message
+// stays queued for another receiver. This one native backs both wf.receive and
+// taak.receive (one implementation, two module names — ADR-10 §6).
 func StdWfReceive(h *Host, args []Value) (Value, *NativePark) {
 	if len(args) < 1 || args[0].Tag != TagStr {
-		return undef(), wfFault("wf.arg", "wf.receive expects a channel name")
+		return undef(), wfFault("wf.arg", "receive expects a channel name")
 	}
-	return undef(), &NativePark{Wake: &Wake{Kind: WakeMessage, Channel: args[0].S}}
+	w := &Wake{Kind: WakeMessage, Channel: args[0].S}
+	if len(args) >= 2 && args[1].Tag == TagRecord {
+		r := args[1].rec()
+		m := &WakeMatch{}
+		if p, ok := r.get("path"); ok {
+			m.Path = toStr(p)
+		}
+		if eq, ok := r.get("equals"); ok {
+			m.Equals = eq
+			m.Has = true
+		}
+		if m.Path != "" && m.Has {
+			w.Match = m
+		}
+	}
+	return undef(), &NativePark{Wake: w}
+}
+
+// StdTaakSignal writes a durable condition + its restarts and parks manual
+// (taak.signal(class, restarts, payload?)); resume delivers the chosen restart's
+// value at the call point (ADR-05 §6, ADR-10 §6). restarts is an array of
+// {name, label, capability?} records. The ParkSignal snapshot + the ParkOutcome
+// parkCondition writer persist the rows — one std native over the Stage-B path.
+func StdTaakSignal(h *Host, args []Value) (Value, *NativePark) {
+	if len(args) < 1 || args[0].Tag != TagStr {
+		return undef(), wfFault("taak.arg", "taak.signal expects (class, restarts, payload?)")
+	}
+	class := args[0].S
+	var restarts []Restart
+	if len(args) >= 2 && args[1].Tag == TagArray {
+		for _, el := range args[1].arr().Elems {
+			if el.Tag != TagRecord {
+				continue
+			}
+			r := el.rec()
+			rs := Restart{}
+			if nm, ok := r.get("name"); ok {
+				rs.Name = toStr(nm)
+			}
+			if lb, ok := r.get("label"); ok {
+				rs.Label = toStr(lb)
+			}
+			if cp, ok := r.get("capability"); ok {
+				rs.CapabilityRequired = toStr(cp)
+			}
+			if rs.Name != "" {
+				restarts = append(restarts, rs)
+			}
+		}
+	}
+	if len(restarts) == 0 {
+		restarts = []Restart{{Name: "abort", Label: "Abort"}}
+	}
+	payload := map[string]any{}
+	if len(args) >= 3 && args[2].Tag == TagRecord {
+		rec := args[2].rec()
+		for _, k := range rec.Keys {
+			payload[k] = valueToAny(rec.M[k])
+		}
+	}
+	return undef(), &NativePark{Condition: SignalCondition(class, restarts, payload)}
+}
+
+// StdTaakOnChange parks on an event wake (taak.onChange(resource, keys?)); the
+// store wakes it when a mutation on the derived resource commits (BUILD-D, ADR-05
+// §5 event wake). keys is an optional array of row ids to watch; empty ⇒ ANY row.
+func StdTaakOnChange(h *Host, args []Value) (Value, *NativePark) {
+	if len(args) < 1 || args[0].Tag != TagStr {
+		return undef(), wfFault("taak.arg", "taak.onChange expects (resource, keys?)")
+	}
+	w := &Wake{Kind: WakeEvent, Stream: args[0].S}
+	if len(args) >= 2 && args[1].Tag == TagArray {
+		for _, el := range args[1].arr().Elems {
+			if s, ok := el.StrVal(); ok {
+				w.On = append(w.On, s)
+			}
+		}
+	}
+	return undef(), &NativePark{Wake: w}
+}
+
+// valueToAny projects a scalar Value into a JSON-marshalable Go value for a
+// durable-condition payload (best-effort; compound values collapse to a string).
+func valueToAny(v Value) any {
+	switch v.Tag {
+	case TagStr:
+		return v.S
+	case TagF64:
+		return v.N
+	case TagBool:
+		return v.asBool()
+	case TagNull, TagUndefined:
+		return nil
+	case TagBigInt:
+		return v.big().String()
+	default:
+		return toStr(v)
+	}
 }
 
 // StdWfSend records a channel.send effect carrying the full-fidelity payload

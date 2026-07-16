@@ -199,3 +199,54 @@ export function approve(): string {
 		t.Fatalf("result = %+v, want resolved:approve", got)
 	}
 }
+
+// --- item 8: session/workflow bridge (ADR-11 §6 + ADR-05 §5) -----------------
+
+// TestSessionMutationWakesWorkflowAndPatchesSession: one derived-row mutation
+// (a session form submit) both PATCHES a subscribed detail session (D3 reactive
+// path) AND wakes a workflow parked on that row via taak.onChange — the two paths
+// ride the same mutation transaction (BUILD-D D4 bridge).
+func TestSessionMutationWakesWorkflowAndPatchesSession(t *testing.T) {
+	se := newSessionEnv(t)
+	se.admitWidget(t)
+	id := se.seedWidget(t, "acme", "foo", 1)
+	nameDetail := slotForField(t, se.srv, "app/rx/Widget", "detail", "name")
+	nameForm := slotForField(t, se.srv, "app/rx/Widget", "form", "name")
+
+	// A workflow parks on changes to THIS Widget row (resource name = catalog name).
+	wsrc := `import { onChange } from "std/taak";
+export function watch(): string { onChange("app/rx/Widget", ["` + fmtID(id) + `"]); return "changed"; }`
+	v := se.admit(t, wsrc, "app/wev", nil)
+	if v.Outcome != admission.OutcomeAdmitted {
+		t.Fatalf("admit watcher: %q (%+v)", v.Outcome, v.Diagnostics)
+	}
+	wid := se.start(t, v.Hashes["app/wev/watch"], nil, map[string]any{"subject": "op", "operator": true})
+
+	r := se.srv.StartReactor(context.Background(), ReactorConfig{PollInterval: 15 * time.Millisecond})
+	defer r.Stop()
+	se.waitStatus(t, wid, "sleeping", 5*time.Second)
+
+	// A detail session subscribed to the row.
+	A := se.mount(t, "app/rx/Widget/detail/"+fmtID(id), "human:a", "acme")
+	ca := A.openSSE(0)
+	defer ca.close()
+	time.Sleep(150 * time.Millisecond)
+
+	// A form session mutates the row's name.
+	ed := se.mount(t, "app/rx/Widget/form/"+fmtID(id), "human:e", "acme")
+	ed.postEvent("input", nameForm, "BRIDGED")
+	if r := ed.postEvent("submit", "", ""); r["applied"] != true {
+		t.Fatalf("submit not applied: %+v", r)
+	}
+
+	// The subscribed detail session is patched with the new value.
+	fa := ca.nextFrame(t, 4*time.Second)
+	if op, ok := opFor(fa, nameDetail); !ok || op.Payload != "BRIDGED" {
+		t.Fatalf("detail session not patched: frame=%+v", fa)
+	}
+	// The event-parked workflow woke and completed exactly once.
+	se.waitStatus(t, wid, "done", 5*time.Second)
+	if got := se.result(t, wid); got.S != "changed" {
+		t.Fatalf("workflow result = %+v, want changed", got)
+	}
+}

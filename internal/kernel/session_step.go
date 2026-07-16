@@ -310,8 +310,14 @@ func (s *Server) submitForm(ctx context.Context, conn *pgwire.Conn, vm *viewMeta
 			return nil
 		}
 	}
-	// Committed: dependency-exact invalidation for every OTHER subscribed session (§6).
+	// Committed: dependency-exact invalidation for every OTHER subscribed session (§6),
+	// AND event wakes for workflows parked on this resource via taak.onChange
+	// (BUILD-D D4, ADR-05 §5): both ride the SAME mutation transaction, so a derived
+	// write reaches live sessions and parked workflows atomically with the commit.
 	if err := notifyInvalidate(ctx, conn, vm.Resource, sess.RowID, sess.Horizon); err != nil {
+		return err
+	}
+	if _, err := cfr.WakeEvents(ctx, conn, vm.Resource, sess.RowID); err != nil {
 		return err
 	}
 	sess.UILocal["__alert__"] = ""

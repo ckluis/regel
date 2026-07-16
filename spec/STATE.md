@@ -49,6 +49,15 @@
 - STAGE E: **DEFERRED TO FRESH SESSION** (operator decision 2026-07-16, to cut fable usage). Handoff prompt: /Users/clank/Desktop/projects/experimentalArchitectures/regel-stage-e-session-prompt.md — opus-led prime + sub-orchestrators, fable only as last-resort upgrade tier; PHASE R fresh-eyes review (re-verify gates A–D, consolidate residues) then PHASE E (proof CRM, 5 scenarios, OPEN M5 real-LLM gates, docs/claim-evidence.md, spec/FINAL.md).
 - PHASE R (fresh-eyes re-verification): **DONE — BASELINE GREEN-WITH-FIXES** 2026-07-16 (spec/gates/REVIEW-PRE-E.md; evidence-pre-e/). Re-verified at HEAD: `go test ./...` exit 0 (12 pkgs, real PG16.13), all 6 demos exit 0, git two-fold + genesis two-fresh-DB byte-identical. Spot-checked ≥3 load-bearing claims/gate (A–D): all MATCH, evidence CLEAN modulo perf drift within budgets, zero misrepresentation. 1 FIX-NOW: de-flaked the flagship kill-9 e2e's racy `reoffers>0` liveness-attribution (65580bf; correctness invariants untouched, deterministic reaper gate is `TestReaperReoffersStranded`). Drove real CLI/HTTP/MCP by hand — **0 functional bugs**, cross-door consistency confirmed, 3 benign UX papercuts → CE. Residue sweep = **42** (STAGE-A/B/C/D §residues + luminary R1 P2): stage-e 17 / defer-v2 15 / discharged 10. Stage-E work list in REVIEW-PRE-E §5.
 
-## Next
-- Operator re-decision at the Stage D gate → E (proof CRM + claim-evidence: migrate N machinery, golden-continuation corpus, O1–O5 fences, bad-epoch revert drill, PII crypto-shred demo with attestation, stranger-review dashboard gate — plus the Stage-C OPEN real-LLM M5 gates and the Stage-D residues 1–3 as CRM collateral).
-- Stage E must build by DRIVING the real CLI/HTTP surface (STAGE-D.md §15: both late Stage-D fixes were found by use, not by tests).
+- PHASE E in flight (2026-07-16). Milestones:
+  - E1 D11 lowerer fix DONE (950c0b2): dep edges keyed by nominal (module,name) — hash-keyed map dropped edges (blinded V2: PII escape ADMITTED, RED captured). CLI-verified multi-export eval.
+  - Real LLM reachable via `claude -p` (verified PONG) → M5 gates RUN for real, not residue.
+
+## Next (Phase E remaining, in order)
+1. CRM std batteries chunk 1: std/sql typed queries (D1), real identity natives + cfr.DeliverySink (D6), VaultPut CLI door (D12), cron drive (B8).
+2. CRM std batteries chunk 2: dashboard/board/operatorPlane derivation (D2), hand-authored component→template lowering (D3).
+3. CRM app rows (accounts/contacts/activities + taak workflows) via real CLI/HTTP/MCP; scenarios a–e scripts under scripts/.
+4. M5 real-LLM gates via `claude -p` (§3a pass@k pinned per epoch, §7 restart accuracy, §5 eval-derived fuel).
+5. Durability: migrate-N, golden-continuation corpus (B2), O1–O5 fences, bad-epoch revert drill w/ held dependents (A7,L1), world-rehash canary.
+6. Hardening trio: RESIDUE_LOG_SINK V2 (D4), REPEATABLE-READ serve (L7), full-control-flow dataflow (C4).
+7. docs/claim-evidence.md (claims → test/demo/residue; 15 defer-v2 why-safes; 3 UX papercuts) + spec/gates/STAGE-E.md.

@@ -33,7 +33,10 @@ func (s *Server) handleMount(w http.ResponseWriter, r *http.Request) {
 	view := r.PathValue("view")
 	principal := sessionPrincipal(r)
 	horizon := sessionHorizon(r)
-	res, err := s.mountSession(r.Context(), view, principal, horizon)
+	// BUILD-E D3: ?component=<catalogName> overlays a hand-authored component into
+	// the (detail) slot over the view's resource row.
+	component := r.URL.Query().Get("component")
+	res, err := s.mountSession(r.Context(), view, principal, horizon, component)
 	if err != nil {
 		http.Error(w, "mount: "+err.Error(), http.StatusBadRequest)
 		return

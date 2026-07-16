@@ -39,6 +39,7 @@ type sessionCFR struct {
 	View       string            `json:"view"`      // the /ui view path
 	Kind       string            `json:"kind"`      // "detail" | "form" | "table"
 	Resource   string            `json:"resource"`  // catalog resource name (subscription/invalidation key)
+	Component  string            `json:"component,omitempty"` // BUILD-E D3: hand-authored component catalog name (Kind=="component")
 	Table      string            `json:"table"`     // physical table (mask + read key)
 	DefHash    string            `json:"def_hash"`  // template definition hash
 	RowID      string            `json:"row_id"`    // detail/form subject id ("" for table/create)
@@ -402,6 +403,58 @@ func aggregateDashboard(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, ho
 	return out, nil
 }
 
+// loadComponentTemplate reads a hand-authored component's lowered render template
+// (BUILD-E D3) and applies masking flags from the BOUND resource's pii fields: a
+// component leaf bound to a pii field is masked at its §7 leaf, exactly as
+// derivation marks a derived leaf — the component does not know its backing
+// resource until it is mounted over one, so the mask decision lands here. Returns a
+// clean error when the component was never admitted (no component_template artifact).
+func loadComponentTemplate(ctx context.Context, conn *pgwire.Conn, name string, vm *viewMeta) (*ui.Template, error) {
+	var raw string
+	ok, err := conn.QueryRow(ctx,
+		`SELECT detail::text FROM derived_artifact WHERE resource_name=$1 AND pass='component_template'
+		 ORDER BY id DESC LIMIT 1`, []any{name}, &raw)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("session: no component %q (not admitted)", name)
+	}
+	ct, derr := ui.DecodeTemplate([]byte(raw))
+	if derr != nil {
+		return nil, derr
+	}
+	pii := map[string]string{} // field -> §7 mask leaf
+	for _, f := range vm.Fields {
+		if f.PII {
+			pii[f.Name] = fieldMaskLeaf(f)
+		}
+	}
+	for i := range ct.Slots {
+		if leaf, ok := pii[ct.Slots[i].Field]; ok {
+			ct.Slots[i].Masked = true
+			ct.Slots[i].MaskLeaf = leaf
+		}
+		ct.Slots[i].ReadSet = []ui.ReadKey{{Resource: vm.Resource, KeyClass: "rowId"}}
+	}
+	return ct, nil
+}
+
+// fieldMaskLeaf returns a pii field's §7 masking leaf (the render leaf its value is
+// masked at); "" for a non-pii-wrappable base (address/relation).
+func fieldMaskLeaf(f kfield) string {
+	switch f.Base {
+	case "money":
+		return "money"
+	case "select", "states":
+		return "badge"
+	case "address", "relation":
+		return ""
+	default:
+		return "text"
+	}
+}
+
 // boardKeysFromRows partitions the mounted rows into the per-column key sequences a
 // board's spliceList diff bases on (BUILD-E D2): slotID -> ordered keys in that
 // states column.
@@ -453,6 +506,18 @@ func renderView(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, sess *sess
 		html, state = ui.RenderFirstPaint(t, data, mc)
 		return html, state, subs, "", nil, nil
 	}
+	// A hand-authored component (BUILD-E D3) binds a resource ROW as its props and
+	// renders through the SAME point-read path as detail: erf reads the row (records
+	// the rowId subscription), and RenderFirstPaint materializes the component's
+	// lowered slots exactly as a derived detail's — masking-aware, diffable, live.
+	if sess.Kind == "component" {
+		ct, cerr := loadComponentTemplate(ctx, conn, sess.Component, vm)
+		if cerr != nil {
+			return "", nil, nil, "", nil, cerr
+		}
+		t = ct
+	}
+
 	data, rv, ok, rerr := erfRead(ctx, conn, vm, sess.RowID, sess.Horizon, &subs)
 	if rerr != nil {
 		return "", nil, nil, "", nil, rerr
@@ -526,7 +591,7 @@ type mountResult struct {
 // mountSession resolves a view, renders first paint, and creates the session
 // continuation row + its subscriptions in ONE transaction (ADR-11 §5). The row is
 // message-parked on its own id channel; eventSeq starts at step_seq 0.
-func (s *Server) mountSession(ctx context.Context, view, principal, horizon string) (mountResult, error) {
+func (s *Server) mountSession(ctx context.Context, view, principal, horizon, component string) (mountResult, error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return mountResult{}, err
@@ -553,18 +618,34 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon stri
 	if err != nil {
 		return mountResult{}, err
 	}
-	// BUILD-E D2 (red-path a): board is derivable ONLY for a states-bearing
-	// resource; a board mount on a stateless one is a clean derivation refusal, not
-	// a crash — the template is simply absent.
-	if vm.template(kind) == nil {
-		return mountResult{}, fmt.Errorf("session: %s has no %s surface (board requires a states field)", resource, kind)
+	// BUILD-E D3: a `?component=<name>` mount overlays a hand-authored component into
+	// the detail slot — same resource row (props), same rowId subscription, same
+	// render/diff path as the derived detail it replaces (ADR-10 §7 "polish overlays
+	// derivation; a hand-built component admits into the same slot a derived one
+	// filled"). defHash comes from the component's own template.
+	defHash := ""
+	if component != "" {
+		kind = "component"
+		ct, cerr := loadComponentTemplate(ctx, conn, component, vm)
+		if cerr != nil {
+			return mountResult{}, cerr
+		}
+		defHash = ct.DefHash
+	} else {
+		// BUILD-E D2 (red-path a): board is derivable ONLY for a states-bearing
+		// resource; a board mount on a stateless one is a clean derivation refusal,
+		// not a crash — the template is simply absent.
+		if vm.template(kind) == nil {
+			return mountResult{}, fmt.Errorf("session: %s has no %s surface (board requires a states field)", resource, kind)
+		}
+		defHash = vm.template(kind).DefHash
 	}
 	mc, err := admission.BuildMaskCtx(ctx, conn, principal)
 	if err != nil {
 		return mountResult{}, err
 	}
 	sess := &sessionCFR{
-		View: view, Kind: kind, Resource: resource, Table: vm.Table, DefHash: vm.template(kind).DefHash,
+		View: view, Kind: kind, Resource: resource, Component: component, Table: vm.Table, DefHash: defHash,
 		RowID: rowID, Principal: principal, Horizon: horizon,
 		Draft: map[string]string{}, UILocal: map[string]string{},
 	}

@@ -149,6 +149,16 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 		return cek.Outcome{}, nil, err
 	}
 	t := vm.template(sess.Kind)
+	if sess.Kind == "component" {
+		// BUILD-E D3: the diff keys on the component's lowered template (loaded fresh
+		// with the same mask flags renderView used), so a dependency mutation patches
+		// a hand-authored component identically to a derived detail.
+		ct, cerr := loadComponentTemplate(ctx, conn, sess.Component, vm)
+		if cerr != nil {
+			return cek.Outcome{}, nil, cerr
+		}
+		t = ct
+	}
 	last := matFromSnap(sess.LastSnap)
 	ops := ui.Diff(t, last, next)
 	if sess.Kind == "table" {

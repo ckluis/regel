@@ -147,6 +147,28 @@ export function badge(owner: Vault<string>) {
 `,
 	},
 
+	{
+		// BUILD-E (D3, ADR-10 §7 / ADR-11 §8): the SAME non-leaf sink control on a
+		// realistic hand-authored component that COMPOSES the vocabulary (a card
+		// arranging a text leaf and a button) — the pii value is bound at the button,
+		// which is NOT one of the six masking leaves, so it is rejected exactly as a
+		// derived non-leaf bind would be. Since D3 now LOWERS such a component into a
+		// render template, this fixture pins that the six-leaf PII proof still gates a
+		// hand-authored component at admission, BEFORE any template is emitted. Kills
+		// V2_ALLOW_NONLEAF_BIND.
+		Name: "v2-pii-nonleaf-composed-component", Component: "V2", ThreatClass: "pii.nonleaf_bind",
+		Module: "app/acct", ExpectCode: "PII_NONLEAF_BIND",
+		Source: `import { card, stack, text, button } from "std/ui";
+import type { Vault } from "std/pii";
+export function AccountCard(name: string, ssn: Vault<string>) {
+  return card({}, [
+    stack({}, [ text({ value: name }) ]),
+    button({ label: ssn })
+  ]);
+}
+`,
+	},
+
 	// --- V3 catalog-parity --------------------------------------------------
 	{
 		Name: "v3-policy-unwired", Component: "V3", ThreatClass: "parity.unwired",

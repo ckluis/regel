@@ -1,0 +1,10 @@
+=== RUN   TestSessionStorm50k
+    session_storm50k_test.go:287: STORM 50k: N=50000 workers=16 liveSSE=100  drain=42832ms (budget 90000)  fanout_lag p50=23966ms p95=40781ms (n=50000)  healthz 1694/1694 ok maxLat=5ms  BURST K=20 avgAdvance=1.135 (coalesce 17.6x)
+--- PASS: TestSessionStorm50k (82.15s)
+=== RUN   TestWanFeltLatencyGate
+    session_wan_test.go:113: WAN-150 GATE (iters=30, RTT=150ms 1.6Mbps/768Kbps):
+          RED  (no echo): input→echo p95=158.9ms  action→commit p95=160.7ms
+          GREEN (echo)  : input→echo p95=0.0ms  action→commit p95=161.3ms
+--- PASS: TestWanFeltLatencyGate (44.01s)
+PASS
+ok  	regel.dev/regel/internal/kernel	126.479s

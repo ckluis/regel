@@ -1,0 +1,37 @@
+T3 — DRIVING THE REAL SYSTEM BY HAND (beyond demo scripts), 2026-07-16
+DB: regel_reviewe (fresh), binary /tmp/regel-bin built from HEAD
+
+CLI admit of a NEW def (not in examples/): app/fin/tax
+  admit tax.ts --name-prefix app/fin        -> outcome "admitted"
+  eval app/fin/tax [12345,2]                 -> 24690   (12345*2, floor, non-neg)
+  admit tax2.ts --base app/fin/tax=<v1hash>  -> outcome "admitted", admission_id 4  (v2: -100 discount)
+  eval LIVE app/fin/tax [12345,2]            -> 24590   (v2 behavior)
+  eval --as-of <boundary Z> [12345,2]        -> 24690   (v1 behavior; rollback = as-of, CONFIRMED)
+  eval app/fin/tax [10,0] (v2 neg branch)    -> 0
+
+Admission rejection (zero-trace), by hand:
+  admit class Foo {}          -> rejected BAN_CLASS ("class is banned...", + fix)
+  admit mail.send 3-arg       -> rejected TS2554 (tsgo fires BEFORE V1 — correct ordering)
+  admit mail.send 2-arg nogrant -> rejected CAP_UNGRANTED ("names capability mail.send but does not declare it", +fix)
+  admit ... --declare mail.send -> rejected CAP_UNGRANTED ("declared but not granted to submitting principal")
+  psql: 0 rows for app/bad/*  ; gate_refusal count = 3  (zero-trace holds, refusals audited)
+
+MCP plane, UNEXPECTED-but-legal sequence (regel mcp --key rev-key):
+  id=1 initialize                       -> serverInfo regel/stage-c, caps advertised
+  id=2 verdict.get {admission_id:99999} -> {"error":"NOT_FOUND"}  (caller-scoped, no oracle)
+  id=3 catalog.search {tax}             -> app/fin/tax@product  (CLI-admitted def VISIBLE via MCP door — cross-door consistency)
+  id=4 patch.submit {commit:true} NO prior dry-run -> outcome "admitted" (no forced dry-run precondition)
+
+Live HTTP surface (regel serve :8799), outside demo scripts:
+  GET  /healthz                         -> structured kernel/reactor/sse metrics
+  POST /eval/app/fin/tax [12345,2]      -> 24590 (live v2)
+  POST /eval/app/fin/tax?as_of=<Z>      -> 24690 (v1)  (as-of over HTTP query-param works)
+  POST /eval/app/nope/nope              -> {"error":"name does not resolve..."} (clean)
+  POST /eval/app/fin/tax  (body: not-json) -> {"error":"args must be a JSON array..."} (no crash)
+
+UX papercuts (NOT bugs — behavior correct; for Stage-E docs/claim-evidence):
+  (a) CLI --as-of requires strict RFC3339 offset (Z or +HH:MM); rejects Postgres text "-04" form. HTTP ?as_of= is fine.
+  (b) as-of with whole-second timestamps near an admission boundary can miss by sub-second (valid_from is us-precise; inherent to point-in-time, correct).
+  (c) --declare token is the verifier's stripped capability name (mail.send), NOT the import path (std/mail.send); mismatch yields "does not declare it" without revealing the expected token.
+
+FUNCTIONAL BUGS FOUND BY USE: 0.

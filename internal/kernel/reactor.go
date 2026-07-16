@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"regel.dev/regel/internal/catalog"
 	"regel.dev/regel/internal/cek"
 	"regel.dev/regel/internal/cfr"
 	"regel.dev/regel/internal/pgwire"
@@ -79,12 +80,13 @@ func (s *Server) StartReactor(ctx context.Context, cfg ReactorConfig) *Reactor {
 	r := &Reactor{srv: s, cfg: cfg.withDefaults(), cancel: cancel, wake: make(chan struct{}, 1),
 		breaker: newReaperBreaker(cfg.withDefaults())}
 	s.breaker.Store(r.breaker)
-	r.wg.Add(6)
+	r.wg.Add(7)
 	go r.loop(rctx, r.cfg.PollInterval, r.drainOnce, true)        // 2. DRAIN
 	go r.loop(rctx, r.cfg.PollInterval, r.timerOnce, false)       // 1. TIMER SCANNER
 	go r.loop(rctx, r.cfg.HeartbeatEvery, r.heartbeatOnce, false) // 3. HEARTBEAT
 	go r.loop(rctx, r.cfg.ReapEvery, r.reaperOnce, false)         // 4. REAPER
 	go r.loop(rctx, r.cfg.PollInterval, r.dispatchOnce, false)    // 6. DISPATCH (outbox)
+	go r.loop(rctx, r.cfg.PollInterval, r.cronOnce, false)        // 7. CRON (ADR-06 cron kind)
 	go r.listenLoop(rctx)                                         // 5. LISTEN
 	return r
 }
@@ -542,6 +544,81 @@ func (r *Reactor) deliverTask(ctx context.Context, t claimedDeliver) error {
 	}
 	cfr.IncDelivered()
 	return r.finishTask(ctx, t.id, "done")
+}
+
+// --- 7. CRON (ADR-06 cron task kind, BUILD-E D10) ----------------------------
+
+// cronOnce drives the recurring cron task rows (never driven before D10). It
+// atomically claims every due cron row (FOR UPDATE SKIP LOCKED) AND advances its
+// next fire (run_at += interval) in one CTE — so a due tick is claimed exactly once
+// even under concurrent kernels — then spawns each target workflow. The cron row is
+// durable, so the schedule survives a kernel restart; each fired workflow's effects
+// are exactly-once by the step transaction. A crash between the advance and the
+// spawn loses at most that one tick (cron catch-up=1 semantics), never the schedule.
+func (r *Reactor) cronOnce(ctx context.Context) error {
+	conn, err := r.srv.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	targets, err := r.claimDueCron(ctx, conn)
+	r.srv.pool.Release(conn)
+	if err != nil || len(targets) == 0 {
+		return err
+	}
+	env := r.srv.stepEnv(r.cfg.LeaseSeconds)
+	principal := map[string]any{"subject": "cron", "operator": true}
+	for _, target := range targets {
+		c2, aerr := r.srv.pool.Acquire(ctx)
+		if aerr != nil {
+			return aerr
+		}
+		resolved, ok, rerr := catalog.Resolve(ctx, c2, catalog.ResolveReq{Name: target})
+		if rerr != nil {
+			r.srv.pool.Release(c2)
+			return rerr
+		}
+		if !ok {
+			r.srv.pool.Release(c2) // target no longer resolves — skip this fire; schedule persists
+			continue
+		}
+		_, serr := cfr.StartWorkflow(ctx, c2, env, r.srv.interp, resolved.Hash, nil, principal, cek.TierTrusted)
+		r.srv.pool.Release(c2)
+		if serr != nil {
+			return serr
+		}
+	}
+	r.signalDrain()
+	return nil
+}
+
+// claimDueCron advances the next fire of every due cron row and returns their
+// targets, all in one atomic statement (the run_at advance IS the claim).
+func (r *Reactor) claimDueCron(ctx context.Context, conn *pgwire.Conn) ([]string, error) {
+	rows, err := conn.Query(ctx, `
+WITH due AS (
+  SELECT id FROM task
+  WHERE kind='cron' AND status='ready' AND run_at<=now()
+  ORDER BY run_at LIMIT $1 FOR UPDATE SKIP LOCKED
+), up AS (
+  UPDATE task t
+     SET run_at = now() + make_interval(secs => COALESCE((t.payload->>'interval_ms')::float8,1000)/1000.0)
+    FROM due WHERE t.id = due.id
+  RETURNING t.payload->>'target' AS target
+)
+SELECT target FROM up`, r.cfg.TimerBatch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var targets []string
+	for rows.Next() {
+		var target string
+		if err := rows.Scan(&target); err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, rows.Err()
 }
 
 // --- 5. LISTEN ---------------------------------------------------------------

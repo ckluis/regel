@@ -103,8 +103,12 @@ func (s *RecordingSink) Keys() []string {
 // the sole INTERNAL effect — it is delivered transactionally in-process (a
 // channel_message + receiver flip), never by the dispatcher. Residue: when
 // SQL-writing `write`-class effects gain their own outbox classes they must also
-// be excluded here; today channel.send is the only internal class.
-func IsExternalEffectClass(class string) bool { return class != "channel.send" }
+// be excluded here. Internal classes: channel.send (in-process message) and
+// cron.schedule (BUILD-E D10 — materialized into a durable cron task row in the
+// step transaction, never delivered across the process boundary).
+func IsExternalEffectClass(class string) bool {
+	return class != "channel.send" && class != "cron.schedule"
+}
 
 // EnqueueDeliverTask inserts a 'deliver' task for an external outbox row inside
 // the caller's OPEN step transaction (ADR-06 §5: outbox delivery rides the one

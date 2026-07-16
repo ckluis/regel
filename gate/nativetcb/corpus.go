@@ -223,6 +223,9 @@ var AuthorityInventory = []Disposition{
 	{Native: "std/sql.query",
 		CaughtBy:   "V1 capability-audit (sql.query declared+granted) + the SELECT-only native boundary (isReadOnlySQL fails a non-SELECT closed) + effect-order conformance gate (read-declared: a recorded effect fails closed)",
 		TrustedFor: "the parameterized read authority: the caller's SQL text is trusted to carry the org/policy predicate the query author wrote — v1 std/sql does not yet inject a policy predicate the way erf reads do (a cross-org SELECT is bounded by the capability grant + the SELECT-only surface, not by an auto-injected WHERE org clause). Named residue: policy-predicate injection into std/sql reads is a later increment"},
+	{Native: "std/taak.schedule",
+		CaughtBy:   "the ADR-05 §7 step transaction: the cron.schedule effect materializes its durable cron task row inside the committing step (atomic with the checkpoint), and the reactor's cron driver claims each due tick exactly once (FOR UPDATE SKIP LOCKED + atomic run_at advance)",
+		TrustedFor: "the recurring-spawn authority: a scheduled cron row fires its target workflow every interval under the system principal — the schedule content (interval, target) is trusted as the scheduling workflow authored it; each fired workflow's own effects remain exactly-once by the step transaction"},
 	// --- irreducible kernel/crypto/derivation authority (class-level) ----------
 	{Native: "std/crypto.aeadSeal",
 		CaughtBy:   "",

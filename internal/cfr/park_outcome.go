@@ -300,6 +300,20 @@ VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
 				return err
 			}
 		}
+		if ef.Class == "cron.schedule" {
+			// BUILD-E (D10): materialize a durable recurring cron task row in this same
+			// step transaction (so scheduling is atomic + crash-safe with the step). The
+			// reactor's cron driver polls kind='cron' rows and fires the target workflow
+			// every interval; run_at seeds the first fire one interval out. The effect
+			// payload {schedule,target,interval_ms} IS the task payload (CHECK-satisfying).
+			intervalMS := effInt(ef.Payload["interval_ms"])
+			if _, err := db.Exec(ctx, `
+INSERT INTO task (id, kind, run_at, payload)
+VALUES ($1,'cron', now() + make_interval(secs => $2::float8/1000.0), $3::jsonb)`,
+				uuid4(), intervalMS, payloadJSON); err != nil {
+				return err
+			}
+		}
 		if ef.Class == "channel.send" {
 			channel, _ := ef.Payload["channel"].(string)
 			payload, err := EncodeValue(ef.Val)
@@ -318,6 +332,20 @@ INSERT INTO channel_message (id, channel, payload, sent_by) VALUES ($1,$2,$3::by
 		}
 	}
 	return nil
+}
+
+// effInt coerces an effect-payload numeric (int64/float64/int) to int64.
+func effInt(v any) int64 {
+	switch x := v.(type) {
+	case int64:
+		return x
+	case int:
+		return int64(x)
+	case float64:
+		return int64(x)
+	default:
+		return 0
+	}
 }
 
 // settleJoinParent flips a join parent to ready exactly once when its quorum of

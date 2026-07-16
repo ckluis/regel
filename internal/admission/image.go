@@ -136,6 +136,10 @@ func buildImage() *Image {
 		{module: "std/taak", export: "race", defKind: rast.DefNative, catKind: "function", native: cek.StdWfRace},
 		{module: "std/taak", export: "signal", defKind: rast.DefNative, catKind: "function", native: cek.StdTaakSignal},
 		{module: "std/taak", export: "onChange", defKind: rast.DefNative, catKind: "function", native: cek.StdTaakOnChange},
+		// BUILD-E (D10, ADR-10 §6 / ADR-06 cron): schedule registers a recurring cron
+		// task row the reactor's cron driver fires. Effect class write (it materializes
+		// a durable cron row in the step transaction).
+		{module: "std/taak", export: "schedule", defKind: rast.DefNative, catKind: "function", native: cek.StdTaakSchedule, effectClass: "write"},
 		// std/contract (requires, ensures) — purity enforced by V4 (Stage B)
 		{module: "std/contract", export: "requires", defKind: rast.DefNative, catKind: "function", native: cek.StdContractRequires},
 		{module: "std/contract", export: "ensures", defKind: rast.DefNative, catKind: "function", native: cek.StdContractEnsures},
@@ -389,7 +393,8 @@ func moduleStubs() map[string]string {
 			"export declare const all: <T>(thunks: (() => T)[]) => T[];\n" +
 			"export declare const race: <T>(thunks: (() => T)[]) => T;\n" +
 			"export declare const signal: (cls: string, restarts: Restart[], payload?: unknown) => { restart: string };\n" +
-			"export declare const onChange: (resource: string, keys?: string[]) => void;\n",
+			"export declare const onChange: (resource: string, keys?: string[]) => void;\n" +
+			"export declare const schedule: (schedule: string, target: string) => void;\n",
 		"/std/contract.ts": "export declare const requires: (cond: boolean) => boolean;\n" +
 			"export declare const ensures: (cond: boolean) => boolean;\n" +
 			"export declare const pre: (cond: boolean) => void;\n" +

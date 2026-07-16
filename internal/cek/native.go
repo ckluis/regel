@@ -3,6 +3,7 @@ package cek
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"regel.dev/regel/internal/mutants"
@@ -368,6 +369,54 @@ func StdTaakOnChange(h *Host, args []Value) (Value, *NativePark) {
 		}
 	}
 	return undef(), &NativePark{Wake: w}
+}
+
+// StdTaakSchedule registers a recurring cron schedule (taak.schedule(schedule,
+// target); BUILD-E D10, ADR-10 §6 / ADR-06 cron task kind). It records a
+// `cron.schedule` INTERNAL effect the step transaction materializes into a durable
+// `kind='cron'` task row (writeEffects), which the reactor's cron driver polls and
+// fires — spawning the target workflow every interval. schedule is `@every:<ms>`
+// (ms>0). It does not park; the effect commits at the enclosing workflow's next
+// checkpoint/completion (parkDone), so a scheduler workflow that returns still
+// persists the schedule durably. Survives restart because the cron row is durable.
+func StdTaakSchedule(h *Host, args []Value) (Value, *NativePark) {
+	if len(args) < 2 || args[0].Tag != TagStr || args[1].Tag != TagStr {
+		return undef(), wfFault("taak.arg", "taak.schedule expects (schedule, target)")
+	}
+	schedule, target := args[0].S, args[1].S
+	intervalMS := parseEveryMS(schedule)
+	if intervalMS <= 0 {
+		return undef(), wfFault("taak.schedule", "schedule must be @every:<ms> with ms>0")
+	}
+	if target == "" {
+		return undef(), wfFault("taak.schedule", "target workflow name is empty")
+	}
+	h.RecordEffect("cron.schedule", map[string]any{
+		"schedule": schedule, "target": target, "interval_ms": intervalMS,
+	})
+	return undef(), nil
+}
+
+// parseEveryMS parses an `@every:<ms>` schedule to its interval in milliseconds,
+// or 0 when malformed (the native then faults closed).
+func parseEveryMS(s string) int64 {
+	const prefix = "@every:"
+	if !strings.HasPrefix(s, prefix) {
+		return 0
+	}
+	n := int64(0)
+	digits := s[len(prefix):]
+	if digits == "" {
+		return 0
+	}
+	for i := 0; i < len(digits); i++ {
+		c := digits[i]
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int64(c-'0')
+	}
+	return n
 }
 
 // valueToAny projects a scalar Value into a JSON-marshalable Go value for a

@@ -58,6 +58,24 @@ var Evaluator = []Mutant{
 		Weakens: "effect-class ordering: a newly recorded effect is transposed before the previous one in the trace"},
 }
 
+// NativeTCB is the closed set of seeded CONTROL-DISABLING mutants for the ADR-10
+// §8 native-TCB adversarial harness (gate/nativetcb, co-equal with gate/redpath).
+// Unlike All (which weakens the ADMISSION verifiers so a hostile SOURCE fixture
+// flips green) and Evaluator (which weakens the CEK so the differential oracle
+// diverges), each NativeTCB mutant disables the surrounding control that catches a
+// deliberately-malicious NATIVE BODY, so the harness can prove RED-first: with the
+// control disabled the seeded evil native goes UNCAUGHT, and with it live the evil
+// native is caught. A control the harness cannot flip from caught→uncaught is a
+// control that was never doing the catching — a survivor blocks the release.
+//
+// They are NOT part of All: the admission hostile corpus never runs a native body,
+// so no redpath fixture can witness a native-TCB weakening; the nativetcb harness
+// (internal/admission/nativetcb_test.go) is the one that arms these.
+var NativeTCB = []Mutant{
+	{Name: "TCB_SKIP_EFFECT_CONFORMANCE", Component: "native-tcb-effect",
+		Weakens: "performNative §6 std-conformance gate: a read-declared native that records a write/external effect is NOT caught (effect-class lie admitted)"},
+}
+
 // Mutant is one registered weakening.
 type Mutant struct {
 	Name      string

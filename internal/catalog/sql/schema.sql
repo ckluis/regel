@@ -94,6 +94,20 @@ CREATE TABLE IF NOT EXISTS verifier_coverage (
   mutation_score numeric NOT NULL,
   PRIMARY KEY (epoch, component)
 );
+-- Native-TCB coverage ledger (ADR-10 §8, BUILD-D D5a): the verifier_coverage-style
+-- MONOTONE row set for the native-floor adversarial harness (gate/nativetcb),
+-- keyed on the three threat classes (vault-leak, contract-violation, effect-order).
+-- Each row records the seeded evil-native fixtures in the class, the surrounding
+-- control that catches them, and the irreducible-TCB `trusted_for` statements that
+-- class cannot externally check (never a silent pass — the TCB is stated as data).
+-- Monotone: a class once covered may never be dropped, its fixture inventory may
+-- never shrink, and a trusted_for statement may never silently disappear.
+CREATE TABLE IF NOT EXISTS native_tcb_coverage (
+  epoch int NOT NULL, threat_class text NOT NULL,
+  fixture_ids text[] NOT NULL, caught_by text NOT NULL,
+  trusted_for text[] NOT NULL,
+  PRIMARY KEY (epoch, threat_class)
+);
 CREATE TABLE IF NOT EXISTS perf_budget (
   epoch int NOT NULL, metric text NOT NULL, tier text,
   budget numeric NOT NULL, measured numeric, milestone text NOT NULL,

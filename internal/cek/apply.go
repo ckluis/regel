@@ -1,6 +1,9 @@
 package cek
 
-import "regel.dev/regel/internal/rast"
+import (
+	"regel.dev/regel/internal/mutants"
+	"regel.dev/regel/internal/rast"
+)
 
 // applyStep performs one Apply-mode transition: deliver m.val to the top K frame,
 // which resumes its reduction (ADR-04 §2).
@@ -371,7 +374,14 @@ func (m *machine) performNative(f *Frame, hash string, args []Value) (Outcome, b
 	declClass := m.in.reg.effectClass(hash)
 	effectsBefore := len(m.host.Effects)
 	v, park := fn(m.host, args)
-	if declClass == "read" && len(m.host.Effects) > effectsBefore {
+	// MUTANT TCB_SKIP_EFFECT_CONFORMANCE (ADR-10 §8 native-TCB harness): disabling
+	// this catch lets a read-declared native that records a write/external effect
+	// pass silently — the effect-order threat class's control. The nativetcb harness
+	// arms it to prove the seeded evil native goes UNCAUGHT without the gate, then
+	// runs with the gate live to prove the catch. Hard-off in production (the mutant
+	// registry only arms under the harness).
+	if declClass == "read" && len(m.host.Effects) > effectsBefore &&
+		!mutants.Active("TCB_SKIP_EFFECT_CONFORMANCE") {
 		got := m.host.Effects[effectsBefore].Class
 		return m.fault("conformance: read-declared native %s recorded effect %q (effect-class violation)", hash, got)
 	}

@@ -52,6 +52,7 @@
 - PHASE E in flight (2026-07-16). Milestones:
   - E1 D11 lowerer fix DONE (950c0b2): dep edges keyed by nominal (module,name) — hash-keyed map dropped edges (blinded V2: PII escape ADMITTED, RED captured). CLI-verified multi-export eval.
   - Real LLM reachable via `claude -p` (verified PONG) → M5 gates RUN for real, not residue.
+  - E2 std chunk 1 DONE (6c41e99): std/sql.query (SELECT-only, cap-gated, as-of), row-backed identity (user_account), cfr FileSink+HTTPSink, `regel vault-put` (erf demo updated, exit 0), cron driven (@every, restart-safe). 3 roster adds; ADR-10 BUILD-E ×2. Residue: std/sql lacks policy-predicate injection (trusted_for row).
 
 ## Next (Phase E remaining, in order)
 1. CRM std batteries chunk 1: std/sql typed queries (D1), real identity natives + cfr.DeliverySink (D6), VaultPut CLI door (D12), cron drive (B8).

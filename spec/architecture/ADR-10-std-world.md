@@ -396,9 +396,30 @@ nowhere else):
 admission); `dataTable(R, view)` (columns/sort/filter/paginate, masked cells);
 `detail(R)` (record page: card + related tables); `board(R, groupBy)` (kanban over a
 `states()` field); `dashboard` (grid of stat tiles + tables over typed `std/sql`
-queries); `operatorPlane` (ADR-12 §6: condition inbox with restart buttons, approval
+queries); `operatorPlane` (ADR-12 §7 — condition inbox with restart buttons, approval
 queue, masked impersonation, catalog/audit browse). Settings forms are a `form` variant
 over `extendResource`.
+
+**BUILD-E (D2): tier-2 board/dashboard/operatorPlane made concrete.** `board(R,
+groupBy)` and `dashboard` are lowered into the SAME `template` derived_artifact
+bundle as `form`/`table`/`detail` (additive keys — no new derivation pass, so
+`requiredPasses` and V6 `DERIVE_PARITY` are unchanged): `board` is emitted ONLY for a
+resource with a `states` field (STAGE-D §13.2 board-derivability flag) as a grid of one
+keyed-list column per states member grouped by the states field; `dashboard` is always
+emitted as stat tiles over aggregate reads (total, per enum-member counts, per money-field
+sums). Both are ADR-11 §5 session Kinds subscribing on the horizon, so a mutation
+re-renders them live (a state-move splices a card between columns; the dashboard
+re-aggregates). The dashboard's aggregate reads run kernel-side as SELECT-only reads in
+the session loop (the same discipline `std/sql.query` enforces via `dbReader`), because
+the subscription-recording read lives there; the admitted `std/sql.query` native stays
+the app-facing dashboard-query door. `operatorPlane` is the ADR-12 **§7** surface (the
+§6 cross-ref above was stale; corrected here) rendered as a fixed kernel chrome tier-1
+composition over the live `durable_condition`/`gate_refusal` tables — v1 ships the
+condition inbox (+ restart-button targets) and the refusal ledger read-only; the
+approval-queue delta, masked impersonation, and catalog/audit-browse panels and the
+working restart-button POST are the named operator-desk follow-on. None of board /
+dashboard / operatorPlane is a tier-1 primitive, so `cek.UITier1` (the closed 25) and the
+genesis image are UNCHANGED — no epoch bump.
 
 **Exclusion rationale** (grafted from prior-art): tooltip (`title`/ARIA on existing
 primitives), tabs/accordion (section + button + visibility), menu/dropdown (button +

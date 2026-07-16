@@ -533,6 +533,18 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon stri
 	}
 	defer s.pool.Release(conn)
 
+	// BUILD-E D2: the operatorPlane is a GLOBAL operator surface, not backed by a
+	// derived resource — a dedicated server-rendered read of the live substrate
+	// tables (durable_condition inbox + gate_refusal ledger). Read-only in v1 (no
+	// SSE/continuation row; named cut in operatorplane.go).
+	if strings.Trim(view, "/") == "operatorPlane" {
+		html, herr := s.renderOperatorPlane(ctx, conn)
+		if herr != nil {
+			return mountResult{}, herr
+		}
+		return mountResult{SessionID: admission.NewUUID(), EventSeq: 0, HTML: html}, nil
+	}
+
 	resource, kind, rowID, perr := parseView(view)
 	if perr != nil {
 		return mountResult{}, perr

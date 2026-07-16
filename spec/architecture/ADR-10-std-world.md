@@ -428,10 +428,37 @@ the ADR-04 §6 regel-native differential oracle — catches each; or, where no s
 control can, documents exactly what the TCB is trusted for. Three seeded classes, each a
 fixture family:
 
+**BUILD-D (increment D5a) — the harness made concrete.** The fixture corpus ships at
+`gate/nativetcb/` (single-word, matching `gate/redpath/`); unlike redpath (pure stdlib
+data — a hostile fixture is a source string) a native-TCB fixture is a real Go native body
+(`cek.NativeFn`), so the package imports `internal/cek` and nothing else. The ONE runner is
+`internal/admission/nativetcb_test.go` (co-equal with `harness_test.go`), driving each
+fixture through the real machinery against a scratch Postgres. Coverage is carried as
+`native_tcb_coverage` rows (ADR-03 DDL beside `verifier_coverage`), keyed on the three
+threat classes with `fixture_ids`, `caught_by`, and `trusted_for` columns; the monotone
+gate refuses a dropped class, a shrunk fixture inventory, OR a silently dropped trusted-for
+statement. The evil natives are registerable ONLY under test — the effect-order/exfil
+fixtures compute their own `NativeBody` hashes (asserted absent from the genesis image) and
+the contract-violation fixtures override a genesis body only inside a locally-constructed
+registry, never the process image. The authority inventory is a data table walked against
+the D0 roster: every native carrying a capability or a declared effect class is classified
+`caught-by`/`trusted-for`, and an irreducible entry with no trusted-for statement fails the
+run.
+
 - **vault-leaking:** a native body (e.g. `std/http.get`, `std/log.write`, a vault-routing
   pass) that sinks an unmasked `pii`/vault value. The surrounding control that must catch
   it: the vault CHECK plus V2 pii-flow over the *caller's* AST and the six masking leaves
   (§7) — the harness proves a native body cannot become a laundering path around masking.
+  **BUILD-D (D5a) — named residue `RESIDUE_LOG_SINK`:** V2's outbound-sink check keys on
+  `Image.CapabilityByHash` (a *capability-bearing* call), and the D0 roster gives
+  `std/log.write` an effect class (`external`) but NO capability, so a Vault value routed
+  into `log.write` is not yet caught — the §3 promise "the log sink is in V2's sink set" is
+  unrealized for the no-capability case. The D5a harness therefore proves the vault-leak
+  catch over the capability-bearing sinks (`std/mail.send`, `std/http.post`) that V2 *does*
+  recognize, and records the `log.write` gap as an explicit `trusted_for` residue row
+  (never a silent pass). The fix — give `log.write` a capability, or add a non-capability
+  sink arm to V2 — is a later increment (it changes V2 admit/reject behavior for existing
+  `log.write` callers, out of D5a's no-V-semantics-change scope).
 - **contract-violating:** a native body whose runtime behavior diverges from its declared
   dialect signature/contract (returns out-of-type, skips a declared postcondition). The
   control: the ADR-04 §6 differential oracle (production machine vs. independent reference

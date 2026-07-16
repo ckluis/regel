@@ -80,6 +80,18 @@ func ArrayV(elems []Value) Value { return arrVal(&ArrayObj{Elems: elems}) }
 // Str returns the string payload and whether v is a string.
 func (v Value) StrVal() (string, bool) { return v.S, v.Tag == TagStr }
 
+// BoolVal returns the boolean payload and whether v is a boolean.
+func (v Value) BoolVal() (bool, bool) { return v.asBool(), v.Tag == TagBool }
+
+// BigStr returns the bigint payload rendered as a decimal string and whether v is
+// a bigint (exported for the store's message-match evaluation).
+func (v Value) BigStr() (string, bool) {
+	if v.Tag != TagBigInt {
+		return "", false
+	}
+	return v.big().String(), true
+}
+
 // Equal reports deep structural equality over the lattice (primitives by value,
 // compound recursively) — the ADR-04 §6 "produced values" comparison.
 func (v Value) Equal(o Value) bool { return deepEqual(v, o) }

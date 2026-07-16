@@ -240,7 +240,7 @@ INSERT INTO channel_message (id, channel, payload, sent_by) VALUES ($1,$2,$3::by
 			msgID, channel, byteaLiteral(payload), sentBy); e != nil {
 			return e
 		}
-		to, e := deliverToOldestReceiver(ctx, db, channel, msgID)
+		to, e := deliverToOldestReceiver(ctx, db, channel, msgID, value)
 		if e != nil {
 			return e
 		}
@@ -258,44 +258,67 @@ INSERT INTO channel_message (id, channel, payload, sent_by) VALUES ($1,$2,$3::by
 }
 
 // deliverToOldestReceiver claims msgID for the oldest sleeping message-receiver on
-// channel (if any), flips it ready with the message id pinned into its wake, and
-// inserts a resume task + NOTIFY. Returns the receiver id or "".
-func deliverToOldestReceiver(ctx context.Context, db DB, channel, msgID string) (string, error) {
-	var recv string
-	var seq int64
-	found, err := db.QueryRow(ctx, `
-SELECT id::text, step_seq FROM continuation
+// channel whose match predicate accepts the message payload (BUILD-D, ADR-05 §5),
+// flips it ready with the message id pinned into its wake, and inserts a resume
+// task + NOTIFY. A receiver with a disjoint predicate is skipped so the message
+// stays queued for a matching one. Returns the receiver id or "".
+func deliverToOldestReceiver(ctx context.Context, db DB, channel, msgID string, payload cek.Value) (string, error) {
+	rows, err := db.Query(ctx, `
+SELECT id::text, step_seq, COALESCE(wake->'match','null'::jsonb)::text FROM continuation
 WHERE status='sleeping' AND wake->>'kind'='message' AND wake->>'channel'=$1
-ORDER BY updated_at LIMIT 1`, []any{channel}, &recv, &seq)
+ORDER BY updated_at`, channel)
 	if err != nil {
 		return "", err
 	}
-	if !found {
-		return "", nil
+	type recvCand struct {
+		id      string
+		seq     int64
+		matchJS string
 	}
-	if _, err := db.Exec(ctx, `UPDATE channel_message SET claimed_by=$1 WHERE id=$2`, recv, msgID); err != nil {
+	var cands []recvCand
+	for rows.Next() {
+		var c recvCand
+		if err := rows.Scan(&c.id, &c.seq, &c.matchJS); err != nil {
+			rows.Close()
+			return "", err
+		}
+		cands = append(cands, c)
+	}
+	if err := rows.Err(); err != nil {
 		return "", err
 	}
-	res, err := db.Exec(ctx, `
+	for _, c := range cands {
+		var m matchShape
+		if c.matchJS != "" && c.matchJS != "null" {
+			_ = json.Unmarshal([]byte(c.matchJS), &m)
+		}
+		if !messageMatches(payload, m) {
+			continue
+		}
+		if _, err := db.Exec(ctx, `UPDATE channel_message SET claimed_by=$1 WHERE id=$2`, c.id, msgID); err != nil {
+			return "", err
+		}
+		res, err := db.Exec(ctx, `
 UPDATE continuation
    SET status='ready',
        wake = jsonb_set(wake, '{message_id}', to_jsonb($2::text)),
        updated_at=now()
- WHERE id=$1 AND status='sleeping'`, recv, msgID)
-	if err != nil {
-		return "", err
+ WHERE id=$1 AND status='sleeping'`, c.id, msgID)
+		if err != nil {
+			return "", err
+		}
+		if res.RowsAffected != 1 {
+			continue // lost this receiver to a concurrent claim: try the next
+		}
+		if err := insertResumeTask(ctx, db, c.id, c.seq); err != nil {
+			return "", err
+		}
+		if err := notifyTask(ctx, db); err != nil {
+			return "", err
+		}
+		return c.id, nil
 	}
-	if res.RowsAffected != 1 {
-		// Lost the receiver to a concurrent claim: leave the message queued.
-		return "", nil
-	}
-	if err := insertResumeTask(ctx, db, recv, seq); err != nil {
-		return "", err
-	}
-	if err := notifyTask(ctx, db); err != nil {
-		return "", err
-	}
-	return recv, nil
+	return "", nil // no matching receiver: message stays queued
 }
 
 // --- ClaimAndStep ------------------------------------------------------------
@@ -719,16 +742,30 @@ func defaultAlloc(tier cek.Tier) int64 {
 // --- wake jsonb shape --------------------------------------------------------
 
 type wakeShape struct {
-	Kind        string   `json:"kind"`
-	Due         string   `json:"due"`
-	Channel     string   `json:"channel"`
-	MessageID   string   `json:"message_id"`
-	Children    []string `json:"children"`
-	Quorum      int      `json:"quorum"`
-	Mode        string   `json:"mode"`
-	Winner      string   `json:"winner"`
-	JoinParent  string   `json:"join_parent"`
-	JoinOrdinal int      `json:"join_ordinal"`
+	Kind        string          `json:"kind"`
+	Due         string          `json:"due"`
+	Channel     string          `json:"channel"`
+	Match       json.RawMessage `json:"match"` // BUILD-D: message match predicate
+	MessageID   string          `json:"message_id"`
+	Children    []string        `json:"children"`
+	Quorum      int             `json:"quorum"`
+	Mode        string          `json:"mode"`
+	Winner      string          `json:"winner"`
+	Stream      string          `json:"stream"` // BUILD-D: event wake resource
+	On          []string        `json:"on"`     // BUILD-D: event wake watch set
+	JoinParent  string          `json:"join_parent"`
+	JoinOrdinal int             `json:"join_ordinal"`
+}
+
+// matchOf decodes the wake's stored match predicate (BUILD-D). An absent match
+// yields the empty predicate (matches anything).
+func (w wakeShape) matchOf() matchShape {
+	if len(w.Match) == 0 {
+		return matchShape{}
+	}
+	var m matchShape
+	_ = json.Unmarshal(w.Match, &m)
+	return m
 }
 
 func parseWake(s string) wakeShape {

@@ -97,26 +97,22 @@ UPDATE continuation SET frames=$2::bytea, status='sleeping',
 		return guardRunning(res, req.ContinuationID)
 
 	case cek.WakeMessage:
-		// If a message is already waiting, claim it and mark ready immediately —
-		// no sleep (ADR-05 §5: send-before-receive).
-		var msgID string
-		found, err := db.QueryRow(ctx, `
-SELECT id::text FROM channel_message
-WHERE channel=$1 AND claimed_by IS NULL ORDER BY sent_at LIMIT 1`, []any{w.Channel}, &msgID)
+		matchJSON := wakeMatchJSON(w.Match)
+		// If a MATCHING message is already waiting, claim it and mark ready
+		// immediately — no sleep (ADR-05 §5: send-before-receive).
+		msgID, err := claimOldestMatchingMessage(ctx, db, w.Channel, w.Match, req.ContinuationID)
 		if err != nil {
 			return err
 		}
-		if found {
-			if _, err := db.Exec(ctx, `UPDATE channel_message SET claimed_by=$1 WHERE id=$2`,
-				req.ContinuationID, msgID); err != nil {
-				return err
-			}
+		if msgID != "" {
 			res, err := db.Exec(ctx, `
 UPDATE continuation SET frames=$2::bytea, status='ready',
-   wake = jsonb_build_object('kind','message','channel',$4::text,'message_id',$5::text),
+   wake = jsonb_strip_nulls(jsonb_build_object(
+     'kind','message','channel',$4::text,'message_id',$5::text,
+     'match', $6::jsonb)),
    updated_at=now()
  WHERE id=$1 AND status='running' AND lease_owner=$3::uuid`,
-				req.ContinuationID, byteaLiteral(blob), env.KernelID, w.Channel, msgID)
+				req.ContinuationID, byteaLiteral(blob), env.KernelID, w.Channel, msgID, nullableJSON(matchJSON))
 			if err != nil {
 				return err
 			}
@@ -130,10 +126,24 @@ UPDATE continuation SET frames=$2::bytea, status='ready',
 		}
 		res, err := db.Exec(ctx, `
 UPDATE continuation SET frames=$2::bytea, status='sleeping',
-   wake = jsonb_build_object('kind','message','channel',$4::text),
+   wake = jsonb_strip_nulls(jsonb_build_object(
+     'kind','message','channel',$4::text,'match',$5::jsonb)),
    updated_at=now()
  WHERE id=$1 AND status='running' AND lease_owner=$3::uuid`,
-			req.ContinuationID, byteaLiteral(blob), env.KernelID, w.Channel)
+			req.ContinuationID, byteaLiteral(blob), env.KernelID, w.Channel, nullableJSON(matchJSON))
+		if err != nil {
+			return err
+		}
+		return guardRunning(res, req.ContinuationID)
+
+	case cek.WakeEvent:
+		onJSON, _ := json.Marshal(w.On)
+		res, err := db.Exec(ctx, `
+UPDATE continuation SET frames=$2::bytea, status='sleeping',
+   wake = jsonb_build_object('kind','event','stream',$4::text,'on',$5::jsonb),
+   updated_at=now()
+ WHERE id=$1 AND status='running' AND lease_owner=$3::uuid`,
+			req.ContinuationID, byteaLiteral(blob), env.KernelID, w.Stream, string(onJSON))
 		if err != nil {
 			return err
 		}
@@ -292,7 +302,7 @@ INSERT INTO channel_message (id, channel, payload, sent_by) VALUES ($1,$2,$3::by
 				msgID, channel, byteaLiteral(payload), continuationID); err != nil {
 				return err
 			}
-			if _, err := deliverToOldestReceiver(ctx, db, channel, msgID); err != nil {
+			if _, err := deliverToOldestReceiver(ctx, db, channel, msgID, ef.Val); err != nil {
 				return err
 			}
 		}

@@ -378,7 +378,7 @@ func moduleStubs() map[string]string {
 			"export declare const send: <T>(channel: string, value: T) => void;\n" +
 			"export declare const all: <T>(thunks: (() => T)[]) => T[];\n" +
 			"export declare const race: <T>(thunks: (() => T)[]) => T;\n" +
-			"export declare const signal: (cls: string, restarts: Restart[], payload?: unknown) => unknown;\n" +
+			"export declare const signal: (cls: string, restarts: Restart[], payload?: unknown) => { restart: string };\n" +
 			"export declare const onChange: (resource: string, keys?: string[]) => void;\n",
 		"/std/contract.ts": "export declare const requires: (cond: boolean) => boolean;\n" +
 			"export declare const ensures: (cond: boolean) => boolean;\n" +

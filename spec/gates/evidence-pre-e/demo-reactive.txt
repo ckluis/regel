@@ -1,0 +1,99 @@
+### building regel binary
+### recreating database regel_reactive_demo
+
+==============================================================
+STEP 0a: migrate-db
+==============================================================
+migrate-db: substrate applied
+
+==============================================================
+STEP 0b: genesis
+==============================================================
+genesis: epoch 1 pinned — std_manifest_root=e38301a0bdc8fdbd dispatch_attestation=e673fb816e944290
+
+==============================================================
+STEP 0c: admit app/rx/Widget (org, name, score, pii:email — the D3 session-test fixture)
+==============================================================
+admitted: app/rx/Widget
+
+==============================================================
+STEP 0d: seed two rows
+==============================================================
+seeded: alpha(org=acme,score=1), beta(org=acme,score=2)
+
+==============================================================
+STEP 1: start regel serve as a script-local child
+==============================================================
+kernel up (pid 84415): serve: regel kernel e13816a3-d558-46a9-8f18-d02ae396e5fc listening on :8798 (epoch 1, lease 30s, poll 250ms)
+
+==============================================================
+STEP 2: GET /ui/app/rx/Widget/table (mount) — skeleton + data-slot + session id
+==============================================================
+table mount session id: 3facc24c-7268-4c8d-9e3c-1ad576af6ba7
+table first paint (skeleton + data-slot rows):
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>regel</title></head><body><div id="rg-root" data-session="3facc24c-7268-4c8d-9e3c-1ad576af6ba7" data-seq="0"><table class="rg-table"><nav class="rg-nav"><label class="rg-label">email</label><label class="rg-label">name</label><label class="rg-label">org</label><label class="rg-label">score</label></nav><ul class="rg-list" data-slot="table.0" data-list="1"><div class="rg-stack" data-key="1"><span class="rg-text" data-slot="table.1#1">••••·76b063</span><span class="rg-text" data-slot="table.2#1">alpha</span><span class="rg-text" data-slot="table.3#1">acme</span><span class="rg-text" data-slot="table.4#1">1</span></div><div class="rg-stack" data-key="2"><span class="rg-text" data-slot="table.1#2">••••·40fcd6</span><span class="rg-text" data-slot="table.2#2">beta</span><span class="rg-text" data-slot="table.3#2">acme</span><span class="rg-text" data-slot="table.4#2">2</span></div></ul></table></div><script src="/session/client.js"></script></body></html>
+
+==============================================================
+STEP 3: GET /ui/app/rx/Widget/form/1 (mount the edit target) — a second session
+==============================================================
+form mount session id: 25cb6bf6-78e1-4d3d-a5d4-ee969576fc8a
+form first paint:
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>regel</title></head><body><div id="rg-root" data-session="25cb6bf6-78e1-4d3d-a5d4-ee969576fc8a" data-seq="0"><section role="region" class="rg-section"><div class="rg-stack"><label class="rg-label">email</label><input class="rg-field" data-slot="form.0"></input></div><div class="rg-stack"><label class="rg-label">name</label><input class="rg-field" data-slot="form.1"></input></div><div class="rg-stack"><label class="rg-label">org</label><input class="rg-field" data-slot="form.2"></input></div><div class="rg-stack"><label class="rg-label">score</label><input class="rg-field" data-slot="form.3"></input></div><div role="alert" aria-live="assertive" class="rg-alert" data-slot="form.4"></div></section></div><script src="/session/client.js"></script></body></html>
+'name' field form slot id: form.1
+
+==============================================================
+STEP 4: open the SSE stream on the form session (background curl -N, tee'd to a file)
+==============================================================
+SSE stream open on session 25cb6bf6-78e1-4d3d-a5d4-ee969576fc8a (pid 84452) -> /var/folders/_6/44y5p5453njbczf2l4nzx0_w0000gn/T/regel-reactive-sse.XXXXXX.tV21wa2cJj
+
+==============================================================
+STEP 5: POST /session/{id}/event — an input draft (event body: slotId/event/value/eventSeq)
+==============================================================
+input response: {"applied":true,"eventSeq":1,"ops":1}
+
+==============================================================
+STEP 6: POST /session/{id}/event — submit (the rowVersion-guarded write + NOTIFY regel_invalidate)
+==============================================================
+submit response: {"applied":true,"eventSeq":2,"ops":0}
+PASS: res_app_rx_widget row 1 name committed to 'ALPHA-LIVE'
+
+==============================================================
+STEP 7: the captured SSE frame lines (id: + data:) — decode + show the value arrived live
+==============================================================
+raw SSE transcript (/var/folders/_6/44y5p5453njbczf2l4nzx0_w0000gn/T/regel-reactive-sse.XXXXXX.tV21wa2cJj):
+id: 1
+data: AQAAAAAAAAABB1BsQCDiMrwBAwZmb3JtLjEKQUxQSEEtTElWRQ==
+
+id: 2
+data: AQAAAAAAAAACB1BsQCDiMrwA
+
+id: 3
+data: AQAAAAAAAAADB1BsQCDiMrwA
+
+PASS: a post-mutation SSE frame decodes (base64 -> strings) to contain 'ALPHA-LIVE'
+
+==============================================================
+STEP 8: POST /session/{id}/resync — a fresh full-repaint frame
+==============================================================
+resync response: {"eventSeq":3,"digest":527040179087749820,"html":"<section role=\"region\" class=\"rg-section\"><div class=\"rg-stack\"><label class=\"rg-label\">email</label><input class=\"rg-field\" data-slot=\"form.0\"></input></div><div class=\"rg-stack\"><label class=\"rg-label\">name</label><input class=\"rg-field\" data-slot=\"form.1\"></input></div><div class=\"rg-stack\"><label class=\"rg-label\">org</label><input class=\"rg-field\" data-slot=\"form.2\"></input></div><div class=\"rg-stack\"><label class=\"rg-label\">score</label><input class=\"rg-field\" data-slot=\"form.3\"></input></div><div role=\"alert\" aria-live=\"assertive\" class=\"rg-alert\" data-slot=\"form.4\"></div></section>","snapshot":{"form.0":"••••·76b063","form.1":"ALPHA-LIVE","form.2":"acme","form.3":"1","form.4":""}}
+PASS: resync returned a fresh snapshot carrying the committed value
+
+==============================================================
+STEP 9: cross-session invalidation fan-out to the table viewer
+==============================================================
+PASS: table session received a live cross-session patch:
+id: 1
+data: AQAAAAAAAAABrjPGPEpFdB8BAQl0YWJsZS4yIzEKQUxQSEEtTElWRQ==
+
+id: 2
+data: AQAAAAAAAAACrjPGPEpFdB8A
+
+
+==============================================================
+STEP 10: clean shutdown
+==============================================================
+PASS: kernel process terminated cleanly
+
+==============================================================
+DEMO OK — reactive layer live: mount, SSE, event-driven mutation, live patch frame, resync
+==============================================================

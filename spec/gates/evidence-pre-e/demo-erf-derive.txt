@@ -1,0 +1,122 @@
+### building regel binary
+### recreating database regel_erf_demo
+
+==============================================================
+STEP 0a: migrate-db
+==============================================================
+migrate-db: substrate applied
+
+==============================================================
+STEP 0b: genesis
+==============================================================
+genesis: epoch 1 pinned — std_manifest_root=e38301a0bdc8fdbd dispatch_attestation=e673fb816e944290
+
+==============================================================
+STEP 1: admit a resource exercising the closed 13-type roster (+ 2 pii wraps)
+==============================================================
+admitted: app/derive/Contact
+
+==============================================================
+STEP 2: the eleven ADR-10 §4 derivation passes (+ ADR-11 §1 'template')
+==============================================================
+catalog
+components
+history
+horizon
+mcptools
+openapi
+policy
+schema
+template
+validator
+vault
+PASS: all eleven passes present, exactly once each
+
+==============================================================
+STEP 3: the derived base table + history shadow table + AFTER trigger exist
+==============================================================
+base table res_app_derive_contact: present
+history table res_app_derive_contact_history: present
+                                           Table "public.res_app_derive_contact"
+       Column       |           Type           | Collation | Nullable |                      Default                       
+--------------------+--------------------------+-----------+----------+----------------------------------------------------
+ id                 | bigint                   |           | not null | nextval('res_app_derive_contact_id_seq'::regclass)
+ active             | boolean                  |           |          | 
+ closedOn           | date                     |           |          | 
+ company_id         | bigint                   |           |          | 
+ dealValue          | bigint                   |           |          | 
+ dealValue_currency | text                     |           |          | 
+ hq_line1           | text                     |           |          | 
+ hq_line2           | text                     |           |          | 
+ hq_city            | text                     |           |          | 
+ hq_region          | text                     |           |          | 
+ hq_postal          | text                     |           |          | 
+ hq_country         | text                     |           |          | 
+ lastSeen           | timestamp with time zone |           |          | 
+ name               | text                     |           |          | 
+ notes              | text                     |           |          | 
+ score              | numeric                  |           |          | 
+ site               | text                     |           |          | 
+ stage              | text                     |           |          | 
+ tier               | text                     |           |          | 
+ row_version        | bigint                   |           | not null | 0
+Indexes:
+    "res_app_derive_contact_pkey" PRIMARY KEY, btree (id)
+PASS: res_app_derive_contact_hist_trg installed (1 row in pg_trigger)
+PASS: email/phone (pii) have NO base table column — vault-routed only
+
+==============================================================
+STEP 4: insert a row (non-pii columns only — pii never lands here)
+==============================================================
+inserted subject id=1
+
+==============================================================
+STEP 5: seal a pii value into the vault (VaultPut-equivalent — see header note)
+==============================================================
+sealed subject=1 field=email ciphertext(preview)=5c0cf75fd20c821d8d9f9064bd9099dd...
+
+==============================================================
+STEP 6: an UPDATE fires the history trigger (a live edit, unrelated column)
+==============================================================
+PASS: 1 history row written for subject 1
+
+==============================================================
+STEP 7: the pii plaintext is ABSENT from the base table AND its history (grep)
+==============================================================
+base row: 1|t|2026-01-15||500000|USD|1 Infinite Loop||Cupertino|CA|95014|US|2026-07-01 08:00:00-04|Ada Lovelace|vip lead — Stage-D acceptance demo subject|97|https://acme.example|active|gold|0
+grep 'ada.lovelace@acme.example' in base table: ABSENT (pass)
+history row: 1|1|UPDATE|2026-07-16 12:03:43.177693-04|t|2026-01-15||500000|USD|1 Infinite Loop||Cupertino|CA|95014|US|2026-07-01 08:00:00-04|Ada Lovelace|vip lead — Stage-D acceptance demo subject|95|https://acme.example|active|gold
+grep 'ada.lovelace@acme.example' in history table: ABSENT (pass)
+
+==============================================================
+STEP 8: the vault ciphertext exists and is NOT the plaintext
+==============================================================
+vault.ciphertext = 5c0cf75fd20c821d8d9f9064bd9099dd12362daa6dbc4020c7c19cf38e2a3c7df65205d40b3cb56514c64330f029b15a
+PASS: vault carries ciphertext only, distinct from the plaintext
+
+==============================================================
+STEP 9: regel shred — crypto-shred the subject's vault key
+==============================================================
+shred: app/derive/Contact subject 1 — 1 key(s) destroyed, attestation #1 (ciphertext now undecryptable)
+
+==============================================================
+STEP 10: the shred_attestation row
+==============================================================
+ id |        resource        | subject_id | keys_shredded | shredded_by  |          shredded_at          
+----+------------------------+------------+---------------+--------------+-------------------------------
+  1 | res_app_derive_contact | 1          |             1 | operator:dpo | 2026-07-16 12:03:43.271672-04
+(1 row)
+PASS: exactly 1 shred_attestation row
+
+==============================================================
+STEP 11: post-shred — the vault key is gone; the ciphertext is now permanently undecryptable
+==============================================================
+vault_key rows for subject 1: 0 (gone — the ONLY path to the AEAD key is destroyed)
+vault ciphertext blob rows for subject 1: 1 (remains — crypto-shred destroys the KEY, not the blob)
+Per internal/admission/vault.go VaultReveal: a missing vault_key row means the read path returns
+the mask token (VaultMaskToken = "‹masked›"), never a decryption — the value is unreadable by
+construction now that its only key row is deleted (asserted directly above: vault_key rows = 0).
+
+==============================================================
+DEMO OK — erf Stage-D derivation: 11 passes, history live, pii vaulted + never leaked, crypto-shred verified
+==============================================================

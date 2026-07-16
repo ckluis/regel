@@ -1,0 +1,251 @@
+### building regel binary
+### recreating database regel_demo
+
+==============================================================
+STEP 0a: migrate-db
+==============================================================
+migrate-db: substrate applied
+
+==============================================================
+STEP 0b: genesis
+==============================================================
+genesis: epoch 1 pinned — std_manifest_root=e38301a0bdc8fdbd dispatch_attestation=e673fb816e944290
+
+==============================================================
+STEP 0c: serve (background)
+==============================================================
+server up: serve: regel kernel 722cc1c9-5ce8-417c-879b-3ed0c122fd79 listening on :8791 (epoch 1, lease 30s, poll 250ms)
+
+==============================================================
+STEP 1: admit examples/greet_v1.ts
+==============================================================
+{
+  "outcome": "admitted",
+  "admitted": true,
+  "hashes": {
+    "app/demo/greet": "r1_fvddarkc9zj0wzat5d5a8s6t97c0f1e1b4vtctgwrtbbesb62j90"
+  },
+  "stages": [
+    {
+      "stage": "lower",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "insert",
+      "status": "pass",
+      "ms": 1
+    },
+    {
+      "stage": "tsgo",
+      "status": "pass",
+      "ms": 20
+    },
+    {
+      "stage": "derive",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V1",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V2",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V3",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V4",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V5",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V6",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "migrate",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "cas",
+      "status": "pass",
+      "ms": 1
+    },
+    {
+      "stage": "approval",
+      "status": "pass",
+      "ms": 0
+    }
+  ],
+  "diagnostics": [],
+  "admission_id": 2,
+  "epoch": 1,
+  "base_snapshot": "2026-07-16T16:03:25.430382Z",
+  "delta": {
+    "capabilities": {
+      "requested": [],
+      "granted": null,
+      "added_vs_base": []
+    },
+    "pii_surface": {
+      "touched": [],
+      "added_vs_base": []
+    },
+    "ddl_surface": {
+      "statements": null,
+      "additive": true,
+      "added_vs_base": null
+    }
+  },
+  "seeders": null
+}
+v1 head hash: r1_fvddarkc9zj0wzat5d5a8s6t97c0f1e1b4vtctgwrtbbesb62j90
+
+==============================================================
+STEP 2: eval app/demo/greet ["world"]  ⇒  "hello, world"
+==============================================================
+response: "hello, world"
+
+==============================================================
+STEP 3: capture T0 = now (between versions)
+==============================================================
+T0 = 2026-07-16T16:03:26Z
+
+==============================================================
+STEP 4: admit examples/greet_v2.ts --base app/demo/greet=r1_fvddarkc9zj0wzat5d5a8s6t97c0f1e1b4vtctgwrtbbesb62j90
+==============================================================
+{
+  "outcome": "admitted",
+  "admitted": true,
+  "hashes": {
+    "app/demo/greet": "r1_38d0mqawae7ycv7dbbkc35m2qxght6sdy498t4344tt49dqkgnf0"
+  },
+  "stages": [
+    {
+      "stage": "lower",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "insert",
+      "status": "pass",
+      "ms": 7
+    },
+    {
+      "stage": "tsgo",
+      "status": "pass",
+      "ms": 29
+    },
+    {
+      "stage": "derive",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V1",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V2",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V3",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V4",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V5",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "V6",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "migrate",
+      "status": "pass",
+      "ms": 0
+    },
+    {
+      "stage": "cas",
+      "status": "pass",
+      "ms": 4
+    },
+    {
+      "stage": "approval",
+      "status": "pass",
+      "ms": 0
+    }
+  ],
+  "diagnostics": [],
+  "admission_id": 3,
+  "epoch": 1,
+  "base_snapshot": "2026-07-16T16:03:27.531376Z",
+  "delta": {
+    "capabilities": {
+      "requested": [],
+      "granted": null,
+      "added_vs_base": []
+    },
+    "pii_surface": {
+      "touched": [],
+      "added_vs_base": []
+    },
+    "ddl_surface": {
+      "statements": null,
+      "additive": true,
+      "added_vs_base": null
+    }
+  },
+  "seeders": null
+}
+
+==============================================================
+STEP 5: eval app/demo/greet ["world"]  ⇒  "HELLO, world!" (new behavior)
+==============================================================
+response: "HELLO, world!"
+
+==============================================================
+STEP 6: eval ?as_of=2026-07-16T16:03:26Z  ⇒  "hello, world" (rollback = as-of WHERE clause)
+==============================================================
+response: "hello, world"
+
+==============================================================
+STEP 7: admit examples/burn.ts, eval ?tier=sandbox&fuel=20000 ⇒ 202 fuel.exhausted
+==============================================================
+park response: {"class":"fuel.exhausted","condition_id":"39002857-6734-401e-861b-b5da5fce8b83","continuation_id":"bc213bed-c41d-4ba6-b638-fd6d75fb752e","restarts":[{"capability_required":"operator","label":"Grant more fuel","name":"grant-fuel"},{"capability_required":"","label":"Abort","name":"abort"}]}
+continuation: bc213bed-c41d-4ba6-b638-fd6d75fb752e
+
+==============================================================
+STEP 8: restart grant-fuel {fuel:10000000}  ⇒  completed value 100000
+==============================================================
+response: 100000
+
+==============================================================
+DEMO OK — all eight steps passed (admit → eval → rollback → park → restart)
+==============================================================

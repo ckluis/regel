@@ -1,0 +1,15 @@
+=== RUN   TestGateA_TwoFreshDBReproducibility
+    genesis_gate_test.go:152: two-fresh-DB parity: 72 entries, IDENTICAL (hash,ast)+pointer+manifest-root on both
+--- PASS: TestGateA_TwoFreshDBReproducibility (0.35s)
+=== RUN   TestGateB_MidGenesisKillEmptyOrComplete
+    genesis_gate_test.go:216: mid-genesis kill: 219 statement boundaries swept, all empty-or-complete; retry completed
+--- PASS: TestGateB_MidGenesisKillEmptyOrComplete (1.90s)
+=== RUN   TestGateC_DispatchBijectionBootRefusal
+--- PASS: TestGateC_DispatchBijectionBootRefusal (0.00s)
+=== RUN   TestGateD_AttestationRecomputeRefusesOnTamper
+--- PASS: TestGateD_AttestationRecomputeRefusesOnTamper (0.19s)
+=== RUN   TestGateE_NativeBodyUnwritable
+    genesis_gate_test.go:359: native-stub rejected by tsgo / TS2304: Cannot find name 'regelNative'.
+--- PASS: TestGateE_NativeBodyUnwritable (0.28s)
+PASS
+ok  	regel.dev/regel/internal/admission	3.034s

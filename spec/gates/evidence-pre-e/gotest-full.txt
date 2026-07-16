@@ -1,0 +1,18 @@
+?   	regel.dev/regel/cmd/regel	[no test files]
+?   	regel.dev/regel/gate/nativetcb	[no test files]
+?   	regel.dev/regel/gate/redpath	[no test files]
+ok  	regel.dev/regel/internal/admission	16.700s
+ok  	regel.dev/regel/internal/catalog	1.787s
+ok  	regel.dev/regel/internal/cek	2.862s
+ok  	regel.dev/regel/internal/cfr	5.471s
+ok  	regel.dev/regel/internal/gitproj	6.259s
+ok  	regel.dev/regel/internal/kernel	416.413s
+ok  	regel.dev/regel/internal/lower	1.836s
+ok  	regel.dev/regel/internal/mcp	9.567s
+?   	regel.dev/regel/internal/mutants	[no test files]
+ok  	regel.dev/regel/internal/oracle	2.989s
+ok  	regel.dev/regel/internal/pgwire	2.652s
+ok  	regel.dev/regel/internal/rast	1.354s
+ok  	regel.dev/regel/internal/tsx	1.698s
+ok  	regel.dev/regel/internal/ui	0.915s
+=== EXIT CODE: 0  ELAPSED: 418s ===

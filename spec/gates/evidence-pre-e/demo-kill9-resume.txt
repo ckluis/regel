@@ -1,0 +1,54 @@
+### building regel binary
+### recreating database regel_kill9_demo
+
+==============================================================
+STEP 0a: migrate-db
+==============================================================
+migrate-db: substrate applied
+
+==============================================================
+STEP 0b: genesis
+==============================================================
+genesis: epoch 1 pinned — std_manifest_root=e38301a0bdc8fdbd dispatch_attestation=e673fb816e944290
+
+==============================================================
+STEP 0c: admit examples/kill9.ts (4 steps: compute + effect + sleep each)
+==============================================================
+admitted: app/kill9/w
+
+==============================================================
+STEP 1: LEG 1 (reference) — kernel A runs the workflow to completion, uninterrupted
+==============================================================
+kernel A up (pid 83798, lease 2s): serve: regel kernel 8fe47e54-bb61-4824-be3a-025c1f7d0710 listening on :8793 (epoch 1, lease 2s, poll 100ms)
+reference workflow: 14c1be2d-3965-4fc7-8cf3-890464a23b6d
+reference result: 10000
+reference outbox trace (4 rows): channel.send@1.0;channel.send@2.0;channel.send@3.0;channel.send@4.0
+
+==============================================================
+STEP 2: LEG 2 — fresh workflow, then kill -9 the kernel MID-FLIGHT
+==============================================================
+kill-leg workflow: eb651a67-3c42-4511-9f12-58fbf1f54015
+kill moment: [outbox=1 running_tasks=1 status=ready step_seq=1]
+>>> kill -9 83798 (kernel A — no graceful shutdown, no lease release)
+stranded: continuation status=ready step_seq=1 (running task lease expires in <=2s)
+
+==============================================================
+STEP 3: restart — kernel B (NEW process, same DB) reaps the lease and resumes
+==============================================================
+kernel B up (pid 83958): serve: regel kernel b4a85cc1-46cd-47f1-a334-eb8f3855e373 listening on :8794 (epoch 1, lease 2s, poll 100ms)
+kill-leg result: 10000
+kill-leg outbox trace (4 rows): channel.send@1.0;channel.send@2.0;channel.send@3.0;channel.send@4.0
+kernel B healthz reoffers: 1
+
+==============================================================
+STEP 4: assertions — identical result, exactly-once outbox
+==============================================================
+PASS: result identical across the kill (10000 == 10000)
+PASS: outbox exactly 4 rows (no double effect, no missing effect)
+PASS: ordered effect trace identical (channel.send@1.0;channel.send@2.0;channel.send@3.0;channel.send@4.0)
+PASS: zero duplicate dedup keys in the outbox
+PASS: kernel B re-offered the dead kernel's work (reoffers=1)
+
+==============================================================
+DEMO OK — kill -9 mid-step, cross-kernel resume, effect exactly once
+==============================================================

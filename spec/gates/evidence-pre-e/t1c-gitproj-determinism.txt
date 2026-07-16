@@ -1,0 +1,14 @@
+=== RUN   TestDeterminismReleaseGate
+    project_test.go:69: two-fold determinism: 4 commits, IDENTICAL head SHA on both machines
+    project_test.go:70:   machine A head SHA = c947ff2719c22d95a37a92b388f8ffde2849ebad
+    project_test.go:71:   machine B head SHA = c947ff2719c22d95a37a92b388f8ffde2849ebad
+    project_test.go:73:   commit[0] = c4dfb002dc282fb84a1f44e9c2fb3d42402b9f0b
+    project_test.go:73:   commit[1] = b2bc0c3e01d2bed8a4810fabd6a0a640bd0eb710
+    project_test.go:73:   commit[2] = 3678d44d1a3575fb5a33f6302808d4871d09517b
+    project_test.go:73:   commit[3] = c947ff2719c22d95a37a92b388f8ffde2849ebad
+--- PASS: TestDeterminismReleaseGate (0.46s)
+=== RUN   TestGitOracleVerifiesRepo
+    project_test.go:131: git fsck clean; git log parsed 4 commits; head 719ed94a51c628989a347eb08399fa09dcb32c4b
+--- PASS: TestGitOracleVerifiesRepo (0.46s)
+PASS
+ok  	regel.dev/regel/internal/gitproj	1.226s

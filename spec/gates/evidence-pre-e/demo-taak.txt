@@ -1,0 +1,44 @@
+### building regel binary
+### recreating database regel_taak_demo
+
+==============================================================
+STEP 0a: migrate-db
+==============================================================
+migrate-db: substrate applied
+
+==============================================================
+STEP 0b: genesis
+==============================================================
+genesis: epoch 1 pinned — std_manifest_root=e38301a0bdc8fdbd dispatch_attestation=e673fb816e944290
+
+==============================================================
+STEP 0c: admit examples/taak-kill.ts (std/taak sleep+receive + std/log.write)
+==============================================================
+admitted: app/taak/w
+
+==============================================================
+STEP 1: start on kernel A, then kill -9 MID-FLIGHT
+==============================================================
+kernel A up (pid 84545, lease 2s): serve: regel kernel de2d6922-c0aa-4458-a4e3-01682c8045f5 listening on :8795 (epoch 1, lease 2s, poll 100ms)
+taak workflow: 74728609-8985-45a6-afdb-d2cd07bd7058
+kill moment: [outbox=1 running_tasks=1 status=ready]
+>>> kill -9 84545 (kernel A — no graceful shutdown)
+
+==============================================================
+STEP 2: kernel B (fresh process, same DB) resumes; send the receive bonus
+==============================================================
+kernel B up (pid 84646): serve: regel kernel cecbe9d0-a5e1-4482-8482-7d532c498635 listening on :8796 (epoch 1, lease 2s, poll 100ms)
+>>> POST /channel/taakdone/send value=42 (resolves the receive wake)
+
+==============================================================
+STEP 3: assertions — identical result, exactly-once outbox, effectively-once delivery
+==============================================================
+result=10042 outbox=4 delivered=4 dupes=0 reoffers=1
+PASS: result identical across kill (10042), receive wake survived
+PASS: outbox exactly 4, zero duplicate dedup keys (effect exactly-once)
+PASS: all 4 external intents delivered effectively-once by the dispatcher
+PASS: kernel B re-offered the dead kernel's work (reoffers=1)
+
+==============================================================
+DEMO OK — std/taak kill -9 mid-step: sleep+receive resume, effect once, delivered once
+==============================================================

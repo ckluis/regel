@@ -1,5 +1,8 @@
 # binaries
 /regel
 /dist/
+# outbox delivery file spool (regel serve --spool default)
+/regel-spool/
+regel-spool/
 # vendored tsgo fork node artifacts
 third_party/typescript-go/node_modules/

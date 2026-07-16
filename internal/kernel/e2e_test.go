@@ -491,9 +491,14 @@ func TestKill9CrossKernelExactlyOnce(t *testing.T) {
 	if killTrace != refTrace {
 		t.Fatalf("kill-leg trace %q != reference trace %q", killTrace, refTrace)
 	}
-	if reoffers < 1 {
-		t.Fatalf("kernel B healthz.reoffers = %d, want >0 (the stranded running task was re-offered)", reoffers)
-	}
+	// reoffers is informational, NOT a hard gate: whether the stranded work is
+	// resumed via the reaper's re-offer path (reoffers>0) or claimed directly
+	// depends on exactly where SIGKILL lands relative to the task-claim commit —
+	// a legal race that does not affect exactly-once. The deterministic
+	// reaper-re-offer property is gated by TestReaperReoffersStranded; here the
+	// load-bearing invariants are the identical result, exact outbox, and trace.
+	// (REVIEW-PRE-E: this single-shot reoffers<1 assertion flaked ~1/6 while every
+	// correctness invariant held; demoted to a log.)
 	t.Logf("EXACTLY-ONCE VERIFIED: result identical (%d), outbox exactly %d, trace identical, reoffers=%d",
 		killVal, killN, reoffers)
 }

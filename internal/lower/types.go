@@ -160,10 +160,12 @@ func (l *lowerer) typeRef(n *shimast.Node) *rast.Node {
 			return &rast.Node{Kind: rast.TCatRef, Str: key, Kids: []*rast.Node{args}}
 		}
 	}
-	// 4. imported type → catalogued ref (address known).
+	// 4. imported type → catalogued ref (address known). Keyed by nominal
+	// identity, not hash: every std type shares the opaque genesis hash, so two
+	// distinct std-type imports are distinct edges that must both survive.
 	if imp, ok := l.imports[name]; ok {
 		if l.cur != nil {
-			l.cur.deps[imp.hash] = rast.Dep{Name: imp.name, Module: imp.module, Hash: imp.hash}
+			l.cur.deps[depKey(imp.module, imp.name)] = rast.Dep{Name: imp.name, Module: imp.module, Hash: imp.hash}
 		}
 		return &rast.Node{Kind: rast.TCatRef, Str: imp.hash, Kids: []*rast.Node{args}}
 	}

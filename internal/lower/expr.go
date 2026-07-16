@@ -167,10 +167,12 @@ func (l *lowerer) valueIdent(n *shimast.Node, name string) *rast.Node {
 			return &rast.Node{Kind: rast.KRef, Str: key}
 		}
 	}
-	// 4. named import → catalogued dep edge (address known).
+	// 4. named import → catalogued dep edge (address known). Keyed by nominal
+	// identity, not hash: two imports that share a content hash (e.g. distinct
+	// std types, all of which share the opaque genesis body) are DISTINCT edges.
 	if imp, ok := l.imports[name]; ok {
 		if l.cur != nil {
-			l.cur.deps[imp.hash] = rast.Dep{Name: imp.name, Module: imp.module, Hash: imp.hash}
+			l.cur.deps[depKey(imp.module, imp.name)] = rast.Dep{Name: imp.name, Module: imp.module, Hash: imp.hash}
 		}
 		return &rast.Node{Kind: rast.KRef, Str: imp.hash}
 	}

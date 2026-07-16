@@ -739,8 +739,16 @@ func insertDefinitions(ctx context.Context, q catalog.Querier, lowered []lowered
 }
 
 func depHashes(deps []rast.Dep) []string {
+	// Distinct dependency EDGES can share a content hash (every std type shares
+	// the opaque genesis body), so dedupe by hash: the deps column is the set of
+	// referent hashes for the I2 FK check, not the edge list.
+	seen := map[string]bool{}
 	out := make([]string, 0, len(deps))
 	for _, d := range deps {
+		if seen[d.Hash] {
+			continue
+		}
+		seen[d.Hash] = true
 		out = append(out, d.Hash)
 	}
 	sort.Strings(out)

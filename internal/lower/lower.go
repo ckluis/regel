@@ -95,3 +95,14 @@ func CanonicalText(d Definition) string {
 func Module(source string, ctx ModuleContext) Result {
 	return lowerModule(source, ctx)
 }
+
+// depKey identifies a dependency EDGE by its nominal import identity (module +
+// local exported name), NOT by its content hash. Every std TYPE shares the
+// opaque `unknown` genesis body (internal/admission/image.go), so distinct std
+// types collide on their content hash by design; a deps map keyed by hash would
+// collapse two distinct import edges into one and silently DROP the other
+// (STAGE-D §13.11 residue #11 — a dropped Vault/Conn edge blinds V2/V5). Keying
+// by (module, name) keeps every distinct edge. The NUL separator cannot occur in
+// a module path or ASCII identifier, and an import key never begins with
+// sibPlaceholder, so import keys and sibling-placeholder keys never collide.
+func depKey(module, name string) string { return module + "\x00" + name }

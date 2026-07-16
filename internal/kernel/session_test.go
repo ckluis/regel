@@ -47,7 +47,13 @@ type sessionEnv struct {
 
 func newSessionEnv(t *testing.T) *sessionEnv {
 	t.Helper()
-	e := newReactorEnv(t)
+	return startSessionEnv(t, newReactorEnv(t))
+}
+
+// startSessionEnv wraps a built reactorEnv in the httptest server + reactive-layer
+// loops (shared by newSessionEnv and the worker-tuned storm constructor).
+func startSessionEnv(t *testing.T, e *reactorEnv) *sessionEnv {
+	t.Helper()
 	ts := httptest.NewServer(e.srv.Handler())
 	stop := e.srv.StartSessions(context.Background())
 	t.Cleanup(func() { stop(); ts.Close() })
@@ -83,6 +89,15 @@ type harness struct {
 	digest  ui.Digest
 	resyncs int
 	corrupt string // slotId to corrupt on next applied frame ("" = none)
+
+	// Optimistic local echo (ADR-11 §9 forcing function, §3 duty-(b)-adjacent). When
+	// echoOn, an input-class event morphs the ORIGINATING slot locally into `pending`
+	// — visible immediately, never folded into slots/digest — and is reconciled by the
+	// authoritative server frame (server value wins, clears the pending entry). The
+	// divergence digest therefore stays over server-confirmed values only, so an
+	// unrelated intervening frame never spuriously resyncs. Mirrors clientJS exactly.
+	echoOn  bool
+	pending map[string]string
 }
 
 var slotRE = regexp.MustCompile(`data-slot="([^"]+)"[^>]*>([^<]*)<`)
@@ -103,7 +118,7 @@ func (se *sessionEnv) mount(t *testing.T, view, principal, horizon string) *harn
 		t.Fatalf("mount %s: %d %s", view, resp.StatusCode, body)
 	}
 	sid := resp.Header.Get("X-Regel-Session")
-	h := &harness{t: t, base: se.ts.URL, sid: sid, slots: map[string]string{}}
+	h := &harness{t: t, base: se.ts.URL, sid: sid, slots: map[string]string{}, pending: map[string]string{}}
 	// Seed slot values from first-paint HTML (display text of data-slot elements).
 	for _, m := range slotRE.FindAllStringSubmatch(string(body), -1) {
 		if strings.Contains(m[0], "data-list") {
@@ -198,6 +213,29 @@ func (h *harness) setSlot(id, val string) {
 		h.digest = h.digest.Add(id, val)
 	}
 	h.slots[id] = val
+	if h.pending != nil {
+		delete(h.pending, id) // server frame reconciles (server value wins over echo)
+	}
+}
+
+// localEcho applies an optimistic local echo into the originating slot only (§9).
+// It morphs the visible value immediately WITHOUT touching the server-confirmed
+// slot map or the divergence digest; the confirming server frame later overwrites
+// it via setSlot. Returns the time to first visible change (the input→echo sample).
+func (h *harness) localEcho(slotID, val string) {
+	if h.pending == nil {
+		h.pending = map[string]string{}
+	}
+	h.pending[slotID] = val
+}
+
+// visible is the value the "DOM" would show for a slot: a pending echo if one is
+// outstanding, else the last server-confirmed value.
+func (h *harness) visible(slotID string) string {
+	if v, ok := h.pending[slotID]; ok {
+		return v
+	}
+	return h.slots[slotID]
 }
 func (h *harness) removeSlot(id string) {
 	if old, ok := h.slots[id]; ok {

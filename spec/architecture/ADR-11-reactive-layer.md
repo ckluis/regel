@@ -105,6 +105,20 @@ changed slot, O(changed slots), never a full-view pass (§4, R1-07: client diges
 incrementally); (e) nothing else. It does not render
 components, hold app state, route, or validate. Optimistic local echo is not in v1.
 
+**BUILD-D (D5b): optimistic local echo LANDED via the §9 forcing function** (this line's
+"not in v1" is overridden exactly as §9 prescribes — the felt-latency gate went red, so
+the remedy shipped). Echo is duty-(b)-adjacent morphing, NOT a sixth duty: on an
+**input-class event only**, the client morphs the **originating slot only** to the typed
+value immediately (visible in ≈0 ms) and records it in a `pending` set. The echo is
+**never folded into the divergence digest** (§4) — the digest continues to sum over
+server-confirmed values only, so an unrelated intervening frame never spuriously resyncs
+— and it is **reconciled by the authoritative server frame**: applying any frame that
+sets the slot clears its `pending` entry and the **server value wins** on divergence.
+Echo never touches another slot and never fabricates a commit (input events do not
+mutate). This state machine is implemented byte-identically in the ~15KB client
+(`clientasset.go`) and the Go browser-shaped harness (`session_test.go`); the client is
+still commodity — validation, masking, routing, and durable state remain server-side.
+
 ### 4. Divergence detection and resync: an incremental scoped snapshot digest (R1-07: O(changed slots) per event, not O(view))
 
 Every frame carries `snapshotHash`, a 64-bit digest of the **current** `(slotId → value)`
@@ -316,6 +330,32 @@ the release.
   needed. The feature is contingent; the **gate** is the finding. This replaces the prior
   complaint-driven trigger ("measured WAN latency complaints"): the customer is never the
   latency instrument.
+
+**BUILD-D (D5b): the gate ran RED, then GREEN — the echo remedy is landed.** The
+reference clickthrough (a derived form over the D1 Widget resource: keystroke `input`
+events into the name field, then a single-mutation `submit`) was driven over `wan-150`
+with the profile injected by the harness on both directions as a deterministic
+simulated link (one-way propagation `rtt/2` + `size/bandwidth` serialization; **no OS
+traffic shaping**), p95 over 30 iterations. Numbers (Apple M4, local Postgres 16, idle):
+
+| | input→echo p95 | action→commit p95 |
+|---|---|---|
+| **RED** (pure server round trip, no echo) | **161.6 ms** — FAILS ≤50 ms | 161.1 ms — passes ≤300 ms |
+| **GREEN** (optimistic local echo) | **0.0 ms** — passes ≤50 ms | 160.6 ms — passes ≤300 ms |
+
+The RED input→echo of ~161 ms is one wan-150 RTT (the pure server morph cannot beat the
+link) — the forcing function firing exactly as designed. Echo (§3 BUILD-D marker: the
+`pending`-set state machine, originating-slot/input-class only, digest-neutral,
+server-wins) makes the originating slot's morph local, turning input→echo green while
+leaving action→commit — the *real* commit round trip, which echo deliberately cannot
+shortcut and never fabricates — comfortably inside 300 ms. The GREEN input→echo (≤50 ms)
+and action→commit (≤300 ms) p95 are the M4 release-gate `perf_budget` rows
+(`sse.wan150.input_echo_ms_p95`, `sse.wan150.action_commit_ms_p95`); the RED numbers are
+recorded as the witness (`*.noecho`, record-only). Modeling note: the harness has no
+native DOM, so per §3 duty (b) "first visible UI change" is the slot-map morph — the
+server frame authoritatively sets slot values, and echo makes the input slot's morph
+local; a real browser's native pre-paint of an `<input>` is strictly faster, so this is
+the conservative measurement.
 
 ## Alternatives Considered
 

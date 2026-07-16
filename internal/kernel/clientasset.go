@@ -19,7 +19,8 @@ const clientJS = `"use strict";
   var MASK = (1n << 64n) - 1n;
   var FNV_OFFSET = 14695981039346656037n;
   var FNV_PRIME = 1099511628211n;
-  var slots = Object.create(null); // slotId -> display value
+  var slots = Object.create(null);   // slotId -> server-confirmed display value
+  var pending = Object.create(null); // slotId -> outstanding optimistic echo (§9)
   var digest = 0n;
 
   function enc(s) { return new TextEncoder().encode(s); }
@@ -37,6 +38,7 @@ const clientJS = `"use strict";
     if (old !== undefined) digest = (digest - slotTerm(id, old)) & MASK;
     slots[id] = val;
     digest = (digest + slotTerm(id, val)) & MASK;
+    if (pending[id] !== undefined) delete pending[id]; // server frame reconciles (server wins)
   }
   function removeSlot(id) {
     var old = slots[id];
@@ -153,7 +155,15 @@ const clientJS = `"use strict";
     });
   }
   root.addEventListener("input", function (e) {
-    var id = slotIdOf(e.target); if (id) post(id, "input", e.target.value);
+    var id = slotIdOf(e.target); if (!id) return;
+    // (§9) optimistic local echo into the ORIGINATING slot ONLY, for input-class
+    // events: the typed value is visible immediately (native for a text input;
+    // recorded in the pending map for parity with the tested state machine), is
+    // NEVER folded into the divergence digest, and is reconciled by the
+    // authoritative server frame — server value wins, and setSlot clears the pending
+    // entry. Echo never touches another slot and never fabricates a commit.
+    pending[id] = e.target.value;
+    post(id, "input", e.target.value);
   });
   root.addEventListener("change", function (e) {
     var id = slotIdOf(e.target); if (id) post(id, "blur", e.target.value);

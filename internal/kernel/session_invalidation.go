@@ -20,8 +20,10 @@ import (
 // invalidationChannel is the LISTEN/NOTIFY channel; payload = resource\x1frowId\x1fhorizon.
 const invalidationChannel = "regel_invalidate"
 
-// fanoutWorkers bounds the concurrent re-render→diff→frame drain (§6 bounded pool).
-// D3 keeps this modest; D5 owns the 50k storm calibration.
+// fanoutWorkers is the DEFAULT bound on the concurrent re-render→diff→frame drain
+// (§6 bounded pool). D3 kept this modest; BUILD-D (D5b) makes it a per-index knob
+// (invalidationIndex.workers) the 50k-storm gate calibrates upward on a fat node
+// while every existing test keeps the modest default.
 const fanoutWorkers = 8
 
 type dirtyItem struct {
@@ -39,6 +41,13 @@ type invalidationIndex struct {
 	dirty   map[string]time.Time // sessionID -> first-enqueued time (coalescing set)
 	redrive map[string]int       // sessionID -> re-enqueue count (failed-drive backstop)
 	queue   chan string
+	workers int // bounded drain pool size (default fanoutWorkers; storm gate tunes it)
+
+	// sampleLag is an OPTIONAL per-drive lag observer (nil in production). The 50k
+	// storm gate sets it to collect the enqueue→patch-sent distribution so it can
+	// report p50/p95 fanout lag; it is called off the worker goroutine on every
+	// non-failed drive that carried a real enqueue timestamp.
+	sampleLag func(ms int64)
 }
 
 func newInvalidationIndex(srv *Server) *invalidationIndex {
@@ -46,7 +55,8 @@ func newInvalidationIndex(srv *Server) *invalidationIndex {
 		srv:     srv,
 		dirty:   map[string]time.Time{},
 		redrive: map[string]int{},
-		queue:   make(chan string, 8192),
+		queue:   make(chan string, 65536),
+		workers: fanoutWorkers,
 	}
 }
 
@@ -54,9 +64,13 @@ func newInvalidationIndex(srv *Server) *invalidationIndex {
 // pgwire surfaces async NOTIFY only on a round trip (no background reader), so this
 // pings at a short cadence to pump them.
 func (ix *invalidationIndex) listenLoop(ctx context.Context) {
-	// Start the bounded worker pool.
+	// Start the bounded worker pool (size = ix.workers, default fanoutWorkers).
+	nw := ix.workers
+	if nw <= 0 {
+		nw = fanoutWorkers
+	}
 	var wg sync.WaitGroup
-	for i := 0; i < fanoutWorkers; i++ {
+	for i := 0; i < nw; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -183,7 +197,11 @@ func (ix *invalidationIndex) worker(ctx context.Context) {
 			failed := ix.driveInvalidation(ctx, sid)
 			addInvalDepth(-1)
 			if !enq.IsZero() {
-				setFanoutLag(time.Since(enq).Milliseconds())
+				lag := time.Since(enq).Milliseconds()
+				setFanoutLag(lag)
+				if !failed && ix.sampleLag != nil {
+					ix.sampleLag(lag)
+				}
 			}
 			// A failed drive (serialization-class abort under fan-out contention) is
 			// re-enqueued, bounded, so an invalidation is never permanently lost from a

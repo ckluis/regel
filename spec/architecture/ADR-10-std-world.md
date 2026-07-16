@@ -295,6 +295,36 @@ effect/intent → CFR checkpoint → COMMIT). The mapping:
 - In non-workflow kinds (handlers, components), awaits complete inline or park as
   `kind='request'` continuations per ADR-04/06; no durable checkpoints.
 
+**BUILD-D (increment D4) — the taak surface made real, and two additions.** The
+`taak.*` natives are the shipped v1 authoring surface. Implementation choice, recorded:
+`taak.{sleep,receive,send,all,race}` reuse the Stage-B `StdWf*` Go bodies — **one
+implementation, two module names** (`std/taak` and the retained Stage-B `std/wf`). The
+two hashes differ because the `NativeBody` intrinsic symbol differs
+(`std/taak.sleep` ≠ `std/wf.sleep`), so the dispatch bijection (§2) still holds; both
+keys route to the same body. Two surfaces are added beyond the §6 list above:
+- **`taak.send(channel, value)`** — the in-workflow message producer paired with
+  `taak.receive` (already present as `wf.send`; promoted onto the authoring surface).
+- **`taak.onChange(resource, keys?)`** — the **event-wake** std surface (ADR-05 §5
+  `{kind:'event', stream, on}`): a workflow parks until a derived-resource mutation on
+  `resource` (matching a row id in `keys`, or ANY row when `keys` is empty) commits.
+  The wake is flipped ready inside the triggering mutation's transaction (the session
+  submit path and any workflow derived-write), so a record change reaches a parked
+  workflow atomically with the write. Named here rather than left implicit.
+
+`taak.receive`'s optional `match` is the **structural predicate** ADR-05 §5 concretizes
+as `{path, equals}` (equality of a dotted field path in the message payload against a
+scalar); a receiver claims the oldest *matching* undelivered message and a send claims
+the oldest *matching* sleeping receiver, so disjoint predicates partition one channel.
+
+**Effect-class conformance gate (the §6 red-path, BUILD-D D4).** A capability's declared
+effect class (`read`/`write`/`external`, carried on the native dispatch registry) drives
+await behavior: `read` runs inline with no checkpoint; `write` records an effect that
+commits with the step checkpoint; `external` records an outbox intent the ADR-06 §5
+dispatcher delivers effectively-once. The **std-conformance check** lives in the machine's
+native-dispatch site (`performNative`): a native DECLARED `read` that records any effect
+is caught and **failed closed** (an evaluation error → `step.failed`), never a committed
+effect. This is the accidental-bug guard; §8's TCB harness is the adversarial seed (D5).
+
 The three proposals' `wf.step`-wrapper design is overruled (see Alternatives): with
 ADR-04's everywhere-serializable machine and ADR-05's every-await capture verifier, the
 wrapper's boundedness rationale is void, and an awaited-but-unwrapped effect would

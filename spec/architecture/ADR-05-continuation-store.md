@@ -217,6 +217,28 @@ CREATE INDEX ON channel_message (channel) WHERE claimed_by IS NULL;
   oldest matching sleeping receiver as it flips it — one message wakes one receiver,
   exactly once, because the claim is an UPDATE under the same SERIALIZABLE rules as §7.
 
+BUILD-D (increment D4 — the `match:<pred>` and `event` wakes made concrete):
+
+- **Message match predicate.** `taak.receive(channel, match?)` — `match` is the minimal
+  structural predicate `{path, equals}`: equality of a **dotted field path** in the
+  decoded message payload record against a **scalar** (`string`/`number`/`boolean`/
+  `bigint`), stored verbatim in the wake jsonb (`wake.match`). Matching is evaluated in
+  Go against the CFR-decoded payload (SQL cannot introspect the `bytea`): a receiver with
+  a predicate claims the oldest *matching* undelivered message; a send claims the oldest
+  *matching* sleeping receiver, skipping non-matching ones so they stay queued for another
+  receiver. An absent predicate matches any message (the Stage-B FIFO behavior). Two
+  receivers with disjoint predicates therefore partition one channel, each message
+  delivered exactly once to the right receiver; a message matching nobody parks until a
+  matching receiver arrives.
+- **Event wakes.** `{kind:'event', stream:<resource>, on:[rowId…]}` — a workflow parks on
+  record-change via `taak.onChange(resource, keys?)` (empty `on` ⇒ any row). A
+  derived-resource mutation flips every matching event-parked continuation to `ready` and
+  inserts its resume task **inside the mutation's own transaction** (`cfr.WakeEvents`),
+  wired into both the session form-submit commit (which also NOTIFYs the ADR-11 §6
+  invalidation) and any workflow derived-write — so one write reaches live sessions AND
+  parked workflows atomically. An unrelated-resource or unwatched-row mutation does not
+  wake it; a matching mutation wakes it exactly once (idempotent under the status CAS).
+
 ### 6. Durable conditions and named restarts: rows, buttons, choices
 
 A failed or fuel-exhausted step never throws outward (ADR-01 exceptions semantics); the
@@ -334,6 +356,23 @@ CREATE TABLE outbox (
 The UNIQUE constraint is what makes "effect fires exactly once" a database fact
 rather than a protocol hope: a zombie kernel that somehow reached its effect INSERT
 after losing the CAS would violate the key and abort.
+
+BUILD-D (increment D4 — the outbox DISPATCHER, discharging STAGE-B §10 residue 4).
+The step transaction, alongside each **external**-class outbox row, enqueues one
+ADR-06 §5 `deliver` task (`{intent_id, dedup_key}`) in the SAME commit — so a
+recorded intent always has a driving task and vice versa. `channel.send` is the sole
+**internal** class (delivered transactionally in-process as a `channel_message` +
+receiver flip), never enqueued. A reactor dispatch loop claims `deliver` tasks under
+`FOR UPDATE SKIP LOCKED` (one dispatcher per task), pushes each intent across the
+process boundary via a **pluggable sink** (`DeliverySink`; the default kernel sink
+discards — real mail/http sinks are Stage-E), then stamps `delivered_at` **exactly
+once** under `WHERE delivered_at IS NULL`. Effectively-once, stated: a crash between
+the sink call and the mark leaves the task running with an expiring lease, so the
+reaper re-offers it and the intent is **redelivered once — never lost**; an
+already-delivered row is never re-marked, and concurrent dispatchers never
+double-deliver (the SKIP LOCKED claim + the delivered_at CAS). The dedup key
+(`continuation_id:step_seq:ordinal`) plus sink idempotency is the honest cross-boundary
+limit.
 
 BUILD-B (REPORT-R1 P2-6, Kleppmann — retry-on-40001 policy + abort-rate budget,
 binding at M2): SERIALIZABLE-everywhere means concurrent steps abort each other by

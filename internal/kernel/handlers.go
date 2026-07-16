@@ -286,13 +286,17 @@ func (s *Server) handleChannelSend(w http.ResponseWriter, r *http.Request) {
 // --- GET /healthz ------------------------------------------------------------
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{
+	resp := map[string]any{
 		"kernel_id": s.kernelID,
 		"epoch":     s.epoch,
 		"draining":  s.Draining(),
 		"metrics":   cfr.MetricsSnapshot(),
 		"sse":       sseMetricsSnapshot(),
-	})
+	}
+	if b := s.breaker.Load(); b != nil {
+		resp["reaper"] = b.snapshot()
+	}
+	writeJSON(w, 200, resp)
 }
 
 // --- GET /continuation/{id} --------------------------------------------------

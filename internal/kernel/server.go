@@ -31,6 +31,8 @@ type Server struct {
 	hub      *sseHub         // ADR-11 §2 per-session SSE ring + fan-out (in-memory cache)
 	invIndex *invalidationIndex
 	sink     cfr.DeliverySink // ADR-06 §5 outbox dispatcher sink (default: discard)
+
+	breaker atomic.Pointer[reaperBreaker] // ADR-13 §5 reap-rate breaker (set by StartReactor)
 }
 
 // sse returns the kernel's SSE hub (ADR-11 §2).

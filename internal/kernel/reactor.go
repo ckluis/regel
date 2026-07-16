@@ -78,6 +78,7 @@ func (s *Server) StartReactor(ctx context.Context, cfg ReactorConfig) *Reactor {
 	rctx, cancel := context.WithCancel(ctx)
 	r := &Reactor{srv: s, cfg: cfg.withDefaults(), cancel: cancel, wake: make(chan struct{}, 1),
 		breaker: newReaperBreaker(cfg.withDefaults())}
+	s.breaker.Store(r.breaker)
 	r.wg.Add(6)
 	go r.loop(rctx, r.cfg.PollInterval, r.drainOnce, true)        // 2. DRAIN
 	go r.loop(rctx, r.cfg.PollInterval, r.timerOnce, false)       // 1. TIMER SCANNER

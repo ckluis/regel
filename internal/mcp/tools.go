@@ -338,16 +338,26 @@ func (s *Server) toolConditionRestart(ctx context.Context, conn *pgwire.Conn, p 
 			return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 		}
 	}
-	// SHIPS DISABLED for agent principals (ADR-12 §7 BUILD-C): the restart-decision
-	// eval that would enable it first exists at Stage E; absent metric ⇒ disabled.
-	// A typed refusal naming the gate — human/operator principals keep the authority.
+	// MECHANIZED FLIP (ADR-12 §7 BUILD-E): the agent-facing authority is gated on
+	// the restart-decision eval rows, not a hardcoded flag. It enables IFF the
+	// current epoch's `restart` m5_gate row reads green with the ADR-12 §7 floors
+	// (accuracy ≥ 0.95 AND corpus M ≥ 30 AND not partial). Absent/red/partial ⇒
+	// DISABLED — the flip cannot be forged, and it reverts the instant the metric
+	// goes red. Human/operator principals keep the authority unconditionally (§7).
 	if p.ActorKind == "agent" {
-		return map[string]any{
-			"status": "refused",
-			"code":   "RESTART_DISABLED",
-			"gate":   "ADR-12 §7 restart-decision eval (Stage E)",
-			"detail": "agent-facing condition.restart ships disabled until the restart-decision accuracy metric is green; use condition.list / workflow.inspect. Human operators retain the operator-plane restart buttons.",
-		}, nil
+		enabled, why, err := agentRestartAuthorityEnabled(ctx, conn)
+		if err != nil {
+			return nil, internalErr(err)
+		}
+		if !enabled {
+			return map[string]any{
+				"status": "refused",
+				"code":   "RESTART_DISABLED",
+				"gate":   "ADR-12 §7 restart-decision eval",
+				"detail": "agent-facing condition.restart is disabled: " + why +
+					" — use condition.list / workflow.inspect. Human operators retain the operator-plane restart buttons.",
+			}, nil
+		}
 	}
 	resume := func(state *cek.State, choice cek.RestartChoice) cek.Outcome {
 		return s.interp.Resume(context.Background(), state, cek.Delivery{Restart: &choice},
@@ -359,6 +369,47 @@ func (s *Server) toolConditionRestart(ctx context.Context, conn *pgwire.Conn, p 
 		return map[string]any{"status": "refused", "code": restartErrCode(err), "detail": err.Error()}, nil
 	}
 	return map[string]any{"status": outcomeStatus(out)}, nil
+}
+
+// agentRestartAuthorityEnabled is the mechanized ADR-12 §7 flip: it reads the
+// current epoch's restart-decision eval gate row and reports whether the
+// agent-facing condition.restart authority is enabled. The authority is enabled
+// ONLY when the harness has written a green `restart` m5_gate row for the current
+// epoch meeting BOTH floors (measured accuracy ≥ floor 0.95, corpus_size ≥
+// floor_size 30) and the row is not partial. Any other state — no row, red,
+// under-sized corpus, or a partial (LLM-died-mid-run) row — returns disabled with
+// a reason. This is the only door that can flip the authority, and it flips off
+// the instant the metric goes red (the row is re-computed every epoch).
+func agentRestartAuthorityEnabled(ctx context.Context, conn *pgwire.Conn) (bool, string, error) {
+	var epoch int
+	if _, err := conn.QueryRow(ctx, `SELECT n FROM epoch_current WHERE one=true`, nil, &epoch); err != nil {
+		return false, "no current epoch", err
+	}
+	var (
+		corpusSize, floorSize int
+		measured, floor       float64
+		green, partial        bool
+	)
+	found, err := conn.QueryRow(ctx, `
+SELECT corpus_size, floor_size, measured, floor, green, partial
+  FROM m5_gate WHERE epoch=$1 AND gate='restart'`,
+		[]any{epoch}, &corpusSize, &floorSize, &measured, &floor, &green, &partial)
+	if err != nil {
+		return false, "gate query failed", err
+	}
+	if !found {
+		return false, "restart-decision eval has not been run for this epoch (no m5_gate row)", nil
+	}
+	if partial {
+		return false, "restart-decision eval is partial (LLM died mid-run); gate stays open", nil
+	}
+	if !green || measured < floor {
+		return false, "restart-decision accuracy below the ADR-12 §7 floor (measured < 0.95)", nil
+	}
+	if corpusSize < floorSize {
+		return false, "restart-decision corpus below the ADR-12 §7 floor (M < 30)", nil
+	}
+	return true, "", nil
 }
 
 func restartErrCode(err error) string {

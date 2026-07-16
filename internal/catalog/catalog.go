@@ -79,7 +79,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   continuation_coverage, epoch, epoch_current, std_manifest,
   migration_finding, epoch_hold, schema_version,
   derived_resource, derived_artifact, vault, vault_key, shred_attestation,
-  admission_fuel, admission_capacity, agent_key, approval_token TO %[1]s;
+  admission_fuel, admission_capacity, agent_key, approval_token,
+  eval_pin, m5_eval_result, m5_gate TO %[1]s;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %[1]s;
 `, role)
 }

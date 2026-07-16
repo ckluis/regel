@@ -148,6 +148,62 @@ INSERT INTO admission_capacity (agent_kind, capacity, refill_per_sec, derived_fr
   ('agent',    100000,   1000,    'provisional')
 ON CONFLICT (agent_kind) DO NOTHING;
 
+-- (7b) M5 real-LLM eval corpus (ADR-12 §3a authoring pass@k, §7 restart-decision
+-- accuracy, §5 eval-derived fuel capacity) — the Stage-E BUILD-E substrate that
+-- flips the OPEN M5 gates from real captured runs. NO metric here is ever
+-- operator-written by hand: every m5_gate row is computed by the harness from
+-- m5_eval_result rows that a real LLM produced.
+--
+-- eval_pin is the REVIEW-PRE-E §4 L2 fix (pass@k floor gameable via retry
+-- ceiling): k is PINNED PER EPOCH as a row bound to the corpus hash, so k is NOT
+-- operator-tunable after pinning. Changing k = a new pinned row + a re-run; a pin
+-- whose corpus_hash no longer matches the on-disk corpus is a tampered pin
+-- (harness detects it and refuses to score).
+CREATE TABLE IF NOT EXISTS eval_pin (
+  epoch        int  NOT NULL,
+  corpus_kind  text NOT NULL CHECK (corpus_kind IN ('authoring','restart')),
+  k            int  NOT NULL CHECK (k >= 1),
+  corpus_hash  text NOT NULL,
+  corpus_size  int  NOT NULL,
+  pinned_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (epoch, corpus_kind)
+);
+-- Per-(task,attempt) result — the RESUMABLE persistence: each attempt is written
+-- as it completes, so a re-run fills only the gaps. `passed` = admitted AND
+-- behavior_ok (admission alone cannot pass a task — the per-task oracle must also
+-- agree, so a known-bad-but-admissible solution FAILS).
+CREATE TABLE IF NOT EXISTS m5_eval_result (
+  epoch        int  NOT NULL,
+  corpus_kind  text NOT NULL,
+  task_id      text NOT NULL,
+  attempt      int  NOT NULL,
+  admitted     bool NOT NULL,
+  behavior_ok  bool NOT NULL,
+  passed       bool NOT NULL,
+  iterations   int  NOT NULL DEFAULT 0,
+  fuel_used    numeric NOT NULL DEFAULT 0,
+  detail       jsonb NOT NULL DEFAULT '{}',
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (epoch, corpus_kind, task_id, attempt)
+);
+-- Computed gate metrics per (epoch, gate). The MECHANIZED FLIP reads this: the
+-- agent-facing condition.restart authority is ENABLED iff the 'restart' gate row
+-- is green (measured >= floor, ADR-12 §7 ≥0.95) AND corpus_size >= floor_size
+-- (ADR-12 §7 M≥30) AND NOT partial. Absent/red/partial ⇒ agent restart DISABLED.
+CREATE TABLE IF NOT EXISTS m5_gate (
+  epoch        int  NOT NULL,
+  gate         text NOT NULL CHECK (gate IN ('authoring','restart','fuel')),
+  corpus_size  int  NOT NULL,
+  floor_size   int  NOT NULL,
+  measured     numeric NOT NULL,
+  floor        numeric NOT NULL,
+  green        bool NOT NULL,
+  partial      bool NOT NULL DEFAULT false,
+  detail       jsonb NOT NULL DEFAULT '{}',
+  computed_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (epoch, gate)
+);
+
 -- (8) Derivation tier (BUILD-C: ADR-03 §1 table 8; ADR-07 §1 step 5a + V3/V6).
 -- derived_resource records the last-admitted derived SHAPE per (resource, scope)
 -- so the schema pass diffs the proposed shape against the recorded one (never

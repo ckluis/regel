@@ -44,6 +44,10 @@ func main() {
 	switch cmd {
 	case "migrate-db":
 		err = cmdMigrate(args)
+	case "migrate":
+		os.Exit(cmdMigrateEpoch(args))
+	case "canary":
+		os.Exit(cmdCanary(args))
 	case "genesis":
 		err = cmdGenesis(args)
 	case "serve":
@@ -91,9 +95,15 @@ func usage() {
 
   regel migrate-db [--role NAME]        apply substrate DDL (+ optional kernel role)
   regel genesis                         admit the micro-std image + pin the epoch
+  regel migrate N                       ADR-08 dry-run: epoch-N findings as rows (mutates nothing)
+        [--commit]                      advance the live epoch in one all-or-nothing txn
+        [--ban-tag T]                   O4: a Value tag epoch N removes from the lattice
+        [--revert-to E]                 §6a revert: carry epoch E's pair; hold bad-epoch dependents
+  regel canary                          ADR-02 world-rehash canary (two legs); nonzero exit on drift
   regel serve [--addr :8787]            run the HTTP kernel + reactor
         [--lease SECONDS] [--poll DUR]  lease window + reactor poll interval
         [--spool DIR]                   outbox delivery file spool (default ./regel-spool)
+        [--wait-for-epoch N]            stage: refuse to serve until the live epoch reaches N
   regel step-once [--lease N] CONT-ID   claim + step one continuation once (probe)
   regel admit FILE... --name-prefix P   admit source through the gate (prints Verdict)
         [--actor kind:id] [--declare c1,c2] [--tier trusted|sandbox]
@@ -154,6 +164,110 @@ func cmdMigrate(args []string) error {
 	return nil
 }
 
+// --- migrate N (ADR-08 §3 epoch migration) -----------------------------------
+
+// cmdMigrateEpoch runs `regel migrate N`: dry-run (findings as rows, mutates
+// nothing else) by default, or the all-or-nothing `--commit`. `--revert-to E`
+// executes the §6a revert motion (a new epoch carrying E's prior-good pair,
+// holding dependents bound to the bad epoch fail-closed). `--ban-tag T`
+// (repeatable) removes a Value tag from the serializable lattice (O4).
+func cmdMigrateEpoch(args []string) int {
+	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
+	commit := fs.Bool("commit", false, "advance the live epoch in one all-or-nothing transaction")
+	revertTo := fs.Int("revert-to", 0, "revert: carry this prior-good epoch's pair into the new epoch (ADR-08 §6a)")
+	var banTags multiFlag
+	fs.Var(&banTags, "ban-tag", "a Value tag the target epoch removes from the lattice, O4 (repeatable)")
+	_ = fs.Parse(permute(args, map[string]bool{"revert-to": true, "ban-tag": true}))
+	rest := fs.Args()
+	if len(rest) < 1 {
+		fmt.Fprintln(os.Stderr, "migrate: need target epoch N")
+		return 2
+	}
+	var target int
+	if _, e := fmt.Sscanf(rest[0], "%d", &target); e != nil {
+		fmt.Fprintf(os.Stderr, "migrate: bad epoch %q\n", rest[0])
+		return 2
+	}
+	var tags []cek.Tag
+	for _, t := range banTags {
+		var n int
+		if _, e := fmt.Sscanf(t, "%d", &n); e != nil {
+			fmt.Fprintf(os.Stderr, "migrate: bad --ban-tag %q\n", t)
+			return 2
+		}
+		tags = append(tags, cek.Tag(n))
+	}
+
+	ctx, cancel := rootCtx()
+	defer cancel()
+	conn, err := connect(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrate: connect: %v\n", err)
+		return 1
+	}
+	defer conn.Close()
+
+	if *revertTo > 0 {
+		held, err := admission.RevertEpoch(ctx, conn, target, *revertTo)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "migrate revert: %v\n", err)
+			return 1
+		}
+		fmt.Printf("migrate: REVERTED to epoch %d's pair as epoch %d; %d dependent(s) HELD fail-closed\n",
+			*revertTo, target, len(held))
+		return 0
+	}
+	if *commit {
+		if err := admission.MigrateCommit(ctx, conn, target, tags); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			return 1
+		}
+		fmt.Printf("migrate: epoch %d committed (fence flipped, NOTIFY published)\n", target)
+		return 0
+	}
+	findings, err := admission.MigrateDryRun(ctx, conn, target, tags)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrate dry-run: %v\n", err)
+		return 1
+	}
+	counts := map[string]int{}
+	for _, f := range findings {
+		counts[f.Rule]++
+	}
+	printJSON(map[string]any{
+		"epoch": target, "mode": "dry-run", "findings": findings,
+		"summary": counts, "commit_blocked": counts["undecodable"]+counts["needs-hold"] > 0,
+	})
+	return 0
+}
+
+// --- canary (ADR-02 §5 world-rehash canary) ----------------------------------
+
+// cmdCanary runs the two-leg world-rehash canary. Green ⇒ exit 0; any finding ⇒
+// the store.scrubber_tripped event fires and exit is nonzero (the canary screams).
+func cmdCanary(args []string) int {
+	_ = args
+	ctx, cancel := rootCtx()
+	defer cancel()
+	conn, err := connect(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "canary: connect: %v\n", err)
+		return 1
+	}
+	defer conn.Close()
+	findings, err := admission.WorldRehashCanary(ctx, conn, admission.BuildImage())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "canary: %v\n", err)
+		return 1
+	}
+	if len(findings) == 0 {
+		fmt.Println("canary: GREEN — every stored definition rehashes to its address (both legs)")
+		return 0
+	}
+	printJSON(map[string]any{"canary": "RED", "findings": findings})
+	return 1
+}
+
 // --- genesis -----------------------------------------------------------------
 
 func cmdGenesis(args []string) error {
@@ -182,7 +296,8 @@ func cmdServe(args []string) error {
 	poll := fs.Duration("poll", 250*time.Millisecond, "reactor poll interval")
 	mirror := fs.String("mirror", "", "ADR-09 git projection bare-repo path (post-admission hook)")
 	spool := fs.String("spool", "", "outbox delivery spool dir (default: ./regel-spool; hermetic file sink)")
-	_ = fs.Parse(args)
+	waitEpoch := fs.Int("wait-for-epoch", 0, "ADR-08 §2: refuse to SERVE until the live epoch reaches N (staged deploy)")
+	_ = fs.Parse(permute(args, map[string]bool{"addr": true, "lease": true, "poll": true, "mirror": true, "spool": true, "wait-for-epoch": true}))
 
 	cfg, err := pgwire.ParseDSN(dsn())
 	if err != nil {
@@ -190,6 +305,19 @@ func cmdServe(args []string) error {
 	}
 	pool := pgwire.NewPool(cfg, 16)
 	defer pool.Close()
+
+	// ADR-08 §2 --wait-for-epoch: a staged binary refuses to SERVE (not to RUN)
+	// until the fence row reaches N — it emits the structured parked_waiting
+	// diagnostic and begins serving the instant the flip commits, so an operator
+	// can stage epoch-N binaries beside the epoch-E fleet before `migrate N --commit`.
+	if *waitEpoch > 0 {
+		wctx, wcancel := context.WithTimeout(context.Background(), 120*time.Second)
+		if err := waitForEpoch(wctx, pool, *waitEpoch); err != nil {
+			wcancel()
+			return err
+		}
+		wcancel()
+	}
 
 	// Graceful shutdown on SIGTERM/SIGINT — but NOT SIGKILL: surviving kill -9 is
 	// the point of Stage B (the reaper re-offers un-heartbeated leases).
@@ -255,6 +383,45 @@ func cmdServe(args []string) error {
 		return nil
 	case e := <-errCh:
 		return e
+	}
+}
+
+// waitForEpoch polls the fence row until it reaches want, emitting the ADR-08 §2
+// parked_waiting diagnostic once. It begins serving the instant epoch_current
+// reaches (or passes) want.
+func waitForEpoch(ctx context.Context, pool *pgwire.Pool, want int) error {
+	announced := false
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			return err
+		}
+		var n int
+		_, qerr := conn.QueryRow(ctx, `SELECT n FROM epoch_current WHERE one=true`, nil, &n)
+		pool.Release(conn)
+		if qerr != nil {
+			return qerr
+		}
+		if n >= want {
+			return nil
+		}
+		if !announced {
+			ev := map[string]any{
+				"event": "epoch.boot_refused", "action": "parked_waiting",
+				"observed_epoch": n, "required_epoch": want,
+				"ts": time.Now().UTC().Format(time.RFC3339Nano),
+			}
+			b, _ := json.Marshal(ev)
+			fmt.Fprintln(os.Stdout, string(b))
+			announced = true
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("serve --wait-for-epoch %d: timed out at epoch %d", want, n)
+		case <-tick.C:
+		}
 	}
 }
 

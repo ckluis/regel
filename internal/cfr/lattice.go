@@ -36,3 +36,72 @@ func EncodableTags() map[cek.Tag]bool {
 
 // Encodable reports whether a single tag lies in the serializable lattice.
 func Encodable(t cek.Tag) bool { return cek.TagValid(t) }
+
+// StateTags returns the set of cek Value tags REACHABLE from a decoded machine
+// State — every value held in the control register, the pending signal, the
+// environment chain, and every K frame (ADR-08 §4 O4: a lattice-narrowing epoch
+// must enumerate the sleeping continuations holding a newly-banned tag). It
+// mirrors the encoder's intern traversal (codec.go), so it visits exactly the
+// values a park serialized. `migrate N` consumes this to classify a parked
+// continuation `needs-hold` when it holds a to-be-banned tag.
+func StateTags(st *cek.State) map[cek.Tag]bool {
+	w := &tagWalk{tags: map[cek.Tag]bool{}, seen: map[any]bool{}}
+	w.value(st.Val)
+	w.value(st.Sig.Val)
+	w.env(st.Env)
+	for _, f := range st.Kont {
+		w.env(f.Env)
+		w.env(f.OuterEnv)
+		w.env(f.RetEnv)
+		for _, v := range f.Vals {
+			w.value(v)
+		}
+		w.value(f.Obj)
+		w.value(f.IdxVal)
+		if f.Pend != nil {
+			w.value(f.Pend.Val)
+		}
+	}
+	return w.tags
+}
+
+type tagWalk struct {
+	tags map[cek.Tag]bool
+	seen map[any]bool
+}
+
+func (w *tagWalk) value(v cek.Value) {
+	w.tags[v.Tag] = true
+	switch v.Tag {
+	case cek.TagArray:
+		a := v.Ref.(*cek.ArrayObj)
+		if !w.seen[a] {
+			w.seen[a] = true
+			for _, el := range a.Elems {
+				w.value(el)
+			}
+		}
+	case cek.TagRecord:
+		r := v.Ref.(*cek.RecordObj)
+		if !w.seen[r] {
+			w.seen[r] = true
+			for _, k := range r.Keys {
+				w.value(r.M[k])
+			}
+		}
+	case cek.TagClosure:
+		c := v.Ref.(*cek.ClosureObj)
+		w.env(c.Env)
+	}
+}
+
+func (w *tagWalk) env(env *cek.Env) {
+	if env == nil || w.seen[env] {
+		return
+	}
+	w.seen[env] = true
+	w.env(env.Parent)
+	for _, s := range env.Slots {
+		w.value(s)
+	}
+}

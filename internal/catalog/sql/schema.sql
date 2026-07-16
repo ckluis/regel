@@ -515,6 +515,55 @@ CREATE TABLE IF NOT EXISTS epoch_current (
   n   int NOT NULL REFERENCES epoch(n)
 );
 
+-- BUILD-E: the revert lineage (ADR-08 §6a: a revert is a new epoch row carrying
+-- the prior pair, supersedes = the bad epoch). Additive; NULL for genesis.
+ALTER TABLE epoch ADD COLUMN IF NOT EXISTS supersedes int REFERENCES epoch(n);
+-- BUILD-E: the std-manifest membership rows (ADR-08 §2). Each epoch's manifest
+-- membership over the immortal definition set; migrate copies the prior set when
+-- an epoch carries an unchanged std (the app-deploy / revert common case).
+CREATE TABLE IF NOT EXISTS std_manifest (
+  epoch int  NOT NULL REFERENCES epoch(n),
+  hash  text NOT NULL REFERENCES definition(hash),
+  PRIMARY KEY (epoch, hash)
+);
+
+-- BUILD-E (ADR-08 §3): `migrate N` dry-run findings as ROWS — the 400-breaks
+-- operator work queue. rule ∈ {ok, needs-hold, undecodable}; a `needs-hold` or
+-- `undecodable` finding without a resolution BLOCKS `migrate N --commit`
+-- (fail-closed). Dry-run rewrites the target epoch's finding set and mutates
+-- NOTHING else (no definitions, no continuations, no epoch advance).
+CREATE TABLE IF NOT EXISTS migration_finding (
+  id         bigserial PRIMARY KEY,
+  epoch      int  NOT NULL,             -- the TARGET epoch the dry-run checked against
+  scope      text NOT NULL,             -- 'continuation' | 'definition' | 'overlay'
+  subject    text NOT NULL,             -- continuation id / def hash
+  rule       text NOT NULL CHECK (rule IN ('ok','needs-hold','undecodable')),
+  loc        text NOT NULL DEFAULT '',
+  message    text NOT NULL DEFAULT '',
+  fix        text NOT NULL DEFAULT '',
+  resolved   bool NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS migration_finding_epoch_idx ON migration_finding (epoch, rule);
+
+-- BUILD-E (ADR-08 §6a, L1): DDL-backed HOLD state. When a bad epoch is reverted,
+-- every dependent bound to the bad epoch (a continuation stepped/parked under it)
+-- is HELD FAIL-CLOSED — visible as a row, never silently resumed against the
+-- reverted world. released_at is set only by an audited reconciliation (ADR-05 §6
+-- restart), never by a resume.
+CREATE TABLE IF NOT EXISTS epoch_hold (
+  id              bigserial PRIMARY KEY,
+  continuation_id uuid NOT NULL REFERENCES continuation(id),
+  bad_epoch       int  NOT NULL,
+  revert_epoch    int  NOT NULL,
+  reason          text NOT NULL DEFAULT '',
+  held_at         timestamptz NOT NULL DEFAULT now(),
+  released_at     timestamptz,
+  UNIQUE (continuation_id, bad_epoch)
+);
+CREATE INDEX IF NOT EXISTS epoch_hold_active_idx ON epoch_hold (continuation_id)
+  WHERE released_at IS NULL;
+
 -- Bootstrap bookkeeping.
 CREATE TABLE IF NOT EXISTS schema_version (
   version    int PRIMARY KEY,

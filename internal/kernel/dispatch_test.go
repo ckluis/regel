@@ -116,6 +116,66 @@ func TestOutboxDispatcherEffectivelyOnce(t *testing.T) {
 	}
 }
 
+// TestFileSinkEffectivelyOnce (STAGE-E D6b, ADR-06 §5 / ADR-05 §7): the REAL
+// cfr.FileSink preserves effectively-once through the dispatcher across a
+// crash-retry — a mail.send intent lands as EXACTLY ONE spool file even though the
+// sink is called twice (crash between the sink call and the delivered_at mark).
+//
+// RED evidence: if FileSink.Deliver opened its spool file with O_CREATE|O_TRUNC
+// (or without the os.IsExist no-op arm) instead of O_EXCL, the redelivery would
+// write a second artifact and sink.Total() would be 2 — the assertion fails. The
+// O_EXCL idempotency IS the control this test pins.
+func TestFileSinkEffectivelyOnce(t *testing.T) {
+	e := newReactorEnv(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	sink := cfr.NewFileSink(dir)
+	e.srv.SetDeliverySink(sink)
+	r := e.newManualReactor(ReactorConfig{})
+
+	contID := e.aContinuation(t, "app/fsink")
+
+	mkIntent := func(step, ordinal int) (outboxID, dedup string) {
+		outboxID = insertOutbox(t, e, contID, step, ordinal, "mail.send")
+		dedup = dedupKey(contID, step, ordinal)
+		e.exec(t, `INSERT INTO task (id, kind, run_at, payload) VALUES (gen_random_uuid(),'deliver',now(),
+		  jsonb_build_object('intent_id',$1::text,'dedup_key',$2::text))`, outboxID, dedup)
+		return
+	}
+
+	// --- crash between sink call and mark: exactly one spool file, redelivered once ---
+	obB, keyB := mkIntent(2, 0)
+	sink.FailOnce(keyB) // stand-in for a crash before the delivered_at mark
+	if err := r.dispatchOnce(ctx); err != nil {
+		t.Fatalf("dispatchOnce(crash leg): %v", err)
+	}
+	if e.intScalar(t, `SELECT count(*) FROM outbox WHERE id=$1 AND delivered_at IS NULL`, obB) != 1 {
+		t.Fatalf("crash leg wrongly marked %s delivered", obB)
+	}
+	if sink.Delivered(keyB) != 0 {
+		t.Fatalf("crashed delivery left a spool file (want 0): %d", sink.Delivered(keyB))
+	}
+	// Retry delivers exactly once and marks.
+	if err := r.dispatchOnce(ctx); err != nil {
+		t.Fatalf("dispatchOnce(retry): %v", err)
+	}
+	if sink.Delivered(keyB) != 1 {
+		t.Fatalf("retry spool file count = %d, want exactly 1 (never lost, never duplicated)", sink.Delivered(keyB))
+	}
+	if e.intScalar(t, `SELECT count(*) FROM outbox WHERE id=$1 AND delivered_at IS NOT NULL`, obB) != 1 {
+		t.Fatalf("retry did not mark %s delivered", obB)
+	}
+
+	// --- direct idempotency: a redelivered intent (mark lost) never duplicates ---
+	in := cfr.Intent{DedupKey: keyB, Class: "mail.send", Payload: map[string]any{"to": "x"}}
+	if err := sink.Deliver(ctx, in); err != nil {
+		t.Fatalf("idempotent redeliver: %v", err)
+	}
+	if sink.Total() != 1 {
+		t.Fatalf("total spool files = %d, want 1 (O_EXCL idempotency)", sink.Total())
+	}
+}
+
 func insertOutbox(t *testing.T, e *reactorEnv, contID string, step, ordinal int, class string) string {
 	t.Helper()
 	var id string

@@ -93,6 +93,7 @@ func usage() {
   regel genesis                         admit the micro-std image + pin the epoch
   regel serve [--addr :8787]            run the HTTP kernel + reactor
         [--lease SECONDS] [--poll DUR]  lease window + reactor poll interval
+        [--spool DIR]                   outbox delivery file spool (default ./regel-spool)
   regel step-once [--lease N] CONT-ID   claim + step one continuation once (probe)
   regel admit FILE... --name-prefix P   admit source through the gate (prints Verdict)
         [--actor kind:id] [--declare c1,c2] [--tier trusted|sandbox]
@@ -180,6 +181,7 @@ func cmdServe(args []string) error {
 	lease := fs.Int("lease", 30, "continuation/task lease seconds (reaper recovery window)")
 	poll := fs.Duration("poll", 250*time.Millisecond, "reactor poll interval")
 	mirror := fs.String("mirror", "", "ADR-09 git projection bare-repo path (post-admission hook)")
+	spool := fs.String("spool", "", "outbox delivery spool dir (default: ./regel-spool; hermetic file sink)")
 	_ = fs.Parse(args)
 
 	cfg, err := pgwire.ParseDSN(dsn())
@@ -198,6 +200,17 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	// ADR-06 §5 outbox delivery: wire a SAFE LOCAL sink by default (a hermetic
+	// file/dir spool), so a serving kernel performs no real network I/O and demos
+	// stay hermetic. Effectively-once is preserved (FileSink is idempotent under the
+	// dedup key). A real HTTP sink (cfr.HTTPSink) exists for opt-in outbound
+	// delivery; it is not the default because it would break demo hermeticity.
+	spoolDir := *spool
+	if spoolDir == "" {
+		spoolDir = "regel-spool"
+	}
+	srv.SetDeliverySink(cfr.NewFileSink(spoolDir))
+	fmt.Printf("serve: outbox delivery → file spool %s (hermetic; effectively-once)\n", spoolDir)
 	if *mirror != "" {
 		m, err := gitproj.NewMirror(*mirror, gitproj.Config{})
 		if err != nil {

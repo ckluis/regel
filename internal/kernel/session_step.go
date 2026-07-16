@@ -163,6 +163,12 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 		}
 		sess.RowKeys = keysOfRows(rows)
 	}
+	if sess.Kind == "board" {
+		// BUILD-E D2: diff each states column independently. A row that moved state
+		// is removed from its old column's list and added to the new column's — the
+		// live kanban move, patched through this same session step.
+		ops = append(ops, boardSplices(t, vm.Table, mc, rows, sess)...)
+	}
 	// Diff keys on the SNAPSHOT map (masked tokens) so a grant flip/expiry still
 	// diffs (§8); the WIRE snapshotHash is summed over the DISPLAY map — the values
 	// the client actually holds (plaintext only under a live grant) — so client and
@@ -393,6 +399,41 @@ func (s *Server) checkSizeCap(sess *sessionCFR) error {
 }
 
 // --- helpers ------------------------------------------------------------------
+
+// boardSplices computes the per-column spliceList ops for a board re-render
+// (BUILD-E D2): each states column list is diffed against its last-sent key
+// sequence, so a state-move shows up as a remove from the old column and an add
+// (carrying the freshly-rendered card HTML) to the new. sess.BoardKeys is advanced
+// to the new per-column sequences.
+func boardSplices(t *ui.Template, table string, mc *ui.MaskCtx, rows []ui.RowData, sess *sessionCFR) []ui.Op {
+	if sess.BoardKeys == nil {
+		sess.BoardKeys = map[string][]string{}
+	}
+	var ops []ui.Op
+	for _, sl := range t.Slots {
+		if sl.Kind != "spliceList" {
+			continue
+		}
+		var next []ui.ListRow
+		for _, rd := range rows {
+			if rd.Fields[t.GroupBy] != sl.Group {
+				continue
+			}
+			h, _ := ui.RenderRowForList(t, sl.ID, table, rd, mc)
+			next = append(next, ui.ListRow{Key: rd.Key, HTML: h})
+		}
+		last := listRowsFromKeys(sess.BoardKeys[sl.ID])
+		if sp := ui.DiffList(sl.ID, last, next); sp != nil {
+			ops = append(ops, *sp)
+		}
+		keys := make([]string, len(next))
+		for i, r := range next {
+			keys[i] = r.Key
+		}
+		sess.BoardKeys[sl.ID] = keys
+	}
+	return ops
+}
 
 func matFromSnap(snap map[string]string) map[string]ui.Materialized {
 	out := make(map[string]ui.Materialized, len(snap))

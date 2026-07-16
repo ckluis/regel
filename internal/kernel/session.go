@@ -50,6 +50,10 @@ type sessionCFR struct {
 	LastSnap   map[string]string `json:"last_snap"` // last-sent slot snapshot (slotId -> masked value)
 	Digest     string            `json:"digest"`    // last-sent FNV-64 digest, decimal
 	RowKeys    []string          `json:"row_keys"`  // table: last-sent ordered row-key sequence (spliceList diff)
+	// BoardKeys is the per-column last-sent key sequence of a BOARD view (BUILD-E
+	// D2): slotID -> ordered row keys in that states column. A state-move splices
+	// the row out of its old column list and into the new — the live kanban move.
+	BoardKeys map[string][]string `json:"board_keys,omitempty"`
 }
 
 func keysOfRows(rows []ui.RowData) []string {
@@ -120,6 +124,8 @@ type viewMeta struct {
 	Detail     *ui.Template
 	Form       *ui.Template
 	Table_     *ui.Template
+	Board      *ui.Template // BUILD-E D2: nil when the resource has no states field
+	Dashboard  *ui.Template // BUILD-E D2: stat tiles over aggregates
 }
 
 // loadViewMeta resolves a resource's derived shape + render templates.
@@ -157,9 +163,11 @@ func loadViewMeta(ctx context.Context, conn *pgwire.Conn, resource string) (*vie
 		return nil, fmt.Errorf("session: no template artifact for %q (ok=%v err=%v)", resource, ok, err)
 	}
 	var bundle struct {
-		Detail json.RawMessage `json:"detail"`
-		Form   json.RawMessage `json:"form"`
-		Table  json.RawMessage `json:"table"`
+		Detail    json.RawMessage `json:"detail"`
+		Form      json.RawMessage `json:"form"`
+		Table     json.RawMessage `json:"table"`
+		Board     json.RawMessage `json:"board"`     // BUILD-E D2: absent when no states field
+		Dashboard json.RawMessage `json:"dashboard"` // BUILD-E D2
 	}
 	if err := json.Unmarshal([]byte(raw2), &bundle); err != nil {
 		return nil, err
@@ -167,6 +175,12 @@ func loadViewMeta(ctx context.Context, conn *pgwire.Conn, resource string) (*vie
 	vm.Detail, _ = ui.DecodeTemplate(bundle.Detail)
 	vm.Form, _ = ui.DecodeTemplate(bundle.Form)
 	vm.Table_, _ = ui.DecodeTemplate(bundle.Table)
+	if len(bundle.Board) > 0 {
+		vm.Board, _ = ui.DecodeTemplate(bundle.Board)
+	}
+	if len(bundle.Dashboard) > 0 {
+		vm.Dashboard, _ = ui.DecodeTemplate(bundle.Dashboard)
+	}
 	return vm, nil
 }
 
@@ -176,6 +190,10 @@ func (vm *viewMeta) template(kind string) *ui.Template {
 		return vm.Form
 	case "table":
 		return vm.Table_
+	case "board":
+		return vm.Board
+	case "dashboard":
+		return vm.Dashboard
 	default:
 		return vm.Detail
 	}
@@ -319,12 +337,102 @@ func erfList(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, horizon strin
 	return out, rows.Err()
 }
 
+// aggregateDashboard computes the dashboard's stat-tile values (BUILD-E D2) with
+// horizon-scoped SELECT-only aggregate reads over the derived table, recording a
+// (resource, horizon) subscription so a mutation re-aggregates the tiles live. The
+// synthetic field keys match the dashboard template slots exactly: `count:__total__`,
+// `count:<field>:<member>` (pre-seeded 0 so an empty member still shows a tile),
+// and `sum:<field>`. This is the ADR-10 §4 "dashboards ride typed std/sql queries"
+// path — the same SELECT-only read discipline std/sql.query enforces via dbReader,
+// issued kernel-side because the subscription-recording read lives in this loop
+// (BUILD-E marker: ADR-10 §4/§7, ADR-11 §6).
+func aggregateDashboard(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, horizon string, subs *[]subKey) (map[string]string, error) {
+	*subs = append(*subs, subKey{Resource: vm.Resource, Key: horizonKey(horizon)})
+	out := map[string]string{}
+	where := ""
+	args := []any{}
+	if vm.hasOrg() {
+		where = " WHERE org=$1"
+		args = append(args, horizon)
+	}
+	tbl := quoteIdent(vm.Table)
+	var total int64
+	if _, err := conn.QueryRow(ctx, "SELECT count(*) FROM "+tbl+where, args, &total); err != nil {
+		return nil, err
+	}
+	out["count:__total__"] = strconv.FormatInt(total, 10)
+	for _, f := range vm.Fields {
+		if f.Base != "states" && f.Base != "select" {
+			continue
+		}
+		for _, m := range f.Params {
+			out["count:"+f.Name+":"+m] = "0"
+		}
+		col := quoteIdent(f.Name)
+		rows, err := conn.Query(ctx, "SELECT "+col+"::text, count(*) FROM "+tbl+where+" GROUP BY "+col, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var member string
+			var n int64
+			if err := rows.Scan(&member, &n); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out["count:"+f.Name+":"+member] = strconv.FormatInt(n, 10)
+		}
+		cerr := rows.Err()
+		rows.Close()
+		if cerr != nil {
+			return nil, cerr
+		}
+	}
+	for _, f := range vm.Fields {
+		if f.Base != "money" || f.PII {
+			continue
+		}
+		var sum int64
+		if _, err := conn.QueryRow(ctx,
+			"SELECT coalesce(sum("+quoteIdent(f.Name)+"),0)::bigint FROM "+tbl+where, args, &sum); err != nil {
+			return nil, err
+		}
+		out["sum:"+f.Name] = strconv.FormatInt(sum, 10)
+	}
+	return out, nil
+}
+
+// boardKeysFromRows partitions the mounted rows into the per-column key sequences a
+// board's spliceList diff bases on (BUILD-E D2): slotID -> ordered keys in that
+// states column.
+func boardKeysFromRows(t *ui.Template, rows []ui.RowData) map[string][]string {
+	out := map[string][]string{}
+	if t == nil {
+		return out
+	}
+	for _, sl := range t.Slots {
+		if sl.Kind != "spliceList" {
+			continue
+		}
+		var keys []string
+		for _, rd := range rows {
+			if rd.Fields[t.GroupBy] == sl.Group {
+				keys = append(keys, rd.Key)
+			}
+		}
+		out[sl.ID] = keys
+	}
+	return out
+}
+
 // renderView produces the first-paint state (slot snapshot + display map), the
 // subscription set, and (for a table) the ordered row data — reading live derived
 // tables through erf.read/list.
 func renderView(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, sess *sessionCFR, mc *ui.MaskCtx) (html string, state map[string]ui.Materialized, subs []subKey, rowVersion string, rows []ui.RowData, err error) {
 	t := vm.template(sess.Kind)
-	if sess.Kind == "table" {
+	if sess.Kind == "table" || sess.Kind == "board" {
+		// board is a table read grouped by state (BUILD-E D2): erf lists the same
+		// horizon rows; RenderFirstPaint groups them into the states columns.
 		rowsData, lerr := erfList(ctx, conn, vm, sess.Horizon, &subs)
 		if lerr != nil {
 			return "", nil, nil, "", nil, lerr
@@ -332,6 +440,18 @@ func renderView(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, sess *sess
 		data := ui.RenderData{Resource: vm.Table, Rows: rowsData}
 		html, state = ui.RenderFirstPaint(t, data, mc)
 		return html, state, subs, "", rowsData, nil
+	}
+	if sess.Kind == "dashboard" {
+		// BUILD-E D2: the dashboard aggregates over the resource (counts by
+		// state/select member, sums over money) via horizon-scoped SELECT-only
+		// reads, subscribing on the horizon so a mutation re-aggregates it live.
+		aggFields, aerr := aggregateDashboard(ctx, conn, vm, sess.Horizon, &subs)
+		if aerr != nil {
+			return "", nil, nil, "", nil, aerr
+		}
+		data := ui.RenderData{Resource: vm.Table, Fields: aggFields}
+		html, state = ui.RenderFirstPaint(t, data, mc)
+		return html, state, subs, "", nil, nil
 	}
 	data, rv, ok, rerr := erfRead(ctx, conn, vm, sess.RowID, sess.Horizon, &subs)
 	if rerr != nil {
@@ -421,6 +541,12 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon stri
 	if err != nil {
 		return mountResult{}, err
 	}
+	// BUILD-E D2 (red-path a): board is derivable ONLY for a states-bearing
+	// resource; a board mount on a stateless one is a clean derivation refusal, not
+	// a crash — the template is simply absent.
+	if vm.template(kind) == nil {
+		return mountResult{}, fmt.Errorf("session: %s has no %s surface (board requires a states field)", resource, kind)
+	}
 	mc, err := admission.BuildMaskCtx(ctx, conn, principal)
 	if err != nil {
 		return mountResult{}, err
@@ -438,6 +564,9 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon stri
 	sess.setDigest(ui.FullDigest(sess.LastSnap))
 	sess.RowVersion = rowVersion
 	sess.RowKeys = keysOfRows(rows)
+	if sess.Kind == "board" {
+		sess.BoardKeys = boardKeysFromRows(vm.Board, rows)
+	}
 
 	frames, err := sess.frames()
 	if err != nil {
@@ -503,7 +632,7 @@ func parseView(view string) (resource, kind, rowID string, err error) {
 		resource = strings.Join(parts[:len(parts)-1], "/")
 	}
 	switch kind {
-	case "detail", "form", "table":
+	case "detail", "form", "table", "board", "dashboard":
 	default:
 		return "", "", "", fmt.Errorf("session: unknown view kind %q", kind)
 	}

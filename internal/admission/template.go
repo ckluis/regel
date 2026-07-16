@@ -145,6 +145,7 @@ func lowerDashboard(rp resourcePlan, fields []fieldSpec) *ui.Template {
 			tile("Σ "+f.Name, "sum:"+f.Name, "money")
 		}
 	}
+	t.Root = root
 	return t
 }
 

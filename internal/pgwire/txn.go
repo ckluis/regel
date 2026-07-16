@@ -56,8 +56,11 @@ func (c *Conn) armCancel(ctx context.Context) func() {
 }
 
 // sendCancelRequest opens a fresh socket and sends a CancelRequest carrying the
-// backend PID + secret key. Best-effort: errors are ignored.
+// backend PID + secret key. Best-effort: errors are ignored. The conn is marked
+// cancel-tainted FIRST (before any dial can fail) so the pool never reuses a
+// backend that may have a cancel in flight.
 func (c *Conn) sendCancelRequest() {
+	c.cancelTainted.Store(true)
 	if c.backendPID == 0 {
 		return
 	}

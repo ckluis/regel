@@ -147,8 +147,11 @@ func (p *Pool) Release(c *Conn) {
 		_ = c.destroy(nil)
 		return
 	}
-	if c.IsDead() || c.txStatus != TxIdle {
+	if c.IsDead() || c.txStatus != TxIdle || c.CancelTainted() {
 		// The load-bearing rule: never pool a poisoned or mid-txn connection.
+		// CancelTainted: an out-of-band CancelRequest was fired at this
+		// backend; it may land late and kill an unrelated later statement
+		// (57014 poisoning), so the conn is destroyed, never reused.
 		p.numOpen--
 		p.destroyed++
 		_ = c.destroy(nil)

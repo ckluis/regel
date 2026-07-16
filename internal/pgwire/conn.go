@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -55,7 +56,21 @@ type Conn struct {
 	notifyCh chan Notification
 
 	mu sync.Mutex // guards writes to raw during out-of-band cancel
+
+	// cancelTainted is set (atomically — written from armCancel's watcher
+	// goroutine) the moment an out-of-band CancelRequest is fired at this
+	// conn's backend. A fired cancel races with operation completion: it can
+	// land AFTER the canceled statement finished and kill the NEXT statement
+	// on the same backend (SQLSTATE 57014 on an innocent query — pooled-conn
+	// poisoning observed under whole-suite load). A tainted conn is therefore
+	// destroyed at Release, never pooled.
+	cancelTainted atomic.Bool
 }
+
+// CancelTainted reports whether an out-of-band CancelRequest was ever fired at
+// this conn's backend. The pool must not reuse such a conn: the cancel may
+// still be in flight and would kill an unrelated later statement.
+func (c *Conn) CancelTainted() bool { return c.cancelTainted.Load() }
 
 // Connect dials and performs startup + authentication.
 func Connect(ctx context.Context, cfg Config) (*Conn, error) {

@@ -8,18 +8,11 @@
 # §7), and shows the patch frame(s) the mutation pushes onto the SSE stream. It
 # then POSTs /session/{id}/resync and shows the fresh full-repaint payload.
 #
-# NOTE on scope (read before extending): cmd/regel/main.go's `cmdServe` starts the
-# task/continuation reactor (srv.StartReactor) but never calls srv.StartSessions —
-# only the Go test harness (internal/kernel/session_test.go newSessionEnv) starts
-# the invalidation LISTEN loop + idle-session sweeper. Under a real `regel serve`
-# process, notifyInvalidate() still fires `NOTIFY regel_invalidate` on every
-# committed mutation (verified below to still exist in the write path), but with no
-# listener running, only the DIRECTLY-addressed session's own step gets its frame
-# pushed (the HTTP handler pushes it inline, independent of StartSessions) — a
-# SEPARATE viewer session watching the same row/table will NOT receive a live
-# cross-session patch. That cross-session fan-out is exercised below as a clearly
-# marked SKIPPED bonus step (not a script failure) since fixing the CLI wiring
-# would mean editing Go code, which this script must not do.
+# Step 9 exercises cross-session invalidation fan-out: `regel serve` runs the
+# reactive-layer loops (srv.StartSessions: invalidation LISTEN + idle sweeper) in
+# the serving kernel, so a mutation committed through one session's step patches
+# every other subscribed session's SSE stream. (This wiring gap was found by an
+# earlier revision of this script and fixed in cmd/regel/main.go cmdServe.)
 #
 # Re-runnable against a fresh `regel_reactive_demo` DB. Exits nonzero on the first
 # mismatch; prints DEMO OK.
@@ -184,11 +177,10 @@ echo "$RESYNC" | grep -qF '"eventSeq"' || fail "resync response missing eventSeq
 echo "$RESYNC" | grep -qF 'ALPHA-LIVE' || fail "resync snapshot does not reflect the committed value"
 echo "PASS: resync returned a fresh snapshot carrying the committed value"
 
-step "9 (bonus, may SKIP): cross-session invalidation fan-out to the table viewer"
-# See header note: regel serve does not start the invalidation LISTEN loop
-# (srv.StartSessions is test-only), so a SEPARATE session (the table mount from
-# step 2) is not expected to receive a live patch from this mutation. Attempted
-# anyway, honestly reported either way — this step never fails the script.
+step "9: cross-session invalidation fan-out to the table viewer"
+# The serving kernel runs the invalidation LISTEN loop (StartSessions in cmdServe),
+# so the SEPARATE table-viewer session (mounted in step 2) must receive a live
+# patch when this form session commits a mutation.
 curl -s -N "$BASE/session/${TABLE_SID}/events" >"$SSE2_LOG" 2>&1 &
 SSE2_PID=$!
 sleep 0.4
@@ -199,17 +191,10 @@ curl -s -X POST "$BASE/session/${FORM_SID}/event" -H 'Content-Type: application/
 sleep 2
 kill "$SSE2_PID" 2>/dev/null; wait "$SSE2_PID" 2>/dev/null; SSE2_PID=""
 if [ -s "$SSE2_LOG" ] && grep -q '^id: ' "$SSE2_LOG"; then
-  echo "table session received a live cross-session patch:"
+  echo "PASS: table session received a live cross-session patch:"
   cat "$SSE2_LOG"
 else
-  echo "SKIPPED (cmd/regel/main.go cmdServe never calls srv.StartSessions — the"
-  echo "  invalidation LISTEN loop + idle sweeper only run under the Go test harness,"
-  echo "  internal/kernel/session_test.go's newSessionEnv/startSessionEnv. Under a"
-  echo "  real 'regel serve' process, notifyInvalidate() still fires NOTIFY on commit"
-  echo "  (proved live in step 6), but nothing is LISTENing, so a separate viewer"
-  echo "  session's own SSE stream does not receive the patch. Fixing this is a Go"
-  echo "  code change (wiring StartSessions into cmdServe), out of scope for this"
-  echo "  shell-only demo script.)"
+  fail "table viewer session received no cross-session patch (invalidation LISTEN loop not running?)"
 fi
 
 step "10: clean shutdown"

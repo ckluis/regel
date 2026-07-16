@@ -220,6 +220,13 @@ func cmdServe(args []string) error {
 	})
 	defer reactor.Stop()
 
+	// ADR-11 §5/§6: the reactive-layer loops (invalidation LISTEN + idle-TTL
+	// session sweeper) must run in the serving kernel, not only under test —
+	// without them a committed mutation NOTIFYs into the void and no other
+	// session's SSE stream is ever patched (found by demo-reactive.sh step 9).
+	stopSessions := srv.StartSessions(ctx)
+	defer stopSessions()
+
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(*addr) }()
 	fmt.Printf("serve: regel kernel %s listening on %s (epoch %d, lease %ds, poll %s)\n",

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -69,6 +70,8 @@ func main() {
 		err = cmdGitIdentity(args)
 	case "shred":
 		err = cmdShred(args)
+	case "vault-put":
+		err = cmdVaultPut(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -110,6 +113,8 @@ func usage() {
         [--scope-id S] [--kind engineer] [--scope-kind N] [--revoke]
   regel shred --resource NAME --subject ID  crypto-shred a subject's pii vault key
         [--scope S] [--by principal]        (ciphertext becomes undecryptable)
+  regel vault-put --resource NAME --subject ID --field F   seal a pii value into the
+        [--scope S]                         vault (AES-256-GCM); secret read from STDIN
 
   DSN via REGEL_PG_DSN (default `+defaultDSN+`)
 `)
@@ -788,6 +793,65 @@ func cmdShred(args []string) error {
 	}
 	fmt.Printf("shred: %s subject %s — %d key(s) destroyed, attestation #%d (ciphertext now undecryptable)\n",
 		*resource, *subject, n, attID)
+	return nil
+}
+
+// --- vault-put (ADR-10 §4 item 5 — the VaultPut CLI door) --------------------
+
+// cmdVaultPut seals a pii value into the vault substrate through the REAL
+// internal/admission.VaultPut (same per-subject AES-256-GCM AEAD the D1 test
+// battery uses). The secret is read from STDIN, NEVER argv, so it never appears
+// in the process table or shell history. It resolves the derived physical table
+// name exactly as `regel shred` does (derived_resource), so the vault key
+// (resource, subject_id, field) matches the read/shred path.
+func cmdVaultPut(args []string) error {
+	fs := flag.NewFlagSet("vault-put", flag.ExitOnError)
+	resource := fs.String("resource", "", "derived resource name (e.g. app/crm/Contact)")
+	subject := fs.String("subject", "", "the data subject's row id")
+	field := fs.String("field", "", "the pii field name (e.g. email)")
+	scope := fs.String("scope", "product", "the resource scope (product|org.ID|...)")
+	_ = fs.Parse(permute(args, map[string]bool{"resource": true, "subject": true, "field": true, "scope": true}))
+	if *resource == "" || *subject == "" || *field == "" {
+		return fmt.Errorf("vault-put: need --resource NAME --subject ID --field F")
+	}
+	sk, sid := scopeParts(*scope)
+
+	// The secret is read from stdin (never argv): the plaintext stays off the
+	// process table and out of shell history.
+	secret, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return fmt.Errorf("vault-put: read stdin: %w", err)
+	}
+	plaintext := strings.TrimRight(string(secret), "\n")
+	if plaintext == "" {
+		return fmt.Errorf("vault-put: empty secret on stdin")
+	}
+
+	ctx, cancel := rootCtx()
+	defer cancel()
+	conn, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// Resolve the derived physical table (the stable per-resource vault key),
+	// identically to cmdShred.
+	var table string
+	ok, err := conn.QueryRow(ctx,
+		`SELECT table_name FROM derived_resource WHERE resource_name=$1 AND scope_kind=$2 AND scope_id=$3`,
+		[]any{*resource, sk, sid}, &table)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("vault-put: no derived resource %q at scope %s", *resource, *scope)
+	}
+	if err := admission.VaultPut(ctx, conn, table, *subject, *field, plaintext); err != nil {
+		return err
+	}
+	fmt.Printf("vault-put: %s subject %s field %s — sealed (%d bytes plaintext, ciphertext-only in vault)\n",
+		*resource, *subject, *field, len(plaintext))
 	return nil
 }
 

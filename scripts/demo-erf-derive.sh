@@ -8,14 +8,11 @@
 # plaintext NEVER touches the base table or its history (grep), then crypto-shred
 # the subject and prove the ciphertext is left permanently undecryptable.
 #
-# VaultPut (internal/admission/vault.go) has no CLI door — the D1 test battery is
-# the only caller. This script performs the schema-faithful equivalent by hand: it
-# mints a vault_key row exactly as vaultKeyFor does (random 32-byte hex token) and
-# seals the pii value with the SAME AEAD construction VaultPut uses (key =
-# SHA-256(token), nonce ‖ ciphertext, hex-encoded) via openssl, since `openssl enc`
-# has no CLI-level AES-256-GCM support — AES-256-CBC stands in for the AEAD mode,
-# still a real symmetric seal, still never touching the base table. `regel shred`
-# IS a real CLI door (internal/admission.CryptoShred) and is invoked unmodified.
+# VaultPut (internal/admission/vault.go) now HAS a CLI door: `regel vault-put`
+# (STAGE-E D12) calls the real internal/admission.VaultPut with the same per-subject
+# AES-256-GCM AEAD the D1 test battery uses, reading the secret from STDIN (never
+# argv). This script drives that door directly — no more openssl hand-roll. `regel
+# shred` IS a real CLI door (internal/admission.CryptoShred) and is invoked unmodified.
 #
 # Re-runnable against a fresh `regel_erf_demo` DB. Exits nonzero on the first
 # mismatch; prints DEMO OK.
@@ -137,15 +134,13 @@ RETURNING id")"
 [ -n "$ID" ] || fail "insert did not return an id"
 echo "inserted subject id=$ID"
 
-step "5: seal a pii value into the vault (VaultPut-equivalent — see header note)"
+step "5: seal a pii value into the vault via the real 'regel vault-put' CLI door"
 SECRET="ada.lovelace@acme.example"
-KEY_TOKEN="$(openssl rand -hex 32)"
-sql "INSERT INTO vault_key (resource, subject_id, key_token) VALUES ('res_app_derive_contact', '${ID}', '${KEY_TOKEN}')" >/dev/null
-KEY_HEX="$(printf '%s' "$KEY_TOKEN" | openssl dgst -sha256 -binary | xxd -p | tr -d '\n')"
-IV_HEX="$(openssl rand -hex 16)"
-CT_HEX="$(printf '%s' "$SECRET" | openssl enc -aes-256-cbc -K "$KEY_HEX" -iv "$IV_HEX" | xxd -p | tr -d '\n')"
-CIPHERTEXT="${IV_HEX}${CT_HEX}"
-sql "INSERT INTO vault (resource, subject_id, field, ciphertext) VALUES ('res_app_derive_contact', '${ID}', 'email', '${CIPHERTEXT}')" >/dev/null
+# The secret is piped on STDIN (never argv); vault-put calls the real VaultPut AEAD.
+printf '%s' "$SECRET" | "$BIN" vault-put --resource app/derive/Contact --subject "$ID" --field email --scope product \
+  || fail "vault-put"
+CIPHERTEXT="$(sql "SELECT ciphertext FROM vault WHERE resource='res_app_derive_contact' AND subject_id='${ID}' AND field='email'")"
+[ -n "$CIPHERTEXT" ] || fail "vault-put wrote no ciphertext"
 echo "sealed subject=$ID field=email ciphertext(preview)=${CIPHERTEXT:0:32}..."
 
 step "6: an UPDATE fires the history trigger (a live edit, unrelated column)"

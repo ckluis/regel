@@ -15,11 +15,16 @@ const TemplateVersion = 1
 type Template struct {
 	Version  int    `json:"version"`
 	DefHash  string `json:"def_hash"`  // the keying definition hash (immutable key)
-	Kind     string `json:"kind"`      // "form" | "table" | "detail" | "component"
+	Kind     string `json:"kind"`      // "form" | "table" | "detail" | "board" | "dashboard" | "component"
 	Resource string `json:"resource"`  // backing resource catalog name ("" for hand-authored)
 	Mount    string `json:"mount"`     // mount-path prefix for slot ids (e.g. "detail")
 	Root     *Node  `json:"root"`      // the static skeleton (with embedded slot refs)
 	Slots    []Slot `json:"slots"`     // indexed dynamic binding slots
+	// GroupBy is the states field name a BOARD template groups its rows by (BUILD-E
+	// D2, ADR-10 §7 board(R, groupBy)): each keyed-list column slot carries a Group
+	// value and renders only the rows whose GroupBy field equals it. "" for every
+	// non-board template (form/table/detail/dashboard/component).
+	GroupBy string `json:"group_by,omitempty"`
 }
 
 // Node is one node of the static skeleton. A node is exactly one of:
@@ -53,6 +58,9 @@ type Slot struct {
 	Masked   bool      `json:"masked,omitempty"`   // bound to a pii/vault value
 	MaskLeaf string    `json:"mask_leaf,omitempty"`// the §7 masking leaf when Masked
 	ReadSet  []ReadKey `json:"read_set,omitempty"`
+	// Group is a BOARD column list slot's states value (BUILD-E D2): the spliceList
+	// renders only rows whose Template.GroupBy field equals Group. "" otherwise.
+	Group string `json:"group,omitempty"`
 }
 
 // ReadKey is one (resource, key-class) dependency of a slot (ADR-11 §6): key-class

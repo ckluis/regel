@@ -370,6 +370,101 @@ func TestEvalSlotExprPropAndField(t *testing.T) {
 	}
 }
 
+// --- board grouping (BUILD-E D2) ---------------------------------------------
+
+// boardTmpl builds a two-column board (states lead|won) grouping by "stage",
+// each card a single text cell of the row's "name".
+func boardTmpl() *Template {
+	t := &Template{Version: TemplateVersion, DefHash: "h", Kind: "board", Mount: "board", GroupBy: "stage"}
+	cols := []string{"lead", "won"}
+	root := Static("grid")
+	for j, st := range cols {
+		listIdx := len(t.Slots)
+		t.Slots = append(t.Slots, Slot{ID: "board.col" + itoa(j), Kind: "spliceList", Group: st})
+		cellIdx := len(t.Slots)
+		t.Slots = append(t.Slots, Slot{ID: "board.c" + itoa(j), Kind: "setText", Field: "name", Leaf: "text"})
+		card := Static("card", Leaf("text", cellIdx))
+		col := Static("section", Static("heading", Lit(st)), KeyedList("list", listIdx, card))
+		root.Children = append(root.Children, col)
+	}
+	t.Root = root
+	return t
+}
+
+// TestBoardFirstPaintGroups: first paint places each row's card under the column
+// whose Group equals the row's stage, and nowhere else.
+func TestBoardFirstPaintGroups(t *testing.T) {
+	tmpl := boardTmpl()
+	data := RenderData{Resource: "deals", Rows: []RowData{
+		{Key: "1", Subject: "1", Fields: map[string]string{"name": "Acme", "stage": "lead"}},
+		{Key: "2", Subject: "2", Fields: map[string]string{"name": "Beta", "stage": "won"}},
+		{Key: "3", Subject: "3", Fields: map[string]string{"name": "Gamma", "stage": "lead"}},
+	}}
+	html, state := RenderFirstPaint(tmpl, data, nil)
+	// Acme + Gamma render in the lead column cell (board.c0), Beta in the won cell.
+	if got := state[RowSlotID("board.c0", "1")].Display; got != "Acme" {
+		t.Fatalf("row 1 lead cell = %q, want Acme", got)
+	}
+	if got := state[RowSlotID("board.c0", "3")].Display; got != "Gamma" {
+		t.Fatalf("row 3 lead cell = %q, want Gamma", got)
+	}
+	if got := state[RowSlotID("board.c1", "2")].Display; got != "Beta" {
+		t.Fatalf("row 2 won cell = %q, want Beta", got)
+	}
+	// Beta must NOT appear in the lead column, nor Acme in the won column.
+	if _, bad := state[RowSlotID("board.c0", "2")]; bad {
+		t.Fatalf("won row leaked into the lead column")
+	}
+	if _, bad := state[RowSlotID("board.c1", "1")]; bad {
+		t.Fatalf("lead row leaked into the won column")
+	}
+	// The HTML must place Acme before the won column header (grouping is real markup).
+	if strings.Index(html, "Acme") > strings.Index(html, "Beta") {
+		t.Fatalf("lead card must render before the won card in grouped HTML")
+	}
+}
+
+// TestBoardMoveSplice: a row moving lead→won is a remove from the lead column list
+// and an add to the won column list — the live kanban move (BUILD-E D2).
+func TestBoardMoveSplice(t *testing.T) {
+	tmpl := boardTmpl()
+	// Before: row 1 is a lead. After: row 1 is won.
+	before := []RowData{{Key: "1", Subject: "1", Fields: map[string]string{"name": "Acme", "stage": "lead"}}}
+	after := []RowData{{Key: "1", Subject: "1", Fields: map[string]string{"name": "Acme", "stage": "won"}}}
+
+	// Per-column key sequences before/after.
+	leadKeys := func(rows []RowData) []ListRow {
+		var out []ListRow
+		for _, r := range rows {
+			if r.Fields["stage"] == "lead" {
+				out = append(out, ListRow{Key: r.Key})
+			}
+		}
+		return out
+	}
+	wonRows := func(rows []RowData) []ListRow {
+		var out []ListRow
+		for _, r := range rows {
+			if r.Fields["stage"] == "won" {
+				h, _ := RenderRowForList(tmpl, "board.col1", "deals", r, nil)
+				out = append(out, ListRow{Key: r.Key, HTML: h})
+			}
+		}
+		return out
+	}
+	rmLead := DiffList("board.col0", leadKeys(before), leadKeys(after))
+	if rmLead == nil || len(rmLead.Splices) != 1 || rmLead.Splices[0].Kind != SpliceRemove {
+		t.Fatalf("lead column must lose row 1: %+v", rmLead)
+	}
+	addWon := DiffList("board.col1", wonRows(before), wonRows(after))
+	if addWon == nil || len(addWon.Splices) != 1 || addWon.Splices[0].Kind != SpliceAdd {
+		t.Fatalf("won column must gain row 1: %+v", addWon)
+	}
+	if !strings.Contains(addWon.Splices[0].HTML, "Acme") {
+		t.Fatalf("added won card must carry the row's name: %q", addWon.Splices[0].HTML)
+	}
+}
+
 // --- helpers -----------------------------------------------------------------
 
 func slotID(i int) string { return "s" + itoa(i) }

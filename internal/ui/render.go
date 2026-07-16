@@ -135,6 +135,11 @@ func renderNode(b *strings.Builder, t *Template, n *Node, data RenderData, mc *M
 		listSlot := t.Slots[n.List]
 		writeOpenTag(b, el, n, listSlot.ID, "spliceList")
 		for _, row := range data.Rows {
+			// BOARD grouping (BUILD-E D2): a column list slot renders only the rows
+			// whose GroupBy states value equals this column's Group.
+			if t.GroupBy != "" && listSlot.Group != "" && row.Fields[t.GroupBy] != listSlot.Group {
+				continue
+			}
 			renderRow(b, t, n.Row, data.Resource, row, mc, state)
 		}
 		b.WriteString("</" + el.tag + ">")
@@ -176,6 +181,37 @@ func RenderRow(t *Template, resource string, row RowData, mc *MaskCtx) (string, 
 	var b strings.Builder
 	renderRow(&b, t, rowNode, resource, row, mc, state)
 	return b.String(), state
+}
+
+// RenderRowForList renders ONE keyed row for a SPECIFIC list slot (BUILD-E D2): a
+// board has several keyed-list columns, so a spliceList add must render the row
+// subtree of the addressed column, not merely the first list found (RenderRow).
+func RenderRowForList(t *Template, listSlotID, resource string, row RowData, mc *MaskCtx) (string, map[string]Materialized) {
+	rowNode := findListRowByID(t, t.Root, listSlotID)
+	if rowNode == nil {
+		return "", map[string]Materialized{}
+	}
+	state := map[string]Materialized{}
+	var b strings.Builder
+	renderRow(&b, t, rowNode, resource, row, mc, state)
+	return b.String(), state
+}
+
+// findListRowByID returns the per-row subtree of the keyed-list node whose slot id
+// is listSlotID, or nil.
+func findListRowByID(t *Template, n *Node, listSlotID string) *Node {
+	if n == nil {
+		return nil
+	}
+	if n.List >= 0 && t.Slots[n.List].ID == listSlotID {
+		return n.Row
+	}
+	for _, c := range n.Children {
+		if r := findListRowByID(t, c, listSlotID); r != nil {
+			return r
+		}
+	}
+	return nil
 }
 
 // findListRow returns the per-row subtree of the template's keyed-list node.

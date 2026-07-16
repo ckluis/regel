@@ -30,10 +30,24 @@ type Server struct {
 	mirror   *gitproj.Mirror // optional ADR-09 git projection mirror (nil ⇒ no projection)
 	hub      *sseHub         // ADR-11 §2 per-session SSE ring + fan-out (in-memory cache)
 	invIndex *invalidationIndex
+	sink     cfr.DeliverySink // ADR-06 §5 outbox dispatcher sink (default: discard)
 }
 
 // sse returns the kernel's SSE hub (ADR-11 §2).
 func (s *Server) sse() *sseHub { return s.hub }
+
+// SetDeliverySink wires the outbox dispatcher's process-boundary sink (ADR-06 §5).
+// The default is cfr.DiscardSink (no external sinks exist at M2); tests inject a
+// recording sink. Safe to call before StartReactor.
+func (s *Server) SetDeliverySink(sink cfr.DeliverySink) { s.sink = sink }
+
+// deliverySink returns the configured sink, defaulting to discard.
+func (s *Server) deliverySink() cfr.DeliverySink {
+	if s.sink == nil {
+		return cfr.DiscardSink{}
+	}
+	return s.sink
+}
 
 // New builds a kernel over a live pool. It verifies boot parity (ADR-10 §2:
 // std-manifest root + dispatch attestation match the pinned epoch) before

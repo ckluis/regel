@@ -284,11 +284,21 @@ func writeEffects(ctx context.Context, db DB, continuationID string, stepSeq int
 		if err != nil {
 			return err
 		}
+		outboxID := uuid4()
 		if _, err := db.Exec(ctx, `
 INSERT INTO outbox (id, continuation_id, step_seq, ordinal, class, payload)
 VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
-			uuid4(), continuationID, stepSeq, i, ef.Class, payloadJSON); err != nil {
+			outboxID, continuationID, stepSeq, i, ef.Class, payloadJSON); err != nil {
 			return err
+		}
+		// External effects (mail/http/log) are delivered across the process boundary
+		// by the ADR-06 §5 dispatcher — enqueue a 'deliver' task in this same step
+		// transaction (ADR-05 §7: outbox row + driving task commit atomically).
+		if IsExternalEffectClass(ef.Class) {
+			dedup := fmt.Sprintf("%s:%d:%d", continuationID, stepSeq, i)
+			if err := EnqueueDeliverTask(ctx, db, outboxID, dedup); err != nil {
+				return err
+			}
 		}
 		if ef.Class == "channel.send" {
 			channel, _ := ef.Payload["channel"].(string)

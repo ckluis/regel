@@ -56,6 +56,7 @@ var (
 	mCASLosses           int64
 	mReoffers            int64
 	mTasksDrained        int64
+	mDelivered           int64
 )
 
 // Metrics is a snapshot of the store/reactor golden signals.
@@ -65,6 +66,7 @@ type Metrics struct {
 	CASLosses           int64 `json:"cas_losses"`
 	Reoffers            int64 `json:"reoffers"`
 	TasksDrained        int64 `json:"tasks_drained"`
+	Delivered           int64 `json:"outbox_delivered"`
 }
 
 // MetricsSnapshot reads the package-level atomic counters.
@@ -75,8 +77,12 @@ func MetricsSnapshot() Metrics {
 		CASLosses:           atomic.LoadInt64(&mCASLosses),
 		Reoffers:            atomic.LoadInt64(&mReoffers),
 		TasksDrained:        atomic.LoadInt64(&mTasksDrained),
+		Delivered:           atomic.LoadInt64(&mDelivered),
 	}
 }
+
+// IncDelivered records one effectively-once outbox delivery (ADR-06 §5).
+func IncDelivered() { atomic.AddInt64(&mDelivered, 1) }
 
 // IncCASLoss / IncReoffer / IncTaskDrained let the reactor record its counters
 // through the same registry the store publishes.

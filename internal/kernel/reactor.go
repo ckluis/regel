@@ -11,6 +11,7 @@ import (
 
 	"regel.dev/regel/internal/cek"
 	"regel.dev/regel/internal/cfr"
+	"regel.dev/regel/internal/pgwire"
 )
 
 // ReactorConfig tunes the reactor's loops (ADR-06 §5). Zero fields take defaults.
@@ -22,6 +23,13 @@ type ReactorConfig struct {
 	ReapEvery      time.Duration
 	DrainBatch     int
 	TimerBatch     int
+
+	// Reap-rate breaker (ADR-13 §5). Zero fields take defaults (window 60s,
+	// cooldown 30s, rateMax 1000/window, probe 10).
+	ReapRateMax     int
+	BreakerWindow   time.Duration
+	BreakerCooldown time.Duration
+	ProbeBatch      int
 }
 
 func (c ReactorConfig) withDefaults() ReactorConfig {
@@ -61,18 +69,21 @@ type Reactor struct {
 	wg        sync.WaitGroup
 	wake      chan struct{}
 	fenceOnce sync.Once
+	breaker   *reaperBreaker
 }
 
 // StartReactor launches the reactor loops (ADR-06 §5) bound to ctx. Returns a
 // handle whose Stop() cancels and joins every loop cleanly.
 func (s *Server) StartReactor(ctx context.Context, cfg ReactorConfig) *Reactor {
 	rctx, cancel := context.WithCancel(ctx)
-	r := &Reactor{srv: s, cfg: cfg.withDefaults(), cancel: cancel, wake: make(chan struct{}, 1)}
-	r.wg.Add(5)
+	r := &Reactor{srv: s, cfg: cfg.withDefaults(), cancel: cancel, wake: make(chan struct{}, 1),
+		breaker: newReaperBreaker(cfg.withDefaults())}
+	r.wg.Add(6)
 	go r.loop(rctx, r.cfg.PollInterval, r.drainOnce, true)        // 2. DRAIN
 	go r.loop(rctx, r.cfg.PollInterval, r.timerOnce, false)       // 1. TIMER SCANNER
 	go r.loop(rctx, r.cfg.HeartbeatEvery, r.heartbeatOnce, false) // 3. HEARTBEAT
 	go r.loop(rctx, r.cfg.ReapEvery, r.reaperOnce, false)         // 4. REAPER
+	go r.loop(rctx, r.cfg.PollInterval, r.dispatchOnce, false)    // 6. DISPATCH (outbox)
 	go r.listenLoop(rctx)                                         // 5. LISTEN
 	return r
 }
@@ -334,21 +345,57 @@ func (r *Reactor) reaperOnce(ctx context.Context) error {
 	}
 	defer r.srv.pool.Release(conn)
 
-	// Expired running tasks → re-offer (ready).
-	res, err := conn.Exec(ctx, `
-UPDATE task SET status='ready', lease_owner=NULL
- WHERE id IN (
-   SELECT id FROM task WHERE status='running' AND lease_until<now()
-   ORDER BY lease_until LIMIT $1 FOR UPDATE SKIP LOCKED)`, r.cfg.ReapBatch)
+	// Measure the oldest expired-lease lag BEFORE re-offering (the signal that
+	// climbs and alarms when the breaker pauses re-offers, ADR-13 §5).
+	lagMS := r.reapLagMS(ctx, conn)
+
+	// The breaker decides how many rows this pass may re-offer (0 ⇒ paused OPEN).
+	batch := r.breaker.allowedBatch()
+	if batch <= 0 {
+		r.breaker.observe(0, 0, lagMS) // record the lag while paused
+		return nil
+	}
+
+	// Expired running tasks → re-offer (ready). RETURNING attempts lets us count
+	// RE-EXPIRIES (attempts>1: work whose fresh lease already expired before).
+	rows, err := conn.Query(ctx, `
+WITH exp AS (
+  SELECT id FROM task WHERE status='running' AND lease_until<now()
+  ORDER BY lease_until LIMIT $1 FOR UPDATE SKIP LOCKED
+), up AS (
+  UPDATE task t SET status='ready', lease_owner=NULL FROM exp
+  WHERE t.id=exp.id RETURNING t.attempts
+)
+SELECT attempts FROM up`, batch)
 	if err != nil {
 		return err
 	}
-	if res.RowsAffected > 0 {
-		cfr.IncReoffers(res.RowsAffected)
+	reoffered, reexpired := 0, 0
+	for rows.Next() {
+		var attempts int
+		if err := rows.Scan(&attempts); err != nil {
+			rows.Close()
+			return err
+		}
+		reoffered++
+		if attempts > 1 {
+			reexpired++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if reoffered > 0 {
+		cfr.IncReoffers(int64(reoffered))
 	}
 
 	// Expired running continuations → ready + fresh resume task with CURRENT
-	// step_seq (the old task's payload seq is stale by design).
+	// step_seq (the old task's payload seq is stale by design). Batch is what the
+	// breaker permits, minus what the task re-offers already spent.
+	remaining := batch - reoffered
+	if remaining < 0 {
+		remaining = 0
+	}
 	res2, err := conn.Exec(ctx, `
 WITH exp AS (
   SELECT id, step_seq FROM continuation WHERE status='running' AND lease_until<now()
@@ -361,16 +408,139 @@ WITH exp AS (
 INSERT INTO task (id, kind, run_at, payload)
 SELECT gen_random_uuid(), 'resume', now(),
   jsonb_build_object('continuation_id', id::text, 'step_seq', step_seq)
-FROM up`, r.cfg.ReapBatch)
+FROM up`, remaining)
 	if err != nil {
 		return err
 	}
-	if res2.RowsAffected > 0 {
-		cfr.IncReoffers(res2.RowsAffected)
+	contReoffers := int(res2.RowsAffected)
+	if contReoffers > 0 {
+		cfr.IncReoffers(int64(contReoffers))
 		_, _ = conn.Exec(ctx, `NOTIFY task`)
 		r.signalDrain()
 	}
+
+	r.breaker.observe(reoffered+contReoffers, reexpired, lagMS)
 	return nil
+}
+
+// reapLagMS returns the age in ms of the oldest expired lease across tasks and
+// continuations (0 when nothing is expired) — the reaper.lag_ms signal.
+func (r *Reactor) reapLagMS(ctx context.Context, conn *pgwire.Conn) int64 {
+	var lag int64
+	_, _ = conn.QueryRow(ctx, `
+SELECT COALESCE(EXTRACT(EPOCH FROM (now() - min(lease_until)))*1000, 0)::bigint
+FROM (
+  SELECT lease_until FROM task WHERE status='running' AND lease_until<now()
+  UNION ALL
+  SELECT lease_until FROM continuation WHERE status='running' AND lease_until<now()
+) x`, nil, &lag)
+	if lag < 0 {
+		lag = 0
+	}
+	return lag
+}
+
+// --- 6. DISPATCH (outbox delivery, ADR-06 §5) --------------------------------
+
+type claimedDeliver struct {
+	id       string
+	intentID string
+	dedupKey string
+	attempts int
+}
+
+// dispatchOnce claims a batch of 'deliver' tasks (SKIP LOCKED — one dispatcher per
+// task) and pushes each intent across the process boundary via the pluggable sink,
+// marking the outbox row delivered EXACTLY once under the dedup key. Effectively-
+// once (ADR-05 §7): a crash between the sink call and the mark leaves the task
+// running with an expiring lease, so the reaper re-offers it and the intent is
+// redelivered once — never lost; an already-delivered row is never re-marked.
+func (r *Reactor) dispatchOnce(ctx context.Context) error {
+	tasks, err := r.claimDeliverTasks(ctx)
+	if err != nil {
+		return err
+	}
+	for _, t := range tasks {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		if err := r.deliverTask(ctx, t); err != nil {
+			return err
+		}
+	}
+	if len(tasks) == r.cfg.DrainBatch {
+		r.signalDrain()
+	}
+	return nil
+}
+
+func (r *Reactor) claimDeliverTasks(ctx context.Context) ([]claimedDeliver, error) {
+	conn, err := r.srv.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer r.srv.pool.Release(conn)
+	rows, err := conn.Query(ctx, `
+UPDATE task SET status='running', lease_owner=$1::uuid,
+       lease_until=now()+make_interval(secs=>$2), attempts=attempts+1
+ WHERE id IN (
+   SELECT id FROM task WHERE status='ready' AND kind='deliver' AND run_at<=now()
+   ORDER BY run_at FOR UPDATE SKIP LOCKED LIMIT $3)
+RETURNING id::text, payload->>'intent_id', payload->>'dedup_key', attempts`,
+		r.srv.kernelID, r.cfg.LeaseSeconds, r.cfg.DrainBatch)
+	if err != nil {
+		return nil, err
+	}
+	var out []claimedDeliver
+	for rows.Next() {
+		var c claimedDeliver
+		if err := rows.Scan(&c.id, &c.intentID, &c.dedupKey, &c.attempts); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// deliverTask loads the intent, pushes it through the sink, marks the outbox row
+// delivered under the dedup CAS, and finishes the task. The sink call is OUTSIDE
+// any transaction so a slow/failing sink never holds a lock; the delivered_at CAS
+// is the effectively-once fence.
+func (r *Reactor) deliverTask(ctx context.Context, t claimedDeliver) error {
+	conn, err := r.srv.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	intent, delivered, found, lerr := cfr.LoadIntent(ctx, conn, t.intentID)
+	r.srv.pool.Release(conn)
+	if lerr != nil {
+		return lerr
+	}
+	if !found || delivered {
+		// Orphan intent or already delivered (idempotent): finish the task.
+		return r.finishTask(ctx, t.id, "done")
+	}
+	if serr := r.srv.deliverySink().Deliver(ctx, intent); serr != nil {
+		// Sink failed (or a simulated crash): leave the task for retry, or dead
+		// after the ceiling. The outbox row stays undelivered → redelivered later.
+		if t.attempts >= 5 {
+			return r.finishTask(ctx, t.id, "dead")
+		}
+		return r.finishTask(ctx, t.id, "ready")
+	}
+	// Mark delivered exactly once, then finish.
+	conn2, err := r.srv.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	_, merr := cfr.MarkDelivered(ctx, conn2, t.intentID)
+	r.srv.pool.Release(conn2)
+	if merr != nil {
+		return merr
+	}
+	cfr.IncDelivered()
+	return r.finishTask(ctx, t.id, "done")
 }
 
 // --- 5. LISTEN ---------------------------------------------------------------

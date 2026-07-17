@@ -267,8 +267,10 @@ func ComputeRestart(results []AttemptResult, corpusM int) RestartMetrics {
 // row. Assert: the capacity must COVER the corpus (max fuel a passing attempt
 // used <= capacity), else the §5 red-path fires.
 func DeriveFuelCapacity(ctx context.Context, conn *pgwire.Conn, epoch int, am AuthoringMetrics, results []AttemptResult) (float64, bool, error) {
-	// The ADR-12 §5 formula figure — the capacity FLOOR.
-	formulaCap := math.Ceil(am.P95Iter * CostFullPipeline * FuelMargin)
+	// The ADR-12 §5 formula figure — the capacity FLOOR. The +1 is the commit
+	// landing term (BUILD-E R6): each iteration is a dry-run charge, and the
+	// green iteration lands with one commit:true charge on top.
+	formulaCap := math.Ceil((am.P95Iter + 1) * CostFullPipeline * FuelMargin)
 	if formulaCap < 1 {
 		formulaCap = 1
 	}
@@ -290,7 +292,7 @@ func DeriveFuelCapacity(ctx context.Context, conn *pgwire.Conn, epoch int, am Au
 	// P95-honest consumption we ADJUST UP to cover — a real, recorded admission of
 	// the change (ADR §5 revisit rule), never a silent throttle.
 	written := formulaCap
-	derivedFrom := fmt.Sprintf("eval:epoch=%d:p95_iter=%.2f:formula=ceil(p95*%.0f*%.1f)=%.0f",
+	derivedFrom := fmt.Sprintf("eval:epoch=%d:p95_iter=%.2f:formula=ceil((p95+1)*%.0f*%.1f)=%.0f",
 		epoch, am.P95Iter, CostFullPipeline, FuelMargin, formulaCap)
 	if !covers {
 		written = math.Ceil(p95Fuel * FuelMargin)

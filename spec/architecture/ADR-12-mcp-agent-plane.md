@@ -271,9 +271,21 @@ The agent-kind admission-fuel **capacity is not a guessed constant**: it is deri
 §3a eval's measured **iterations-to-green P95**. Because every `commit:false` dry-run runs the
 full pipeline and charges by deepest stage, an honest iterating agent burns its *own* budget
 probing (Karpathy P2), so a guessed capacity throttles the very iterate-on-`diagnostics[].fix`
-loop §3 mandates. **Formula: `capacity = ceil(P95_iterations_to_green × cost_full_pipeline ×
-margin)`, `margin = 1.5`** — a P95-honest task completes with headroom and only a runaway
-(well past P95) exhausts. `commit:false` dry-runs MAY be priced below `commit:true` to widen
+loop §3 mandates. **Formula: `capacity = ceil((P95_iterations_to_green + 1) × cost_full_pipeline ×
+margin)`, `margin = 1.5`** — the `+ 1` is the commit landing charge: each iteration is a
+`commit:false` dry-run at deepest-stage cost, and the green iteration then lands with one
+`commit:true` full-pipeline charge on top. A P95-honest task completes with headroom and only
+a runaway (well past P95) exhausts.
+
+**BUILD-E (R6) — the `+ 1` commit term, re-derived from the N=52 eval.** The original
+formula `ceil(P95 × cost_full_pipeline × margin)` under-covered every real run: a green
+attempt pays P95 dry-run charges *plus one* `commit:true` charge, so measured P95-honest
+fuel was `(P95 + 1) × cost = 10` against a formula floor of 8 (epoch-1 runs 2 and 3, N=15
+then N=52 — both recorded `ADJUSTED_TO_COVER` in `derived_from` per the revisit rule, never
+a silent throttle). At the N≥50 corpus the gap is structural, not sampling noise, so the
+formula gains the commit landing term: `ceil((1 + 1) × 5 × 1.5) = 15`, covering the
+measured 10 with the intended margin — the same capacity both runs actually provisioned,
+now formula-derived instead of adjustment-derived. `commit:false` dry-runs MAY be priced below `commit:true` to widen
 honest iteration room, but the capacity floor is the P95-derived figure regardless. **Revisit
 cadence:** re-derived **every epoch and every dialect-version bump** from the then-current §3a
 P95 — the same cadence as the eval — never hand-tuned away from the measured figure. An
@@ -457,7 +469,8 @@ picks the correct restart and args:
   CI rows beside `verifier_coverage`, re-measured each epoch / dialect-version bump. A mocked
   verdict (not the real pipeline) fails the gate.
 - **Fuel budget derived from eval data** (§5 — R1-13: budget not derived from eval data = red): the agent-kind admission-fuel capacity
-  must trace to a §3a **iterations-to-green P95** via `ceil(P95 × cost_full_pipeline × 1.5)`; a
+  must trace to a §3a **iterations-to-green P95** via `ceil((P95 + 1) × cost_full_pipeline × 1.5)`
+  (BUILD-E R6: the `+ 1` commit landing term); a
   hand-set constant not traceable to a P95 measurement is **red**; and a P95-honest eval task
   must complete **without hitting `ADMISSION_BUDGET`** (budget too small ⇒ red).
 - **Restart-decision accuracy** (§7 — R1-13: restart authority enabled without green metric = red): run the M ≥ 30 labeled scenario suite ⇒

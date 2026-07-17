@@ -168,7 +168,7 @@ authoring:
 	if err != nil {
 		t.Fatalf("derive fuel: %v", err)
 	}
-	t.Logf("FUEL: capacity=%.0f (ceil(P95=%.1f * %.0f * %.1f)) covers_corpus=%v", capacity, am.P95Iter, CostFullPipeline, FuelMargin, covers)
+	t.Logf("FUEL: capacity=%.0f (ceil((P95=%.1f + 1) * %.0f * %.1f)) covers_corpus=%v", capacity, am.P95Iter, CostFullPipeline, FuelMargin, covers)
 
 	// ---------------- §7 restart-decision accuracy ----------------
 	restDone, err := DoneAttempts(ctx, conn, epoch, "restart")
@@ -235,7 +235,7 @@ restart:
 			"restart_accuracy":    restDetail,
 			"fuel_capacity": map[string]any{
 				"capacity": capacity, "covers_corpus": covers, "p95_iterations_to_green": am.P95Iter,
-				"formula": fmt.Sprintf("ceil(%.2f * %.0f * %.1f)", am.P95Iter, CostFullPipeline, FuelMargin),
+				"formula": fmt.Sprintf("ceil((%.2f + 1) * %.0f * %.1f)", am.P95Iter, CostFullPipeline, FuelMargin),
 			},
 		},
 		"flip": map[string]any{
@@ -323,23 +323,23 @@ func writeHuman(t *testing.T, path string, epoch int, am AuthoringMetrics, rm Re
 	s := fmt.Sprintf(`# M5 real-LLM eval capture (ADR-12 §3a/§5/§7) — epoch %d
 
 Captured from real `+"`claude -p`"+` runs driving the real MCP agent plane. Every
-number below is computed from persisted m5_eval_result rows. LLM calls (≥): %d;
-wall: %ds.
+number below is computed from persisted m5_eval_result rows. LLM calls this
+invocation (≥): %d; wall: %ds — a resumed/recompute pass spends few or none; the
+cumulative per-attempt record is transcript.jsonl.
 
 ## §3a authoring pass@k  — %s
 - corpus run: N=%d of %d (full corpus), k=%d (pinned)
 - pass@1 = %.3f  (floor ≥ %.2f)
 - pass@k = %.3f  (floor ≥ %.2f)
 - iterations-to-green P95 = %.1f
-- ADR §3a task-suite floor is N≥%d; this run is a real sample of the pinned
-  corpus (residue: scale-to-N≥50 is operator-schedulable — harness runs at any N).
+- ADR §3a task-suite floor N≥%d: %s
 
 ## §7 restart-decision accuracy  — %s
 - corpus run: M=%d of %d, floor M≥%d
 - accuracy = %.3f  (floor ≥ %.2f)
 
 ## §5 eval-derived fuel capacity
-- ADR formula: ceil(P95_iter=%.1f × cost_full_pipeline=%.0f × margin=%.1f) = %.0f (the floor)
+- ADR formula (BUILD-E R6, +1 commit landing term): ceil((P95_iter=%.1f + 1) × cost_full_pipeline=%.0f × margin=%.1f) = %.0f (the floor)
 - provisioned capacity (written to admission_capacity, never throttling): %.0f
 - ADR formula covers a P95-honest passing attempt's fuel: %v%s
 
@@ -351,9 +351,9 @@ wall: %ds.
 Flip decision: %s
 `,
 		epoch, calls, secs,
-		verdict(am.Green, am.Partial), am.N, len(AuthoringCorpus), k, am.PassAt1, FloorPassAt1, am.PassAtK, FloorPassAtK, am.P95Iter, FloorAuthoringN,
+		verdict(am.Green, am.Partial), am.N, len(AuthoringCorpus), k, am.PassAt1, FloorPassAt1, am.PassAtK, FloorPassAtK, am.P95Iter, FloorAuthoringN, suiteFloorNote(am.N),
 		verdict(rm.Green, rm.Partial), rm.M, len(RestartCorpus), FloorRestartM, rm.Accuracy, FloorRestartAcc,
-		am.P95Iter, CostFullPipeline, FuelMargin, math.Ceil(am.P95Iter*CostFullPipeline*FuelMargin), capacity, covers, coverNote(covers),
+		am.P95Iter, CostFullPipeline, FuelMargin, math.Ceil((am.P95Iter+1)*CostFullPipeline*FuelMargin), capacity, covers, coverNote(covers),
 		rm.Green, flip.enabled, flip.enabled == rm.Green, flip.detail,
 		flipVerdict(rm.Green, rm.Partial),
 	)
@@ -362,11 +362,18 @@ Flip decision: %s
 	}
 }
 
+func suiteFloorNote(n int) string {
+	if n >= FloorAuthoringN {
+		return fmt.Sprintf("MET (N=%d completed — the STAGE-E R5 suite-size residue is discharged)", n)
+	}
+	return fmt.Sprintf("NOT met (N=%d completed) — a real sample of the pinned corpus; scale-up is operator-schedulable", n)
+}
+
 func coverNote(covers bool) string {
 	if covers {
 		return ""
 	}
-	return " — formula under-covered (P95_iter is low: each iteration incurs a dry-run AND a commit full-pipeline charge); provisioned capacity was ADJUSTED UP to cover, recorded as a §5 admission"
+	return " — formula under-covered even with the R6 +1 commit term (a new cost structure has appeared; re-derive per the §5 revisit rule); provisioned capacity was ADJUSTED UP to cover, recorded as a §5 admission"
 }
 
 func flipVerdict(green, partial bool) string {

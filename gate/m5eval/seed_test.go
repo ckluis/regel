@@ -18,8 +18,10 @@ import (
 // --- (4) corpus sizing + pin hashing (pure, no DB) ---------------------------
 
 func TestCorpusInvariants(t *testing.T) {
-	if len(AuthoringCorpus) < 12 {
-		t.Fatalf("authoring corpus too small: %d", len(AuthoringCorpus))
+	// Run 3 lifted the suite past the ADR-12 §3a floor (the R5 residue); from
+	// here the floor is the invariant — the corpus may only grow (monotone).
+	if len(AuthoringCorpus) < FloorAuthoringN {
+		t.Fatalf("authoring corpus below ADR-12 §3a floor N>=%d: have %d", FloorAuthoringN, len(AuthoringCorpus))
 	}
 	if len(RestartCorpus) < FloorRestartM {
 		t.Fatalf("restart corpus below ADR-12 §7 floor M>=%d: have %d", FloorRestartM, len(RestartCorpus))
@@ -159,7 +161,9 @@ func TestSeededSolutionsThroughRealDoor(t *testing.T) {
 	sess := w.startMCP()
 	// sample a few tasks to keep the DB test quick (the oracle self-test above
 	// already covers all references behaviorally).
-	sample := []string{"add_two", "factorial", "is_even", "greet_concat", "gcd"}
+	sample := []string{"add_two", "factorial", "is_even", "greet_concat", "gcd",
+		// run-3 expansion red-path: one of each new family through the real door.
+		"reverse_num", "fizzbuzz_str", "pow_mod", "is_vowel", "next_multiple"}
 	for _, id := range sample {
 		tk := taskByID(t, id)
 		good, err := sess.Tool("patch.submit", map[string]any{

@@ -13,8 +13,10 @@ scripted and exit 0 with captured output; the Stage-C OPEN M5 gates were RUN
 against a real LLM — §7 restart-decision accuracy 0.968 on M=31 (floor 0.95 /
 M≥30) is GREEN and the agent `condition.restart` flip executed through its
 mechanized red-pathed gate check; §3a measured pass@1 = pass@3 = 1.00 but on
-N=15 < the ADR-12 floor of 50, so the §3a suite-size leg stays OPEN as a named
-residue (measured floors met, corpus floor not); durability machinery is live
+N=15 < the ADR-12 floor of 50, so the §3a suite-size leg stayed OPEN as a named
+residue at gate time (measured floors met, corpus floor not) — **discharged
+post-gate 2026-07-17 by run 3 (§4a below): N=52 ≥ 50, pass@1 = pass@3 = 1.00,
+all three M5 gates GREEN non-partial, R5+R6 closed**; durability machinery is live
 (`migrate N` findings-as-rows + all-or-nothing, golden-continuation corpus with a
 monotone decode floor, O1–O5 fences, bad-epoch revert drill with DDL-backed held
 dependents, world-rehash canary CLI); the R1-14 stranger-review gate was built
@@ -158,6 +160,31 @@ downstream `INTERNAL` on the harness's synthetic-frames continuation — real
 parked-workflow restart mechanics are the Stage-B/D restart suites; named
 precisely, residue R7).
 
+### 4a. Run 3 (post-gate, 2026-07-17): the R5/R6 discharge at N=52
+
+The corpus was expanded 15 → 52 tasks (37 new, same closed-dialect families;
+monotone append — the original 15 untouched). Every new Reference/KnownBad was
+oracle-validated (`TestOracleDiscriminates`) and 5 new tasks red-pathed through
+the real MCP door (`TestSeededSolutionsThroughRealDoor`) BEFORE any LLM call;
+`TestCorpusInvariants` now enforces N ≥ 50 permanently. The corpus change forced
+a NEW pin (k=3 frozen against the new hash — the L2 anti-tuning machinery doing
+its job) and a fresh eval DB. Mid-run the LLM door rate-limited after ~135
+attempts; the harness left gaps and the resume pass filled exactly those gaps —
+the resumability design exercised for real.
+
+**Run 3 (captured: `evidence-e/m5/`, fresh DB + resume, exit 0 both passes):**
+
+| Gate | Corpus | Floor | Measured | Verdict |
+|---|---|---|---|---|
+| §3a authoring pass@k | N=52 tasks × k=3 (156/156 scored, 0 gaps) | pass@1 ≥ 0.5, pass@k ≥ 0.9, N ≥ 50 | **pass@1 = 1.00, pass@3 = 1.00**, p95 iterations-to-green = 1 | **GREEN — all three legs, R5 discharged** |
+| §7 restart-decision accuracy | M=31 scenarios (re-run fresh) | acc ≥ 0.95, M ≥ 30 | **0.968 (30/31)**; same single miss as run 2: `det_notfound_1` (chose abort over escalate — not in the scenario's Unsafe set) | **GREEN**; flip re-executed: `restart_gate_green=true agent_authority_enabled=true` |
+| §5 eval-derived fuel capacity | from the 156 scored attempts | formula must cover p95 passing fuel | run confirmed the run-2 tension (floor 8 < p95 fuel 10) as structural, not sampling noise → **formula re-derived per the ADR §5 revisit rule: `ceil((p95_iter + 1) × 5 × 1.5)` — the `+1` commit landing term (BUILD-E R6 in ADR-12 §5)** → floor 15 ≥ 10, capacity **15** now formula-derived, `derived_from` carries no adjustment | **GREEN — covers by formula, R6 discharged** |
+
+The §5 re-derivation was ADR-first: ADR-12 §5 (formula + red-path clause,
+BUILD-E R6 marker) updated before the harness, then a zero-LLM-call resumable
+recompute pass re-derived the gate rows from the persisted attempts — the same
+capacity 15 both runs provisioned, now traceable to the formula alone.
+
 ## 5. Durability fences + drills
 
 - **`migrate N`**: dry-run writes `migration_finding` rows (ok / needs-hold /
@@ -254,14 +281,16 @@ durability machinery implemented existing ADR law without deviation.
    derived-table point-in-time reconstruction from history is unbuilt.
 4. **R4 operatorPlane v1 is read-only** (no SSE/approval-delta/impersonation
    panels); hand-authored component lowering renders `props.<field>` depth-1.
-5. **R5 M5 §3a suite size**: measured pass@1 = pass@3 = 1.00, but N=15 < the
-   ADR-12 floor N≥50 — the suite-size leg stays OPEN; expansion is corpus
-   authoring against the pinned-k machinery already in place (pins forbid k
-   tuning). Never presented as fully green.
-6. **R6 §5 fuel formula**: the ADR formula floor (8) sat below measured p95
-   passing fuel (10); capacity 15 = `ceil(p95 × margin)` written with the
-   adjustment recorded in `derived_from` — the formula constants want
-   re-derivation when the corpus reaches N≥50.
+5. **R5 M5 §3a suite size — DISCHARGED (run 3, 2026-07-17, §4a)**: corpus
+   expanded 15 → 52 under a new pin (k=3 refrozen against the new hash);
+   pass@1 = pass@3 = 1.00 on N=52 ≥ 50, non-partial — all three §3a legs GREEN.
+   `TestCorpusInvariants` now enforces the N≥50 floor permanently.
+6. **R6 §5 fuel formula — DISCHARGED (run 3, 2026-07-17, §4a)**: the N=52 run
+   confirmed the under-coverage as structural (each iteration is a dry-run
+   charge, the green iteration lands one commit charge on top); formula
+   re-derived ADR-first to `ceil((p95_iter + 1) × cost × 1.5)` (ADR-12 §5
+   BUILD-E R6) — floor 15 covers measured p95 fuel 10, capacity 15 now
+   formula-derived with no adjustment in `derived_from`.
 7. **R7 restart-flip depth**: the flip's authority change is proven (refused
    `RESTART_DISABLED` while red → accepted after green); the harness's post-flip
    call then hits `INTERNAL` on its synthetic-frames continuation — agent-driven

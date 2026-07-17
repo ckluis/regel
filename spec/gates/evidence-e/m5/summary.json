@@ -1,0 +1,61 @@
+{
+  "epoch": 1,
+  "flip": {
+    "agent_authority_enabled": false,
+    "consistent": true,
+    "detail": "agent condition.restart refused RESTART_DISABLED",
+    "restart_gate_green": false
+  },
+  "gates": {
+    "authoring_pass_at_k": {
+      "completed_tasks": 2,
+      "corpus_run_n": 3,
+      "floor_pass1": 0.5,
+      "floor_passk": 0.9,
+      "full_corpus_n": 15,
+      "iter_samples": [
+        1,
+        1
+      ],
+      "k": 1,
+      "p95_iterations_to_green": 1,
+      "pass_at_1": 1,
+      "pass_at_k": 1,
+      "per_task": {
+        "add_two": true,
+        "max_two": true
+      }
+    },
+    "fuel_capacity": {
+      "capacity": 15,
+      "covers_corpus": false,
+      "formula": "ceil(1.00 * 5 * 1.5)",
+      "p95_iterations_to_green": 1
+    },
+    "restart_accuracy": {
+      "M": 0,
+      "accuracy": 0,
+      "corpus_run_m": 3,
+      "correct": 0,
+      "floor_M": 30,
+      "floor_accuracy": 0.95,
+      "full_corpus_m": 31,
+      "per_case": {}
+    }
+  },
+  "llm_calls_at_least": 6,
+  "pins": {
+    "authoring": {
+      "corpus_hash": "authoring:a12e91cbb8aca59943742a3952c15d06b0e0930e8981723b9aab1ca90314f51d",
+      "corpus_size": 15,
+      "k": 1
+    },
+    "restart": {
+      "corpus_hash": "restart:25d47338822e283bb05dd905a2dbecab422ebe3624511ebdff7cd105917ddc8e",
+      "corpus_size": 31,
+      "k": 1
+    }
+  },
+  "run_at": "2026-07-16T23:22:23Z",
+  "wall_seconds": 17
+}

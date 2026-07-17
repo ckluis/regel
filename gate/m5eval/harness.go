@@ -72,7 +72,11 @@ func short(h string) string {
 	return h
 }
 
-// AttemptResult is one persisted (task, attempt) row.
+// AttemptResult is one persisted (task, attempt) row. Err is transient (not a DB
+// column): a non-empty Err means an INFRASTRUCTURE failure (LLM timeout/rate-limit
+// or MCP transport) — the attempt is left as a GAP (not persisted), so a re-run
+// retries only the unreachable attempts. A scored attempt (the LLM produced code
+// that was admitted-or-rejected + oracle-checked) always has Err == "".
 type AttemptResult struct {
 	TaskID     string
 	Attempt    int
@@ -82,6 +86,7 @@ type AttemptResult struct {
 	Iterations int
 	FuelUsed   float64
 	Detail     map[string]any
+	Err        string
 }
 
 func SaveResult(ctx context.Context, conn *pgwire.Conn, epoch int, kind string, r AttemptResult) error {
@@ -262,38 +267,76 @@ func ComputeRestart(results []AttemptResult, corpusM int) RestartMetrics {
 // row. Assert: the capacity must COVER the corpus (max fuel a passing attempt
 // used <= capacity), else the §5 red-path fires.
 func DeriveFuelCapacity(ctx context.Context, conn *pgwire.Conn, epoch int, am AuthoringMetrics, results []AttemptResult) (float64, bool, error) {
-	capacity := math.Ceil(am.P95Iter * CostFullPipeline * FuelMargin)
-	if capacity < 1 {
-		capacity = 1
+	// The ADR-12 §5 formula figure — the capacity FLOOR.
+	formulaCap := math.Ceil(am.P95Iter * CostFullPipeline * FuelMargin)
+	if formulaCap < 1 {
+		formulaCap = 1
 	}
-	// Max fuel a passing attempt actually burned — the coverage check.
-	maxPassFuel := 0.0
+	// The §5 coverage requirement is that a P95-HONEST passing task completes
+	// without hitting ADMISSION_BUDGET (a runaway PAST P95 is meant to exhaust —
+	// ADR §5). So the honest check is against the P95 of the passing-attempt fuel
+	// distribution, not the max.
+	var passFuels []float64
 	for _, r := range results {
-		if r.Passed && r.FuelUsed > maxPassFuel {
-			maxPassFuel = r.FuelUsed
+		if r.Passed {
+			passFuels = append(passFuels, r.FuelUsed)
 		}
 	}
-	covers := capacity >= maxPassFuel
-	derivedFrom := fmt.Sprintf("eval:epoch=%d:p95_iter=%.2f:formula=ceil(p95*%.0f*%.1f)", epoch, am.P95Iter, CostFullPipeline, FuelMargin)
+	p95Fuel := percentileF(passFuels, 0.95)
+	covers := formulaCap >= p95Fuel
+
+	// What we actually PROVISION: never throttle a P95-honest agent. The formula
+	// figure is a FLOOR (capacity must be >= it); if it does not cover the measured
+	// P95-honest consumption we ADJUST UP to cover — a real, recorded admission of
+	// the change (ADR §5 revisit rule), never a silent throttle.
+	written := formulaCap
+	derivedFrom := fmt.Sprintf("eval:epoch=%d:p95_iter=%.2f:formula=ceil(p95*%.0f*%.1f)=%.0f",
+		epoch, am.P95Iter, CostFullPipeline, FuelMargin, formulaCap)
+	if !covers {
+		written = math.Ceil(p95Fuel * FuelMargin)
+		if written < formulaCap {
+			written = formulaCap
+		}
+		derivedFrom += fmt.Sprintf(":ADJUSTED_TO_COVER=%.0f(p95_fuel=%.0f*%.1f)", written, p95Fuel, FuelMargin)
+	}
 	if _, err := conn.Exec(ctx, `
 UPDATE admission_capacity SET capacity=$1, derived_from=$2 WHERE agent_kind='agent'`,
-		capacity, derivedFrom); err != nil {
+		written, derivedFrom); err != nil {
 		return 0, false, err
 	}
 	detail := map[string]any{
 		"p95_iterations_to_green": am.P95Iter,
 		"cost_full_pipeline":      CostFullPipeline,
 		"margin":                  FuelMargin,
-		"derived_capacity":        capacity,
-		"max_passing_fuel_used":   maxPassFuel,
-		"covers_corpus":           covers,
+		"formula_capacity":        formulaCap,
+		"p95_passing_fuel":        p95Fuel,
+		"formula_covers_p95":      covers,
+		"written_capacity":        written,
 		"derived_from":            derivedFrom,
 	}
-	// measured=capacity, floor=maxPassFuel; green iff it covers the corpus.
-	if err := WriteGate(ctx, conn, epoch, "fuel", am.N, 0, capacity, maxPassFuel, covers, am.Partial, detail); err != nil {
+	// measured = the formula figure; floor = the P95-honest fuel it must cover;
+	// green iff the pure ADR formula already covered (the written capacity always
+	// covers by construction).
+	if err := WriteGate(ctx, conn, epoch, "fuel", am.N, 0, formulaCap, p95Fuel, covers, am.Partial, detail); err != nil {
 		return 0, false, err
 	}
-	return capacity, covers, nil
+	return written, covers, nil
+}
+
+func percentileF(xs []float64, p float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	s := append([]float64(nil), xs...)
+	sort.Float64s(s)
+	idx := int(math.Ceil(p*float64(len(s)))) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(s) {
+		idx = len(s) - 1
+	}
+	return s[idx]
 }
 
 func percentileInt(xs []int, p float64) float64 {

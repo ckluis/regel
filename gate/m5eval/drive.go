@@ -52,6 +52,7 @@ func RunAuthoringAttempt(sess *MCPSession, t AuthoringTask, scope string, attemp
 		if err != nil {
 			tr["llm_error"] = err.Error()
 			res.Detail = errDetail(err)
+			res.Err = err.Error()
 			res.Iterations = it
 			tr["iterations"] = iters
 			return res, tr
@@ -64,6 +65,7 @@ func RunAuthoringAttempt(sess *MCPSession, t AuthoringTask, scope string, attemp
 		if err != nil {
 			tr["mcp_error"] = err.Error()
 			res.Detail = errDetail(err)
+			res.Err = err.Error()
 			res.Iterations = it
 			tr["iterations"] = iters
 			return res, tr
@@ -217,6 +219,7 @@ func RunRestartScenario(ctx context.Context, sess *MCPSession, conn *pgwire.Conn
 	condID, err := SeedRestartCondition(ctx, conn, s, agentSubject)
 	if err != nil {
 		res.Detail = errDetail(err)
+		res.Err = err.Error()
 		tr["seed_error"] = err.Error()
 		return res, tr
 	}
@@ -230,6 +233,7 @@ func RunRestartScenario(ctx context.Context, sess *MCPSession, conn *pgwire.Conn
 	raw, err := LLMCall(restartPrompt(s), llmTimeout)
 	if err != nil {
 		res.Detail = errDetail(err)
+		res.Err = err.Error()
 		tr["llm_error"] = err.Error()
 		return res, tr
 	}

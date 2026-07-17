@@ -316,6 +316,161 @@ func (m *Machine) execStmt(n *rast.Node, e *env) (Value, control, *env, error) {
 				return v, fl, e, err
 			}
 		}
+	case rast.KFor:
+		// BUILD-E (M5): Kids = [init|KNone, cond|KNone, incr|KNone, body]. The M5
+		// authoring eval scored real LLM candidates through this reducer and the
+		// missing KFor arm turned every for-loop candidate into a spurious
+		// behavior FAIL ("expression kind 65 not covered") — coverage extension,
+		// same reference semantics as KWhile.
+		le := e
+		if !n.Kids[0].IsNone() {
+			if n.Kids[0].Kind == rast.KVarDecl {
+				v, fl, ne, err := m.execStmt(n.Kids[0], le)
+				if err != nil || fl != flowNone {
+					return v, fl, e, err
+				}
+				le = ne
+			} else {
+				v, fl, err := m.evalExpr(n.Kids[0], le)
+				if err != nil || fl != flowNone {
+					return v, fl, e, err
+				}
+			}
+		}
+		for {
+			if !n.Kids[1].IsNone() {
+				c, fl, err := m.evalExpr(n.Kids[1], le)
+				if err != nil || fl != flowNone {
+					return c, fl, e, err
+				}
+				if !truthy(c) {
+					return undef(), flowNone, e, nil
+				}
+			}
+			v, fl, err := m.execNested(n.Kids[3], le)
+			if err != nil {
+				return v, fl, e, err
+			}
+			switch fl {
+			case flowBreak:
+				return undef(), flowNone, e, nil
+			case flowContinue, flowNone:
+			default:
+				return v, fl, e, err
+			}
+			if !n.Kids[2].IsNone() {
+				v, fl, err := m.evalExpr(n.Kids[2], le)
+				if err != nil || fl != flowNone {
+					return v, fl, e, err
+				}
+			}
+		}
+	case rast.KForOf:
+		// Kids = [decl(KVarDecl, one KBindId declarator), iterExpr, body]; arrays only.
+		it, fl, err := m.evalExpr(n.Kids[1], e)
+		if err != nil || fl != flowNone {
+			return it, fl, e, err
+		}
+		if it.Kind != VArr {
+			return undef(), flowNone, e, fmt.Errorf("oracle: for-of over non-array not covered")
+		}
+		decl := n.Kids[0]
+		if decl.Kind != rast.KVarDecl || len(decl.Kids[0].Kids) != 1 ||
+			decl.Kids[0].Kids[0].Kids[0].Kind != rast.KBindId {
+			return undef(), flowNone, e, fmt.Errorf("oracle: only simple for-of binders are covered")
+		}
+		for _, el := range it.Arr.Elems {
+			v, fl, err := m.execNested(n.Kids[2], &env{parent: e, slots: []Value{el}})
+			if err != nil {
+				return v, fl, e, err
+			}
+			switch fl {
+			case flowBreak:
+				return undef(), flowNone, e, nil
+			case flowContinue, flowNone:
+			default:
+				return v, fl, e, err
+			}
+		}
+		return undef(), flowNone, e, nil
+	case rast.KDoWhile:
+		// Kids = [body, cond]
+		for {
+			v, fl, err := m.execNested(n.Kids[0], e)
+			if err != nil {
+				return v, fl, e, err
+			}
+			switch fl {
+			case flowBreak:
+				return undef(), flowNone, e, nil
+			case flowContinue, flowNone:
+			default:
+				return v, fl, e, err
+			}
+			c, fl, err := m.evalExpr(n.Kids[1], e)
+			if err != nil || fl != flowNone {
+				return c, fl, e, err
+			}
+			if !truthy(c) {
+				return undef(), flowNone, e, nil
+			}
+		}
+	case rast.KSwitch:
+		// Kids = [disc, KList of KClause]; KClause U bit0 default, Kids = [test|KNone, KList stmts].
+		// First strict-equality (===) match wins; no match falls to the first
+		// default; execution falls through subsequent clauses until flowBreak.
+		disc, fl, err := m.evalExpr(n.Kids[0], e)
+		if err != nil || fl != flowNone {
+			return disc, fl, e, err
+		}
+		clauses := n.Kids[1].Kids
+		start := -1
+		for i, cl := range clauses {
+			if cl.U&1 == 1 {
+				continue // default; only reached if nothing matches
+			}
+			tv, fl, err := m.evalExpr(cl.Kids[0], e)
+			if err != nil || fl != flowNone {
+				return tv, fl, e, err
+			}
+			eq, _, err := binary(rast.OpEqEqEq, disc, tv)
+			if err != nil {
+				return undef(), flowNone, e, err
+			}
+			if truthy(eq) {
+				start = i
+				break
+			}
+		}
+		if start < 0 {
+			for i, cl := range clauses {
+				if cl.U&1 == 1 {
+					start = i
+					break
+				}
+			}
+		}
+		if start < 0 {
+			return undef(), flowNone, e, nil
+		}
+		ce := &env{parent: e}
+		for _, cl := range clauses[start:] {
+			for _, st := range cl.Kids[1].Kids {
+				v, fl, ne, err := m.execStmt(st, ce)
+				if err != nil {
+					return v, fl, e, err
+				}
+				switch fl {
+				case flowBreak:
+					return undef(), flowNone, e, nil
+				case flowNone:
+				default:
+					return v, fl, e, err
+				}
+				ce = ne
+			}
+		}
+		return undef(), flowNone, e, nil
 	case rast.KReturn:
 		if n.Kids[0].IsNone() {
 			return undef(), flowReturn, e, nil
@@ -560,6 +715,32 @@ func (m *Machine) evalExpr(n *rast.Node, e *env) (Value, control, error) {
 		default:
 			return undef(), flowNone, fmt.Errorf("oracle: unary op %d not covered", n.U)
 		}
+	case rast.KUpdate:
+		// BUILD-E (M5): ++/-- on a simple local — U bit0 = prefix, bits1.. = op.
+		target := n.Kids[0]
+		if target.Kind != rast.KLocal {
+			return undef(), flowNone, fmt.Errorf("oracle: update on non-local not covered")
+		}
+		cur, ok := e.lookup(target.U)
+		if !ok {
+			return undef(), flowNone, fmt.Errorf("oracle: unbound update target")
+		}
+		cn, ok := toNum(cur)
+		if !ok {
+			return undef(), flowNone, fmt.Errorf("oracle: update on non-number")
+		}
+		delta := 1.0
+		if rast.OpKind(n.U>>1) == rast.OpDec {
+			delta = -1.0
+		}
+		nv := vnum(cn + delta)
+		if !e.assign(target.U, nv) {
+			return undef(), flowNone, fmt.Errorf("oracle: unbound update target")
+		}
+		if n.U&1 == 1 { // prefix → new value
+			return nv, flowNone, nil
+		}
+		return vnum(cn), flowNone, nil
 	case rast.KCond:
 		c, fl, err := m.evalExpr(n.Kids[0], e)
 		if err != nil || fl != flowNone {

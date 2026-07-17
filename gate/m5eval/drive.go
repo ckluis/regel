@@ -42,6 +42,11 @@ func authorPrompt(t AuthoringTask, prior, diag string) string {
 func RunAuthoringAttempt(sess *MCPSession, t AuthoringTask, scope string, attempt, maxIters int, llmTimeout time.Duration) (AttemptResult, map[string]any) {
 	res := AttemptResult{TaskID: t.ID, Attempt: attempt, Detail: map[string]any{}}
 	tr := map[string]any{"task": t.ID, "attempt": attempt}
+	// Each attempt is INDEPENDENT (pass@k), so each targets its own module path:
+	// run 1 taught us that attempts sharing t.Module collide with attempt 1's
+	// committed def (dry-run "already-admitted"/STALE_BASE) and every k>1 attempt
+	// scored a spurious FAIL. The catalog rows are the attempt's workspace.
+	attemptModule := fmt.Sprintf("%s_a%d", t.Module, attempt)
 	var iters []map[string]any
 	var prior, diag string
 	fuel := 0.0
@@ -61,7 +66,7 @@ func RunAuthoringAttempt(sess *MCPSession, t AuthoringTask, scope string, attemp
 		prior = src
 
 		dry, err := sess.Tool("patch.submit", map[string]any{
-			"source": src, "module": t.Module, "scope": scope, "commit": false})
+			"source": src, "module": attemptModule, "scope": scope, "commit": false})
 		if err != nil {
 			tr["mcp_error"] = err.Error()
 			res.Detail = errDetail(err)
@@ -73,10 +78,11 @@ func RunAuthoringAttempt(sess *MCPSession, t AuthoringTask, scope string, attemp
 		fuel += submitCost(dry)
 		outcome, _ := dry["outcome"].(string)
 		iterRec := map[string]any{"iter": it, "source": src, "dry_outcome": outcome}
-		if outcome == "admitted" {
-			// commit on the SAME source.
+		if outcome == "admitted" || outcome == "already-admitted" {
+			// commit on the SAME source ("already-admitted" = a resumed re-run
+			// refilling a gap whose prior run committed before being cut off).
 			com, cerr := sess.Tool("patch.submit", map[string]any{
-				"source": src, "module": t.Module, "scope": scope, "commit": true})
+				"source": src, "module": attemptModule, "scope": scope, "commit": true})
 			if cerr != nil {
 				iterRec["commit_error"] = cerr.Error()
 				iters = append(iters, iterRec)
@@ -86,7 +92,7 @@ func RunAuthoringAttempt(sess *MCPSession, t AuthoringTask, scope string, attemp
 			fuel += submitCost(com)
 			cOut, _ := com["outcome"].(string)
 			iterRec["commit_outcome"] = cOut
-			res.Admitted = cOut == "admitted"
+			res.Admitted = cOut == "admitted" || cOut == "already-admitted"
 			res.Iterations = it
 			res.FuelUsed = fuel
 			if res.Admitted {

@@ -52,10 +52,23 @@ func statesField(fields []fieldSpec) (fieldSpec, bool) {
 	return fieldSpec{}, false
 }
 
-// boardTitleField picks the card's title field: the first non-pii scalar text
-// field that is neither the states axis nor the org policy column, so a card shows
-// something a human reads. "" when the resource has no such field (card = badge only).
+// boardTitleField picks the card's title field: the HUMAN IDENTIFIER when the
+// resource declares one (name/title/label), else the first non-pii scalar text
+// field that is neither the states axis nor the org policy column. "" when the
+// resource has no such field (card = badge only). The identifier preference was
+// landed by the R1-14 stranger-review gate: the outside reviewer read
+// industry-titled cards ("fintech prospect") as generated-default, not finished.
 func boardTitleField(fields []fieldSpec, states fieldSpec) string {
+	for _, want := range []string{"name", "title", "label"} {
+		for _, f := range fields {
+			if f.Name != want || f.PII {
+				continue
+			}
+			if b := fieldBundles[f.Base]; b.Render == "text" {
+				return f.Name
+			}
+		}
+	}
 	for _, f := range fields {
 		if f.PII || f.Name == states.Name || f.Name == "org" {
 			continue
@@ -65,6 +78,58 @@ func boardTitleField(fields []fieldSpec, states fieldSpec) string {
 		}
 	}
 	return ""
+}
+
+// curateFields orders fields for PRESENTATION only: the human identifier
+// (name/title/label) leads, the rest keep their stable (alphabetical) order. The
+// PHYSICAL order — DDL columns, history shadow, validators — stays alphabetical;
+// this is the template layer. Landed by the R1-14 stranger-review gate: the
+// outside reviewer read alphabetical table columns (arr before name) as
+// generated-default rather than curated.
+func curateFields(fields []fieldSpec) []fieldSpec {
+	lead := -1
+	for _, want := range []string{"name", "title", "label"} {
+		for i, f := range fields {
+			if f.Name == want && !f.PII {
+				lead = i
+				break
+			}
+		}
+		if lead >= 0 {
+			break
+		}
+	}
+	if lead < 0 {
+		return fields
+	}
+	out := make([]fieldSpec, 0, len(fields))
+	out = append(out, fields[lead])
+	out = append(out, fields[:lead]...)
+	out = append(out, fields[lead+1:]...)
+	return out
+}
+
+// boardBadgeField picks the card's secondary cell: the first non-pii select field
+// that is not the states axis, else the first money field. Zero fieldSpec when
+// neither exists (the caller keeps the states badge).
+func boardBadgeField(fields []fieldSpec, states fieldSpec) fieldSpec {
+	for _, f := range fields {
+		if f.PII || f.Name == states.Name || f.Name == "org" {
+			continue
+		}
+		if f.Base == "select" {
+			return f
+		}
+	}
+	for _, f := range fields {
+		if f.PII || f.Name == "org" {
+			continue
+		}
+		if f.Base == "money" {
+			return f
+		}
+	}
+	return fieldSpec{}
 }
 
 // lowerBoard lowers a states-bearing resource to a KANBAN board template (ADR-10
@@ -95,12 +160,22 @@ func lowerBoard(rp resourcePlan, fields []fieldSpec, states fieldSpec) *ui.Templ
 			})
 			cells = append(cells, ui.Leaf("text", cellIdx))
 		}
+		// The card's second cell: repeating the states value inside a
+		// states-grouped column is redundant (flagged by the R1-14 stranger
+		// review) — prefer a DIFFERENT enum (select) field, else a money field;
+		// fall back to the states badge only when the card has no title at all.
+		badgeField, badgeLeaf := states.Name, statesBundle.Render
+		if title != "" {
+			if alt := boardBadgeField(fields, states); alt.Name != "" {
+				badgeField, badgeLeaf = alt.Name, fieldBundles[alt.Base].Render
+			}
+		}
 		badgeIdx := len(t.Slots)
 		t.Slots = append(t.Slots, ui.Slot{
-			ID: slotIDFor("board.badge", j), Kind: "setText", Field: states.Name, Leaf: statesBundle.Render,
+			ID: slotIDFor("board.badge", j), Kind: "setText", Field: badgeField, Leaf: badgeLeaf,
 			ReadSet: []ui.ReadKey{{Resource: rp.Decl.CatalogName, KeyClass: "horizon"}},
 		})
-		cells = append(cells, ui.Leaf(statesBundle.Render, badgeIdx))
+		cells = append(cells, ui.Leaf(badgeLeaf, badgeIdx))
 		card := ui.Static("card", cells...)
 		col := ui.Static("section", ui.Static("heading", ui.Lit(member)), ui.KeyedList("list", listIdx, card))
 		root.Children = append(root.Children, col)
@@ -218,6 +293,7 @@ func lowerTable(rp resourcePlan, fields []fieldSpec) *ui.Template {
 		ID: slotIDFor("table", 0), Kind: "spliceList",
 		ReadSet: []ui.ReadKey{{Resource: rp.Decl.CatalogName, KeyClass: "horizon"}},
 	})
+	fields = curateFields(fields) // presentation order: human identifier first (R1-14)
 	headers := make([]*ui.Node, 0, len(fields))
 	cells := make([]*ui.Node, 0, len(fields))
 	for i, f := range fields {

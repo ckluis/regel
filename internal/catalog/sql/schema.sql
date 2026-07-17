@@ -620,6 +620,19 @@ CREATE TABLE IF NOT EXISTS epoch_hold (
 CREATE INDEX IF NOT EXISTS epoch_hold_active_idx ON epoch_hold (continuation_id)
   WHERE released_at IS NULL;
 
+-- R1-14 / ARCHITECTURE M6: the reference-dashboard stranger-review gate entry.
+-- The review HAVING HAPPENED and its verdict BEING RECORDED is the gate -- a
+-- missing row or an absent 'finished' verdict reads RED like any un-run suite
+-- (admission.StrangerReviewGate; red-pathed in stranger_review_test.go).
+CREATE TABLE IF NOT EXISTS stranger_review (
+  id          BIGSERIAL PRIMARY KEY,
+  target      TEXT NOT NULL,   -- what was reviewed (e.g. 'reference-dashboard')
+  reviewer    TEXT NOT NULL,   -- the outside reviewer's identity, honestly labeled
+  verdict     TEXT NOT NULL CHECK (verdict IN ('finished','unfinished')),
+  notes       TEXT NOT NULL DEFAULT '',
+  reviewed_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Bootstrap bookkeeping.
 CREATE TABLE IF NOT EXISTS schema_version (
   version    int PRIMARY KEY,

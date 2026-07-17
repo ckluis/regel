@@ -53,5 +53,7 @@
 
 - M5 run 3 (post-gate, 2026-07-17): **R5 + R6 DISCHARGED** (STAGE-E.md §4a). §3a corpus 15→52 tasks (oracle-validated + real-door red-pathed before any LLM call; `TestCorpusInvariants` now pins N≥50 forever); new eval pin (k=3 vs new corpus hash — L2 machinery fired as designed); fresh run + mid-run rate-limit exercised the gap-resume path for real. Results: §3a pass@1=pass@3=1.00 on N=52 (156/156 scored) GREEN all legs; §7 accuracy 0.968 (30/31, same `det_notfound_1` miss as run 2) GREEN, flip re-executed; §5 under-coverage confirmed structural → formula re-derived ADR-first to `ceil((p95_iter+1)×5×1.5)` (ADR-12 §5 BUILD-E R6), capacity 15 now formula-derived, gate GREEN non-partial. All three m5_gate rows green.
 
+- STAGE F (residue burn-down v1→v1.1): **OPEN** 2026-07-17 — operator GO on ALL FOUR workstreams (A depth-of-proof R7/R9+R11/R8; B hardening R1/R10/R12; C product surface R2/R4/R3/R13/R14; D close-out claim-evidence + FINAL.md + STAGE-F.md + final gate). Human stranger-review re-record stays OPERATOR-SCHEDULED.
+
 ## Next
-- v1 is CLOSED at the Stage-E gate; M5 R5+R6 discharged post-gate (run 3). Remaining operator items: (1) optionally re-record the stranger review with a human; (2) spec/FINAL.md close-out narrative if the operator wants one beyond STAGE-E.md + claim-evidence.
+- Stage F Phase 1 (Workstream A) in flight, strictly serial: R7 → R9+R11 → R8. Then B, C, D per the Stage-F session prompt.

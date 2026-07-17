@@ -202,8 +202,8 @@ var AuthorityInventory = []Disposition{
 		CaughtBy:   "V2 outbound sink over the caller + V1 capability-audit (http.post)",
 		TrustedFor: "outbound egress authority: a revealed value it is legitimately handed is trusted not to be re-exfiltrated"},
 	{Native: "std/log.write",
-		CaughtBy:   "",
-		TrustedFor: "RESIDUE (not irreducible): the D0 roster gives log.write effect-class external but NO capability, so V2's capability-keyed sink set does not include it — a Vault value routed into log.write is NOT caught (contradicts ADR-10 §3 'the log sink is in V2's sink set'). Named residue RESIDUE_LOG_SINK; fixed by giving log.write a capability or a non-capability sink arm in a later increment. Recorded, never silently passed"},
+		CaughtBy:   "V2 pii-flow non-capability external-sink arm over the caller (isBoundarySink keys on the declared `external` effect class, ADR-10 §3/§8) + the §6 effect-order conformance gate guards the effect-class declaration the arm relies on",
+		TrustedFor: "the log egress authority: a grant-gated REVEALED value legitimately handed to log.write is trusted not to be re-exfiltrated — V2 bounds the unmasked-Vault-in path, not the post-reveal authority (same statement as the capability egress sinks). BUILD-E: RESIDUE_LOG_SINK closed via the minimal-diff non-capability sink arm (no roster change, no epoch bump)"},
 	// --- read-declared session/clock/erf reads: caught by the §6 conformance gate
 	{Native: "std/identity.currentUser",
 		CaughtBy:   "effect-order conformance gate (read-declared; a recorded effect fails closed)",

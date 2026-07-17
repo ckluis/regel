@@ -118,6 +118,62 @@ export function showOwner(owner: Vault<string>): string {
 	}
 }
 
+// --- V2: PII_ESCAPE into the non-capability log sink (RESIDUE_LOG_SINK) --------
+// BUILD-E (D4, ADR-10 §3/§8): std/log.write declares effect class `external` but
+// bears NO capability, so V2's old capability-keyed sink set omitted it — a Vault
+// value routed into log.write ADMITTED (the RESIDUE_LOG_SINK gap). The external-
+// effect sink arm closes it: the log sink is now in V2's sink set.
+func TestV2LogSinkPiiEscape(t *testing.T) {
+	w := setupWorld(t)
+	ctx := ctxT(t)
+
+	// A Vault value routed into the non-capability external sink std/log.write.
+	src := `import { write } from "std/log";
+import type { Vault } from "std/pii";
+export function audit(owner: Vault<string>): void {
+  write(owner);
+}
+`
+	d, a, r := w.snapshot()
+	v, err := admit(ctx, w.conn, src, "app/logsink", engineer("dev"), nil)
+	if err != nil {
+		t.Fatalf("admit: %v", err)
+	}
+	if v.Outcome != OutcomeRejected {
+		t.Fatalf("outcome = %q, want rejected — a Vault value into log.write must be caught; diags=%+v", v.Outcome, v.Diagnostics)
+	}
+	if len(v.Diagnostics) == 0 || v.Diagnostics[0].Code != "PII_ESCAPE" {
+		t.Fatalf("want PII_ESCAPE, got %+v", v.Diagnostics)
+	}
+	if v.Diagnostics[0].StageOrVerifier != "V2" {
+		t.Fatalf("want V2 stage, got %q", v.Diagnostics[0].StageOrVerifier)
+	}
+	assertZeroTrace(t, w, v, d, a, r, "app/logsink/audit")
+}
+
+// Green twin: a NON-pii value into log.write still admits (the positive path is
+// intact — only tainted values are caught).
+func TestV2LogSinkNonPiiAdmits(t *testing.T) {
+	w := setupWorld(t)
+	ctx := ctxT(t)
+
+	src := `import { write } from "std/log";
+export function audit(msg: string): void {
+  write(msg);
+}
+`
+	v, err := admit(ctx, w.conn, src, "app/logok", engineer("dev"), nil)
+	if err != nil {
+		t.Fatalf("admit: %v", err)
+	}
+	if v.Outcome != OutcomeAdmitted {
+		t.Fatalf("outcome = %q, want admitted; diags=%+v", v.Outcome, v.Diagnostics)
+	}
+	if got := w.count("SELECT count(*) FROM name_pointer WHERE name='app/logok/audit'"); got != 1 {
+		t.Fatalf("non-pii log.write def pointer missing (%d)", got)
+	}
+}
+
 // --- V2: PII_LITERAL (a vault-typed literal in code) --------------------------
 
 func TestV2PiiLiteralZeroTrace(t *testing.T) {

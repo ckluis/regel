@@ -264,7 +264,25 @@ func flatKids(n *rast.Node) []*rast.Node {
 	return out
 }
 
-// sinkCapArgs flags a capability-bearing std call carrying a tainted argument
+// isBoundarySink reports whether a std callee is a V2 outbound/log boundary sink.
+// The sink set is (i) every CAPABILITY-bearing std call (mail.send/http.*/sql.query)
+// and (ii) every NON-capability native declaring the `external` effect class —
+// std/log.write. The D0 roster gave log.write effect class `external` but NO
+// capability, so the old capability-keyed set omitted it and a Vault value routed
+// into log.write went uncaught (named residue RESIDUE_LOG_SINK). ADR-10 §3 puts the
+// log sink in V2's sink set; §8 sanctions closing it with EITHER a capability (an
+// epoch bump) OR a non-capability sink arm. This is the minimal-diff arm — no roster
+// change, no epoch bump — so BUILD-E takes it over the capability route. The arm
+// keys on the declared `external` effect class; a native under-declaring its class to
+// dodge it is caught by the ADR-10 §6 effect-order conformance gate, not by V2.
+func (w *v2walk) isBoundarySink(hash string) bool {
+	if _, capBearing := w.im.CapabilityByHash[hash]; capBearing {
+		return true // capability-bearing egress/read boundary
+	}
+	return w.im.EffectClassByHash[hash] == "external" // non-capability external sink (log.write)
+}
+
+// sinkCapArgs flags a boundary-sink std call carrying a tainted argument
 // (an outbound / log boundary sink).
 func (w *v2walk) checkExpr(n *rast.Node) {
 	if n == nil {
@@ -273,15 +291,15 @@ func (w *v2walk) checkExpr(n *rast.Node) {
 	if n.Kind == rast.KCall && len(n.Kids) >= 2 {
 		callee := n.Kids[0]
 		if callee != nil && callee.Kind == rast.KRef {
-			if _, capBearing := w.im.CapabilityByHash[callee.Str]; capBearing {
+			if w.isBoundarySink(callee.Str) {
 				if n.Kids[1] != nil {
 					for _, a := range n.Kids[1].Kids {
 						w.collectPiiRefs(a) // a pii value at this sink (masked or not)
 						// MUTANT V2_DROP_LOG_SINK (ADR-07 §5 dir-ii): dropping the
-						// capability-bearing (outbound/log) sink from the sink-set lets a
-						// vault value flow unmasked into an egress call.
+						// (outbound/log) boundary sink from the sink-set lets a vault
+						// value flow unmasked into an egress/log call.
 						if w.tainted(a) && !mutants.Active("V2_DROP_LOG_SINK") {
-							w.report("PII_ESCAPE", "a vault value flows unmasked into the capability sink "+
+							w.report("PII_ESCAPE", "a vault value flows unmasked into the boundary sink "+
 								stdIntrinsicOf(callee, w.im)+"; mask() or take a reveal-grant first")
 						}
 					}

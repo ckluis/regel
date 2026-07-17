@@ -104,6 +104,22 @@ export function leak(owner: Vault<string>): void {
 `,
 	},
 	{
+		// BUILD-E (D4, ADR-10 §3/§8): RESIDUE_LOG_SINK closed. A vault value routed
+		// into std/log.write — a native declaring effect class `external` but bearing
+		// NO capability. The old capability-keyed sink set omitted it; the external-
+		// effect sink arm catches it. Kills V2_DROP_LOG_SINK alongside the mail.send
+		// sink fixture (the mutant drops both the capability and log arms). log.write
+		// needs no grant (no capability), so this reaches V2 directly.
+		Name: "v2-pii-log-sink", Component: "V2", ThreatClass: "pii.escape",
+		Module: "app/logsink", ExpectCode: "PII_ESCAPE",
+		Source: `import { write } from "std/log";
+import type { Vault } from "std/pii";
+export function audit(owner: Vault<string>): void {
+  write(owner);
+}
+`,
+	},
+	{
 		Name: "v2-pii-literal", Component: "V2", ThreatClass: "pii.literal",
 		Module: "app/lit", ExpectCode: "PII_LITERAL",
 		Source: `import type { Vault } from "std/pii";

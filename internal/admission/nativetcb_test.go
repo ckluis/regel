@@ -484,7 +484,7 @@ func computeTCBCoverage() []tcbCov {
 			trustedFor: []string{
 				"capability egress sinks (mail.send/http) hold real authority over a grant-gated REVEALED value — V2 bounds the unmasked-Vault-in path, not post-reveal re-exfiltration",
 				"std/crypto AES-256-GCM is trusted to be the vetted AEAD; the per-subject key-token KDF and seal path are trusted; crypto-shred makes the ciphertext undecryptable by construction",
-				"RESIDUE_LOG_SINK: std/log.write bears no capability in the D0 roster, so V2's capability-keyed sink set does not yet include it (contradicts ADR-10 §3) — named residue, not silently passed",
+				"std/log.write bears no capability but declares effect class `external`, so V2's non-capability external-sink arm (isBoundarySink) now catches a Vault value routed into it — RESIDUE_LOG_SINK CLOSED (BUILD-E, ADR-10 §3/§8); the arm trusts the roster's honest effect-class declaration, which the §6 conformance gate guards",
 			},
 		},
 		{

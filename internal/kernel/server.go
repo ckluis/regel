@@ -56,7 +56,14 @@ func (s *Server) deliverySink() cfr.DeliverySink {
 // opening the gate, then wires the interpreter to the catalog and the genesis
 // registry.
 func New(ctx context.Context, pool *pgwire.Pool) (*Server, error) {
-	image := admission.BuildImage()
+	return NewWithImage(ctx, pool, admission.BuildImage())
+}
+
+// NewWithImage is New with an explicit genesis image — the seam that lets a drill
+// stage an epoch-N binary (a different (std-manifest-root, attestation) pair) beside
+// the epoch-E fleet in one process (BUILD-F R9). Production always uses New (the
+// epoch-1 image); the migrate-in-drill boots an epoch-2 kernel with BuildImageEpoch2.
+func NewWithImage(ctx context.Context, pool *pgwire.Pool, image *admission.Image) (*Server, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return nil, err

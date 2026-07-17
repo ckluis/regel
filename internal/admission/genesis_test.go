@@ -67,8 +67,8 @@ func TestGenesisIdempotentAndAttested(t *testing.T) {
 // TestBuildImageDeterministic asserts the image hashes are stable across builds
 // (the genesis reproducibility floor — two boots of one binary agree).
 func TestBuildImageDeterministic(t *testing.T) {
-	a := buildImage()
-	b := buildImage()
+	a := buildImage(1, nil, nil)
+	b := buildImage(1, nil, nil)
 	if a.ManifestRoot != b.ManifestRoot {
 		t.Fatalf("manifest root not deterministic: %s vs %s", a.ManifestRoot, b.ManifestRoot)
 	}

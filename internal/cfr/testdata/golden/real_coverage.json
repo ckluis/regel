@@ -1,0 +1,32 @@
+[
+  {
+    "name": "real_capture_park",
+    "file": "real_capture_park.cfr",
+    "cfr": 1,
+    "kinds": [
+      0,
+      1,
+      3
+    ]
+  },
+  {
+    "name": "real_sleep_park",
+    "file": "real_sleep_park.cfr",
+    "cfr": 1,
+    "kinds": [
+      1,
+      3,
+      0
+    ]
+  },
+  {
+    "name": "real_mail_park",
+    "file": "real_mail_park.cfr",
+    "cfr": 1,
+    "kinds": [
+      1,
+      3,
+      0
+    ]
+  }
+]

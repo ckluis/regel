@@ -67,12 +67,42 @@ type Image struct {
 var (
 	imageOnce sync.Once
 	imageInst *Image
+
+	imageE2Once sync.Once
+	imageE2Inst *Image
 )
 
-// BuildImage compiles (once) and returns the deterministic genesis image.
+// BuildImage compiles (once) and returns the deterministic genesis image (epoch 1).
 func BuildImage() *Image {
-	imageOnce.Do(func() { imageInst = buildImage() })
+	imageOnce.Do(func() { imageInst = buildImage(1, nil, nil) })
 	return imageInst
+}
+
+// stdTextDelta is the epoch-2 std/ delta (BUILD-F R9): a NEW std battery type
+// `std/text.Slug`. It is TYPE-ONLY on purpose — a type adds no native, so it moves
+// the std-manifest-root while leaving the dispatch attestation (H_dispatch, the
+// "kernel binary" half of the epoch pair, ADR-08 §2) UNCHANGED. That isolates the
+// std-manifest-root as the sole epoch discriminator, so an old-pair binary booting
+// the new-pair catalog refuses with the canonical `manifest_root_mismatch` — the
+// exact std-manifest-root fence R9 exercises. It is the ADR-08 §6 patch-epoch shape
+// (a new manifest swapping/adding std hashes with the same binary).
+func stdTextDelta() (rosterEntry, string, string) {
+	return rosterEntry{module: "std/text", export: "Slug", defKind: rast.DefType, catKind: "type"},
+		"/std/text.ts",
+		"export type Slug = string;\n"
+}
+
+// BuildImageEpoch2 compiles (once) and returns the deterministic epoch-2 image:
+// the epoch-1 roster PLUS the std/text.Slug delta, pinned at Epoch 2 with the
+// resulting new std-manifest-root (attestation held constant). It is a real,
+// genesis-able and migrate-target-able image — the second point of the ADR-08 §1
+// two-point combination space, used by the R9 migrate-in-drill.
+func BuildImageEpoch2() *Image {
+	imageE2Once.Do(func() {
+		re, stubPath, stubText := stdTextDelta()
+		imageE2Inst = buildImage(2, []rosterEntry{re}, map[string]string{stubPath: stubText})
+	})
+	return imageE2Inst
 }
 
 // EffectClassOf returns the ADR-10 §6 effect class a std native declares
@@ -117,7 +147,7 @@ type rosterEntry struct {
 	nonSerial   bool
 }
 
-func buildImage() *Image {
+func buildImage(epoch int, extra []rosterEntry, extraStubs map[string]string) *Image {
 	roster := []rosterEntry{
 		// std/iter (grammar-owed: Iter<T>, keys — ADR-01)
 		{module: "std/iter", export: "Iter", defKind: rast.DefType, catKind: "type"},
@@ -258,14 +288,22 @@ func buildImage() *Image {
 			catKind: "function", native: cek.UINative(name),
 		})
 	}
+	// Epoch-delta roster entries (BUILD-F R9): a later epoch's NEW std entries slot
+	// through the same deterministic compile path, so the epoch-N image is built
+	// exactly like genesis — no side engine (ADR-08 §1).
+	roster = append(roster, extra...)
 
+	stubs := moduleStubs()
+	for path, text := range extraStubs {
+		stubs[path] = text
+	}
 	im := &Image{
 		ByHash:            map[string]*Entry{},
 		CapabilityByHash:  map[string]string{},
 		EffectClassByHash: map[string]string{},
 		NonSerialByHash:   map[string]bool{},
-		ModuleStubs:       moduleStubs(),
-		Epoch:             1,
+		ModuleStubs:       stubs,
+		Epoch:             epoch,
 	}
 	for _, r := range roster {
 		intrinsic := r.module + "." + r.export

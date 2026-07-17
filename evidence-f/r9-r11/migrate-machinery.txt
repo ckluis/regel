@@ -1,0 +1,40 @@
+# R9 supporting — migrate machinery (dry-run findings-as-rows, all-or-nothing commit) intact
+# command: go test ./internal/admission/ -run 'Migrate|Genesis|BuildImage' -count=1 -v; go test ./internal/kernel/ -run 'Migrate|TwoEpoch|BadEpochRevert' -count=1 -v
+# Captured 2026-07-17T21:04:30Z
+# ------------------------------------------------------------------------------
+=== RUN   TestGateB_MidGenesisKillEmptyOrComplete
+    genesis_gate_test.go:216: mid-genesis kill: 228 statement boundaries swept, all empty-or-complete; retry completed
+--- PASS: TestGateB_MidGenesisKillEmptyOrComplete (1.43s)
+=== RUN   TestGenesisIdempotentAndAttested
+--- PASS: TestGenesisIdempotentAndAttested (0.10s)
+=== RUN   TestBuildImageDeterministic
+--- PASS: TestBuildImageDeterministic (0.00s)
+=== RUN   TestMigrateCommitAtomicityKill
+--- PASS: TestMigrateCommitAtomicityKill (0.13s)
+PASS
+ok  	regel.dev/regel/internal/admission	1.993s
+=== kernel migrate/epoch tests ===
+=== RUN   TestMigrateDryRunFindingsNoMutation
+--- PASS: TestMigrateDryRunFindingsNoMutation (0.21s)
+=== RUN   TestMigrateUndecodableBlocksCommit
+--- PASS: TestMigrateUndecodableBlocksCommit (0.15s)
+=== RUN   TestMigrateO4NeedsHoldBlocksCommit
+--- PASS: TestMigrateO4NeedsHoldBlocksCommit (0.14s)
+=== RUN   TestTwoEpochStrandedImpossibility
+    epoch_migrate_test.go:270: TWO-EPOCH STRANDED-IMPOSSIBILITY: parked under epoch 1, survived migrate 1→2→3, resumed on an epoch-3 kernel against the ORIGINAL def_hash, result=42, provenance stamp stayed 1
+--- PASS: TestTwoEpochStrandedImpossibility (0.19s)
+=== RUN   TestBadEpochRevertHoldsDependents
+    epoch_migrate_test.go:353: BAD-EPOCH REVERT: dependent 21fb6a70-fe1 bound to bad epoch 2 HELD fail-closed (epoch_hold + condition), epoch reverted to epoch-1 pair as epoch 3, held work never resumed
+--- PASS: TestBadEpochRevertHoldsDependents (0.59s)
+=== RUN   TestR9MigrateAcrossRealStdPair
+    r9_migrate_std_pair_test.go:124: R9 std delta: std/text.Slug — old root 6b9586523907 → new root b2e0ac02029b (attestation held 5dac87d4c124)
+    r9_migrate_std_pair_test.go:156: RED#1 boot-refusal (epoch-2 binary vs OLD-machinery-migrated catalog): {"event":"epoch.boot_refused","reason":"manifest_root_mismatch","required_epoch":2,"binary_manifest_root":"b2e0ac02029b743df764269db307ec187c5021002cc8fc47024ab45ea98c4b97","catalog_manifest_root":"6b9586523907575f6a3418247a889353ea9e51a800ce5bed8c3cd2856e296323","detail":"the epoch-pinned std-manifest root does not match the binary","ts":"2026-07-17T21:04:36Z","action":"refused_boot"}
+    r9_migrate_std_pair_test.go:169: RED#2 admission refusal under epoch 1 (imports std/text.Slug): outcome="rejected" reason="import \"std/text.Slug\" does not resolve in the catalog"
+    r9_migrate_std_pair_test.go:204: dry-run: 3 migration_finding rows written, epoch untouched (still 1)
+    r9_migrate_std_pair_test.go:228: commit: epoch 2 live, std_manifest_root slotted to the NEW root b2e0ac02029b (std/text/Slug catalogued)
+    r9_migrate_std_pair_test.go:246: GREEN: epoch-2 kernel booted on the new pair; stale epoch-1 binary refused
+    r9_migrate_std_pair_test.go:253: GREEN: code importing the new std/text.Slug admits under epoch 2 (refused under epoch 1)
+    r9_migrate_std_pair_test.go:277: RESUME on epoch 2: mail workflow done (result=resumed, outbox=1 exactly-once, provenance stamp 1); sleep workflow done (result=42). R9 discharged across a real new std-manifest-root.
+--- PASS: TestR9MigrateAcrossRealStdPair (0.44s)
+PASS
+ok  	regel.dev/regel/internal/kernel	2.035s

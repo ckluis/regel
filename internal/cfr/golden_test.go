@@ -41,9 +41,9 @@ const manifestFile = "testdata/golden/coverage.json"
 
 // coveragePair is one committed (frame kind, cfr version) obligation.
 type coveragePair struct {
-	Kind int `json:"kind"`
+	Kind int    `json:"kind"`
 	Name string `json:"name"`
-	CFR  int `json:"cfr"`
+	CFR  int    `json:"cfr"`
 }
 
 func (p coveragePair) key() [2]int { return [2]int{p.Kind, p.CFR} }
@@ -169,6 +169,10 @@ func TestGoldenCorpusRedPathCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Target a SYNTHETIC blob whose single frame kind is covered by no other blob,
+	// so removing it genuinely drops a manifest pair. Real-shape blobs (R11) overlap
+	// low frame kinds (0,1,3), so the highest-numbered synthetic k-blob is the safe
+	// uniquely-covered target.
 	var firstBlob string
 	for _, ent := range entries {
 		if !strings.HasSuffix(ent.Name(), ".cfr") {
@@ -178,12 +182,12 @@ func TestGoldenCorpusRedPathCorruption(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(tmp, ent.Name()), data, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if firstBlob == "" {
-			firstBlob = ent.Name()
+		if strings.HasPrefix(ent.Name(), "k") { // synthetic k00..k29, sorted ascending
+			firstBlob = ent.Name() // ends on the highest kind (uniquely covered)
 		}
 	}
 	if firstBlob == "" {
-		t.Fatal("no blobs copied")
+		t.Fatal("no synthetic blob copied")
 	}
 
 	// (1) CORRUPT one blob → decode fails → checker errors.
@@ -213,6 +217,134 @@ func TestGoldenCorpusRedPathCorruption(t *testing.T) {
 	}
 }
 
+// --- R11: real-shape golden coverage + monotone-floor RATCHET --------------------
+//
+// The 30 synthetic blobs above each carry a single hand-built frame. The R9
+// migrate-in-drill (internal/kernel/r9_migrate_std_pair_test.go) parks REAL
+// workflows across the new-std-pair epoch boundary, and their captured CFR frames
+// are committed here as real_*.cfr — multi-frame continuation SHAPES the corpus
+// lacked. real_coverage.json lists them as NAMED floor obligations, so the monotone
+// coverage floor RATCHETS above the Stage-E floor: a real blob that goes missing,
+// stops decoding, or covers fewer frame kinds than committed turns the floor red.
+
+// goldenSyntheticFloor is the Stage-E committed floor: 30 synthetic single-frame
+// blobs. The R11 real-shape entries ratchet the total floor strictly above it.
+const goldenSyntheticFloor = 30
+
+const realManifestFile = "testdata/golden/real_coverage.json"
+
+// realShape is one committed real-continuation coverage obligation.
+type realShape struct {
+	Name  string `json:"name"`
+	File  string `json:"file"`
+	CFR   int    `json:"cfr"`
+	Kinds []int  `json:"kinds"`
+}
+
+func loadRealCoverage(t *testing.T) []realShape {
+	t.Helper()
+	data, err := os.ReadFile(realManifestFile)
+	if err != nil {
+		t.Fatalf("read real coverage manifest (capture with REGEL_CAPTURE_R11=1): %v", err)
+	}
+	var m []realShape
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("parse real manifest: %v", err)
+	}
+	if len(m) == 0 {
+		t.Fatal("real coverage manifest is empty")
+	}
+	return m
+}
+
+// checkRealShapes verifies every committed real-shape obligation against dir: the
+// named blob must exist, decode, and still cover every frame kind the manifest
+// records for it. A missing/corrupt/shrunk blob returns an error — the floor red.
+func checkRealShapes(dir string, shapes []realShape) error {
+	for _, s := range shapes {
+		data, err := os.ReadFile(filepath.Join(dir, s.File))
+		if err != nil {
+			return fmt.Errorf("real-shape blob %s missing: %w", s.File, err)
+		}
+		if len(data) == 0 {
+			return fmt.Errorf("real-shape blob %s is empty", s.File)
+		}
+		st, derr := Decode(data)
+		if derr != nil {
+			return fmt.Errorf("real-shape blob %s no longer decodes: %w", s.File, derr)
+		}
+		covered := map[int]bool{}
+		for _, f := range st.Kont {
+			covered[int(f.Kind)] = true
+		}
+		for _, k := range s.Kinds {
+			if !covered[k] {
+				return fmt.Errorf("real-shape blob %s coverage SHRANK: committed frame kind %d no longer present", s.File, k)
+			}
+		}
+	}
+	return nil
+}
+
+// TestGoldenCorpusRealShapeFloorRatchets is R11: the real-shape obligations all
+// hold, and the total floor is strictly above the Stage-E synthetic floor.
+func TestGoldenCorpusRealShapeFloorRatchets(t *testing.T) {
+	synth := loadManifest(t)
+	real := loadRealCoverage(t)
+	if err := checkRealShapes(goldenDir, real); err != nil {
+		t.Fatalf("real-shape floor red: %v", err)
+	}
+	floor := len(synth) + len(real)
+	if len(synth) != goldenSyntheticFloor {
+		t.Fatalf("synthetic floor moved: %d (expected %d) — regenerated corpus?", len(synth), goldenSyntheticFloor)
+	}
+	if floor <= goldenSyntheticFloor {
+		t.Fatalf("floor did NOT ratchet: total %d <= synthetic %d", floor, goldenSyntheticFloor)
+	}
+	if len(real) < 3 {
+		t.Fatalf("expected >= 3 real-shape blobs from the R9 drill, got %d", len(real))
+	}
+	t.Logf("GOLDEN FLOOR RATCHET (R11): %d -> %d (%d real-continuation shapes added by the R9 migrate drill)",
+		goldenSyntheticFloor, floor, len(real))
+}
+
+// TestGoldenCorpusRealShapeRedPath proves the ratcheted floor can FAIL: a real
+// blob removed below the floor leaves its named obligation uncovered (checker
+// errors), and a corrupted real blob stops decoding. Runs against a temp copy.
+func TestGoldenCorpusRealShapeRedPath(t *testing.T) {
+	real := loadRealCoverage(t)
+	tmp := t.TempDir()
+	for _, s := range real {
+		data, err := os.ReadFile(filepath.Join(goldenDir, s.File))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tmp, s.File), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Baseline: the copied real corpus is green.
+	if err := checkRealShapes(tmp, real); err != nil {
+		t.Fatalf("copied real corpus should be green: %v", err)
+	}
+	// (1) REMOVE one real blob → its obligation is uncovered → floor red.
+	if err := os.Remove(filepath.Join(tmp, real[0].File)); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkRealShapes(tmp, real); err == nil {
+		t.Fatalf("removing real blob %s left the floor green — a regression below the new floor is invisible", real[0].File)
+	}
+	// (2) CORRUPT another real blob → decode fails → floor red.
+	if len(real) > 1 {
+		if err := os.WriteFile(filepath.Join(tmp, real[1].File), []byte{0xff, 0x00, 0x01}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkRealShapes(tmp, real); err == nil {
+			t.Fatal("corrupting a real blob left the floor green")
+		}
+	}
+}
+
 // TestGenerateGoldenCorpus (re)writes the corpus + manifest. It is a NO-OP unless
 // -regen or REGEL_REGEN_GOLDEN=1 is set, so a normal test run never mutates the
 // committed testdata. Regenerating is deliberate: a new frame kind or CFR version
@@ -224,8 +356,9 @@ func TestGenerateGoldenCorpus(t *testing.T) {
 	if err := os.MkdirAll(goldenDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Clear stale blobs.
-	old, _ := filepath.Glob(filepath.Join(goldenDir, "*.cfr"))
+	// Clear stale SYNTHETIC blobs only — real-shape blobs (R11, real_*.cfr) are
+	// captured from the R9 drill, not regenerated here, and must survive a regen.
+	old, _ := filepath.Glob(filepath.Join(goldenDir, "k*.cfr"))
 	for _, f := range old {
 		_ = os.Remove(f)
 	}

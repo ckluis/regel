@@ -1,0 +1,16 @@
+# R9 discharge — epoch-migrate drill across a REAL new std pair (std/text.Slug)
+# command: go test ./internal/kernel/ -run TestR9MigrateAcrossRealStdPair -count=1 -v
+# real PostgreSQL 16.13, real CEK machine, no mocks. Captured 2026-07-17T21:04:03Z
+# ------------------------------------------------------------------------------
+=== RUN   TestR9MigrateAcrossRealStdPair
+    r9_migrate_std_pair_test.go:124: R9 std delta: std/text.Slug — old root 6b9586523907 → new root b2e0ac02029b (attestation held 5dac87d4c124)
+    r9_migrate_std_pair_test.go:156: RED#1 boot-refusal (epoch-2 binary vs OLD-machinery-migrated catalog): {"event":"epoch.boot_refused","reason":"manifest_root_mismatch","required_epoch":2,"binary_manifest_root":"b2e0ac02029b743df764269db307ec187c5021002cc8fc47024ab45ea98c4b97","catalog_manifest_root":"6b9586523907575f6a3418247a889353ea9e51a800ce5bed8c3cd2856e296323","detail":"the epoch-pinned std-manifest root does not match the binary","ts":"2026-07-17T21:04:05Z","action":"refused_boot"}
+    r9_migrate_std_pair_test.go:169: RED#2 admission refusal under epoch 1 (imports std/text.Slug): outcome="rejected" reason="import \"std/text.Slug\" does not resolve in the catalog"
+    r9_migrate_std_pair_test.go:204: dry-run: 3 migration_finding rows written, epoch untouched (still 1)
+    r9_migrate_std_pair_test.go:228: commit: epoch 2 live, std_manifest_root slotted to the NEW root b2e0ac02029b (std/text/Slug catalogued)
+    r9_migrate_std_pair_test.go:246: GREEN: epoch-2 kernel booted on the new pair; stale epoch-1 binary refused
+    r9_migrate_std_pair_test.go:253: GREEN: code importing the new std/text.Slug admits under epoch 2 (refused under epoch 1)
+    r9_migrate_std_pair_test.go:277: RESUME on epoch 2: mail workflow done (result=resumed, outbox=1 exactly-once, provenance stamp 1); sleep workflow done (result=42). R9 discharged across a real new std-manifest-root.
+--- PASS: TestR9MigrateAcrossRealStdPair (0.50s)
+PASS
+ok  	regel.dev/regel/internal/kernel	0.845s

@@ -308,18 +308,43 @@ durability machinery implemented existing ADR law without deviation.
 8. **R8 canary pipeline leg** scoped to product-scope app defs (std native bodies
    are un-relowerable by construction; the encoder leg covers ALL defs, so tamper
    anywhere screams). Overlay scope rides the product proof.
-9. **R9 migrate-in-drill std pair**: the drills flip epochs with an unchanged
-   std pair (one binary version exists in the build environment); a real
-   dialect/std change slots a new manifest root through the same control flow.
-   `--wait-for-epoch` waits on `epoch_current`; distinct epoch-N-binary staging
-   awaits a real N binary.
+9. **R9 migrate-in-drill std pair — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r9-r11/`)**:
+   the epoch-migrate drill now runs across a GENUINELY NEW std pair. The real std
+   delta is `std/text.Slug` (`admission.BuildImageEpoch2`) — type-only, so it moves
+   the std-manifest-root (`6b958652…` → `b2e0ac02…`) while holding the dispatch
+   attestation constant, isolating the manifest root as the sole epoch discriminator.
+   RED witnessed first (`r9-drill.txt`): the OLD machinery (`MigrateCommit`, which
+   copies the current pair forward) migrates to epoch 2 carrying the stale root, and
+   the epoch-2 binary refuses boot with the structured `epoch.boot_refused` /
+   `manifest_root_mismatch`; separately, code importing `std/text` is refused
+   admission under epoch 1 (`import "std/text.Slug" does not resolve`). The new
+   `MigrateCommitImage` (`internal/admission/migrate.go`) slots the new pair through
+   the real machinery — dry-run 3 findings-as-rows (epoch untouched) → all-or-nothing
+   commit (new root slotted, `std/text/Slug` name-pointer catalogued) → epoch-2
+   kernel boots (`NewWithImage`) while the stale epoch-1 binary is fenced
+   (`catalog_manifest_root_mismatch`) → parked real workflows resume on epoch 2 with
+   the correct result and exactly-once mail effect (outbox=1). Drill:
+   `internal/kernel/r9_migrate_std_pair_test.go`. M5 eval pins untouched (the
+   pure-compute corpus imports no std). Latent bug found + fixed: the delta must be
+   keyed on the name-pointer, not the definition hash — every std TYPE shares the
+   opaque `unknown` genesis body, so a new type reuses an existing hash but needs a
+   fresh pointer.
 10. **R10 hold fencing cost model**: held dependents fence via the `condition`
     status flip + `epoch_hold` audit rows — deliberately no per-claim epoch_hold
     read on the 50k-storm step path.
-11. **R11 golden corpus breadth**: covers every frame kind at CFR v1 — the only
-    production CFR version; the monotone floor binds automatically at the first
-    v2 frame. `continuation_coverage` DB table exists unused (the committed file
-    manifest is the floor).
+11. **R11 golden corpus breadth — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r9-r11/`)**:
+    the golden corpus grew from 30 synthetic single-frame blobs to 30 + 3 REAL
+    multi-frame continuation shapes (`real_sleep_park`, `real_mail_park`,
+    `real_capture_park`), captured byte-deterministically from the R9 migrate drill's
+    parked workflows (`REGEL_CAPTURE_R11=1`). Since every production frame kind is
+    already covered at CFR v1, the growth is on SHAPE: `real_coverage.json` lists the
+    real blobs as NAMED floor obligations, so the monotone floor RATCHETS 30 → 33
+    (`TestGoldenCorpusRealShapeFloorRatchets`). A regression below the new floor is
+    refused — a removed real blob leaves its obligation uncovered and a corrupted one
+    stops decoding (`TestGoldenCorpusRealShapeRedPath`, captured red in
+    `r11-golden.txt`). The `-regen` generator was scoped to `k*.cfr` so a synthetic
+    regen never wipes the real blobs. (`continuation_coverage` DB table still unused;
+    the committed file manifests are the floor.)
 12. **R12 V2 catch-binder taint is conservative** (non-literal throw ⇒ tainted);
     literal throws stay clean — a stated over-approximation, fail-closed
     direction.

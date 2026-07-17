@@ -1,0 +1,17 @@
+# STAGE-F R9/R11 — all 13 scripts exit 0 (real PG). Captured 2026-07-17T21:16:55Z
+# command: bash scripts/<name>.sh ; echo EXIT
+# drill-bad-epoch-revert captured separately above = EXIT 0
+# ------------------------------------------------------------------------------
+drill-bad-epoch-revert EXIT=0
+demo-admit-rollback          EXIT=0
+demo-kill9-resume            EXIT=0
+demo-mcp-session             EXIT=0
+demo-erf-derive              EXIT=0
+demo-reactive                EXIT=0
+demo-taak                    EXIT=0
+crm-setup                    EXIT=0
+scenario-a-field-add         EXIT=0
+scenario-b-agent-patch       EXIT=0
+scenario-c-deploy-survive    EXIT=0
+scenario-d-asof-rollback     EXIT=0
+scenario-e-pii-shred         EXIT=0

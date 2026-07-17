@@ -1,0 +1,56 @@
+# R11 discharge — golden CFR corpus GROWTH + monotone-floor RATCHET
+# command: go test ./internal/cfr/ -run TestGolden -count=1 -v
+# real PostgreSQL 16.13. Captured 2026-07-17T21:04:14Z
+# floor: 30 synthetic (Stage-E) -> 33 (3 real-continuation shapes from the R9 drill)
+# ------------------------------------------------------------------------------
+=== RUN   TestGoldenContinuationCorpusMonotoneFloor
+    golden_test.go:157: GOLDEN FLOOR: 30 committed (frame-kind,cfr) pairs all decode; binary has 30 frame kinds (>= floor)
+--- PASS: TestGoldenContinuationCorpusMonotoneFloor (0.00s)
+=== RUN   TestGoldenCorpusRedPathCorruption
+--- PASS: TestGoldenCorpusRedPathCorruption (0.00s)
+=== RUN   TestGoldenCorpusRealShapeFloorRatchets
+    golden_test.go:307: GOLDEN FLOOR RATCHET (R11): 30 -> 33 (3 real-continuation shapes added by the R9 migrate drill)
+--- PASS: TestGoldenCorpusRealShapeFloorRatchets (0.00s)
+=== RUN   TestGoldenCorpusRealShapeRedPath
+--- PASS: TestGoldenCorpusRealShapeRedPath (0.00s)
+PASS
+ok  	regel.dev/regel/internal/cfr	0.332s
+
+# --- committed real-shape manifest (real_coverage.json) ---
+[
+  {
+    "name": "real_capture_park",
+    "file": "real_capture_park.cfr",
+    "cfr": 1,
+    "kinds": [
+      0,
+      1,
+      3
+    ]
+  },
+  {
+    "name": "real_sleep_park",
+    "file": "real_sleep_park.cfr",
+    "cfr": 1,
+    "kinds": [
+      1,
+      3,
+      0
+    ]
+  },
+  {
+    "name": "real_mail_park",
+    "file": "real_mail_park.cfr",
+    "cfr": 1,
+    "kinds": [
+      1,
+      3,
+      0
+    ]
+  }
+]
+
+# --- real-shape blob digests (byte-deterministic across two captures) ---
+4c44b5625e810031154daf28b4c6b375ba9fd189152138e70b26abf4e1f10f28  internal/cfr/testdata/golden/real_sleep_park.cfr
+075f3568dfb87584d45b0995494de2d02576a6ba34c560f628457bc3b80deee8  internal/cfr/testdata/golden/real_mail_park.cfr
+7ca89c9bc080848864427fd0b35e2d849b3beb16aee4c13506025ea65f9cb1f4  internal/cfr/testdata/golden/real_capture_park.cfr

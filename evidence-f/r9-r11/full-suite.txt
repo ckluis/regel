@@ -1,0 +1,23 @@
+# STAGE-F R9/R11 — uncached full suite at HEAD (real PostgreSQL 16.13)
+# command: go clean -testcache && go test ./... -count=1
+# Captured 2026-07-17T21:09:10Z
+# ------------------------------------------------------------------------------
+ok  	regel.dev/regel/cmd/regel	3.309s
+ok  	regel.dev/regel/gate/m5eval	2.445s
+?   	regel.dev/regel/gate/nativetcb	[no test files]
+?   	regel.dev/regel/gate/redpath	[no test files]
+ok  	regel.dev/regel/internal/admission	20.807s
+ok  	regel.dev/regel/internal/catalog	4.568s
+ok  	regel.dev/regel/internal/cek	1.510s
+ok  	regel.dev/regel/internal/cfr	6.130s
+ok  	regel.dev/regel/internal/gitproj	6.350s
+ok  	regel.dev/regel/internal/kernel	423.843s
+ok  	regel.dev/regel/internal/lower	1.918s
+ok  	regel.dev/regel/internal/mcp	11.066s
+?   	regel.dev/regel/internal/mutants	[no test files]
+ok  	regel.dev/regel/internal/oracle	1.175s
+ok  	regel.dev/regel/internal/pgwire	1.353s
+ok  	regel.dev/regel/internal/rast	0.640s
+ok  	regel.dev/regel/internal/tsx	0.647s
+ok  	regel.dev/regel/internal/ui	0.372s
+=== GOTEST_EXIT=0 ===

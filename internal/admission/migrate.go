@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"regel.dev/regel/internal/catalog"
 	"regel.dev/regel/internal/cek"
 	"regel.dev/regel/internal/cfr"
 	"regel.dev/regel/internal/pgwire"
+	"regel.dev/regel/internal/rast"
 )
 
 // migrate.go — the ADR-08 §3 `migrate N` machinery: a dry-run that writes
@@ -14,11 +16,13 @@ import (
 // advances the epoch in one SERIALIZABLE transaction, and the §6a revert motion
 // that HOLDS dependents bound to a bad epoch fail-closed (L1).
 //
-// This build carries one binary version, so a forward migrate and a revert both
-// carry an UNCHANGED std pair (an app-deploy epoch, or a revert to a prior pair);
-// the machinery is the streng atomic-epoch shape (findings → one commit → fence),
-// exercised end-to-end. A real dialect/std change slots the new manifest root and
-// attestation into the epoch row without changing this control flow.
+// MigrateCommit carries an UNCHANGED std pair forward (an app-deploy epoch, or a
+// revert to a prior pair). MigrateCommitImage (BUILD-F R9) is the sibling that
+// slots a GENUINELY NEW std pair: it admits the std delta and writes the epoch-N
+// image's own manifest root + attestation, discharging the R9 residue — the
+// migrate machinery exercised across a real dialect/std change, not just an epoch
+// bump over a fixed std set. Both are the streng atomic-epoch shape (findings →
+// one commit → fence).
 
 // migrateFaultHook is a TEST-ONLY fault-injection seam (ADR-08 red-path "commit
 // atomicity"): when non-nil it is called inside the --commit transaction AFTER
@@ -251,6 +255,166 @@ ON CONFLICT DO NOTHING`, target); err != nil {
 		return err
 	}
 	// Flip the fence row + publish the signal — the O5 guard every kernel reads.
+	if _, err := conn.Exec(ctx, `UPDATE epoch_current SET n=$1 WHERE one=true`, target); err != nil {
+		return err
+	}
+	if _, err := conn.Exec(ctx, fmt.Sprintf(`NOTIFY epoch, '%d'`, target)); err != nil {
+		return err
+	}
+	if err := conn.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// MigrateCommitImage is MigrateCommit for a REAL std change (BUILD-F R9): it
+// advances the live epoch to `target` AND slots the new epoch's (std-manifest-root,
+// dispatch-attestation) pair carried by `newImage`, admitting the std DELTA — every
+// newImage std entry not already catalogued — as ordinary immortal rows inside the
+// SAME all-or-nothing SERIALIZABLE transaction (ADR-08 §3: "insert std-N mirror
+// rows + std_manifest + epoch row" as one commit). Unlike MigrateCommit (which
+// carries the current unchanged pair forward), this is the path the R9 residue
+// named: the migrate machinery exercised across a genuinely new std-manifest-root.
+//
+// The same O4 in-transaction enumeration fences it fail-closed. After commit,
+// VerifyBoot(newImage) recomputes the catalog std-manifest-root over the now-larger
+// std pointer set and matches newImage.ManifestRoot — proving the delta was really
+// slotted; an old-image binary refuses boot on the manifest-root mismatch.
+func MigrateCommitImage(ctx context.Context, conn *pgwire.Conn, target int, newImage *Image, banTags []cek.Tag) error {
+	if newImage.Epoch != target {
+		return fmt.Errorf("migrate --commit: newImage epoch %d != target %d", newImage.Epoch, target)
+	}
+	if err := conn.BeginSerializable(ctx); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = conn.Rollback(ctx)
+		}
+	}()
+
+	var cur int
+	if _, err := conn.QueryRow(ctx, `SELECT n FROM epoch_current WHERE one=true`, nil, &cur); err != nil {
+		return err
+	}
+	if target <= cur {
+		return fmt.Errorf("migrate --commit: target %d is not ahead of the live epoch %d (concurrent migrate?)", target, cur)
+	}
+	var exists int
+	if found, err := conn.QueryRow(ctx, `SELECT 1 FROM epoch WHERE n=$1`, []any{target}, &exists); err != nil {
+		return err
+	} else if found {
+		return fmt.Errorf("migrate --commit: epoch %d already exists", target)
+	}
+
+	// AUTHORITATIVE O4 enumeration, in-transaction (ADR-08 §4). Fail-closed.
+	blockers, err := scanFindings(ctx, conn, target, banTags)
+	if err != nil {
+		return err
+	}
+	for _, f := range blockers {
+		if f.Rule == "undecodable" || f.Rule == "needs-hold" {
+			return fmt.Errorf("migrate --commit REFUSED (fail-closed): %s %s is %s — %s",
+				f.Scope, f.Subject, f.Rule, f.Message)
+		}
+	}
+
+	// Admit the std DELTA as ordinary immortal rows (a prepared std re-admission,
+	// ADR-08 §3), under one migration admission row. Every newImage std entry whose
+	// hash is not already catalogued lands here; unchanged std keeps its address
+	// (content-addressing, ADR-02 §6 — nothing is re-hashed).
+	verify := func(hash string, ast []byte) error {
+		nn, derr := rast.Decode(ast)
+		if derr != nil {
+			return derr
+		}
+		if !rast.Verify(nn, hash) {
+			return fmt.Errorf("hash mismatch for %s", hash)
+		}
+		return nil
+	}
+	// The delta is keyed on the NAME POINTER, not the hash: every std TYPE shares
+	// the opaque `unknown` genesis body, so a new std type reuses an existing
+	// definition hash (InsertDefinition ON CONFLICT DO NOTHING) but still needs a
+	// fresh std/<mod>/<name> pointer. Keying on the definition hash would miss it.
+	var delta []*Entry
+	for _, e := range newImage.Entries {
+		var one int
+		found, qerr := conn.QueryRow(ctx,
+			`SELECT 1 FROM name_pointer WHERE scope_kind=0 AND scope_id='' AND name=$1`, []any{e.CatalogName}, &one)
+		if qerr != nil {
+			return qerr
+		}
+		if !found {
+			delta = append(delta, e)
+		}
+	}
+	if len(delta) > 0 {
+		hashes := make([]string, 0, len(delta))
+		for _, e := range delta {
+			hashes = append(hashes, e.Hash)
+		}
+		var admissionID int64
+		if _, err := conn.QueryRow(ctx, `
+INSERT INTO admission (actor_kind, actor_id, via, submitted_hashes, verifier_report)
+VALUES ('system', 'migrate', 'cli', $1::text[], '{"migrate_std_delta":true}'::jsonb) RETURNING id`,
+			[]any{hashes}, &admissionID); err != nil {
+			return fmt.Errorf("migrate: insert admission: %w", err)
+		}
+		for _, e := range delta {
+			def := catalog.Def{
+				Hash:          e.Hash,
+				ASTSchemaVer:  rast.SchemaVersion,
+				Kind:          e.CatalogKind,
+				AST:           rast.Encode(e.Body),
+				CanonicalText: e.CanonicalText,
+				AdmissionID:   admissionID,
+			}
+			if _, err := catalog.InsertDefinition(ctx, conn, def, verify); err != nil {
+				return fmt.Errorf("migrate: insert %s: %w", e.CatalogName, err)
+			}
+			if _, err := catalog.InsertMeta(ctx, conn, catalog.Meta{Hash: e.Hash}); err != nil {
+				return fmt.Errorf("migrate: insert meta %s: %w", e.CatalogName, err)
+			}
+			moved, err := catalog.UpsertPointerCAS(ctx, conn, catalog.Pointer{
+				Name:        e.CatalogName,
+				ScopeKind:   0,
+				ScopeID:     "",
+				Kind:        e.CatalogKind,
+				Visibility:  "exported",
+				Hash:        e.Hash,
+				AdmissionID: admissionID,
+			}, nil)
+			if err != nil {
+				return fmt.Errorf("migrate: pointer %s: %w", e.CatalogName, err)
+			}
+			if !moved {
+				return fmt.Errorf("migrate: pointer %s already present", e.CatalogName)
+			}
+		}
+	}
+
+	// Insert the epoch row carrying the NEW std pair (root + attestation from the
+	// epoch-N image) — the R9 delta vs MigrateCommit, which copies the current pair.
+	if _, err := conn.Exec(ctx, `
+INSERT INTO epoch (n, std_manifest_root, dispatch_attestation, supersedes)
+VALUES ($1, $2, $3, $4)`, target, newImage.ManifestRoot, newImage.Attestation, cur); err != nil {
+		return err
+	}
+	// Materialize std_manifest membership for the new epoch from the (now-updated)
+	// live std pointer set — it now includes the delta.
+	if _, err := conn.Exec(ctx, `
+INSERT INTO std_manifest (epoch, hash)
+SELECT $1, hash FROM name_pointer
+ WHERE scope_kind=0 AND scope_id='' AND name LIKE 'std/%'
+ON CONFLICT DO NOTHING`, target); err != nil {
+		return err
+	}
+	if err := migrateFault(); err != nil {
+		return err
+	}
 	if _, err := conn.Exec(ctx, `UPDATE epoch_current SET n=$1 WHERE one=true`, target); err != nil {
 		return err
 	}

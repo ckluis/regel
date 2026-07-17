@@ -1,29 +1,55 @@
 {
   "epoch": 1,
   "flip": {
-    "agent_authority_enabled": false,
+    "agent_authority_enabled": true,
     "consistent": true,
-    "detail": "agent condition.restart refused RESTART_DISABLED",
-    "restart_gate_green": false
+    "detail": "agent condition.restart accepted (status=refused, code=INTERNAL)",
+    "restart_gate_green": true
   },
   "gates": {
     "authoring_pass_at_k": {
-      "completed_tasks": 2,
-      "corpus_run_n": 3,
+      "completed_tasks": 15,
+      "corpus_run_n": 15,
       "floor_pass1": 0.5,
       "floor_passk": 0.9,
       "full_corpus_n": 15,
       "iter_samples": [
         1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
         1
       ],
-      "k": 1,
+      "k": 3,
       "p95_iterations_to_green": 1,
       "pass_at_1": 1,
       "pass_at_k": 1,
       "per_task": {
+        "abs_val": true,
         "add_two": true,
-        "max_two": true
+        "celsius_to_f": true,
+        "clamp": true,
+        "digit_sum": true,
+        "factorial": true,
+        "fib": true,
+        "gcd": true,
+        "greet_concat": true,
+        "is_even": true,
+        "is_prime": true,
+        "max_two": true,
+        "power": true,
+        "stars": true,
+        "sum_to_n": true
       }
     },
     "fuel_capacity": {
@@ -33,22 +59,54 @@
       "p95_iterations_to_green": 1
     },
     "restart_accuracy": {
-      "M": 0,
-      "accuracy": 0,
-      "corpus_run_m": 3,
-      "correct": 0,
+      "M": 31,
+      "accuracy": 0.967741935483871,
+      "corpus_run_m": 31,
+      "correct": 30,
       "floor_M": 30,
       "floor_accuracy": 0.95,
       "full_corpus_m": 31,
-      "per_case": {}
+      "per_case": {
+        "budget_exhausted_1": true,
+        "cap_revoked_1": true,
+        "cap_revoked_2": true,
+        "deadline_hard_1": true,
+        "deadline_soft_1": true,
+        "det_assert_1": true,
+        "det_contract_1": true,
+        "det_divzero_1": true,
+        "det_notfound_1": false,
+        "det_parse_1": true,
+        "det_perm_1": true,
+        "det_schema_1": true,
+        "det_type_1": true,
+        "det_validation_1": true,
+        "external_timeout_1": true,
+        "fuel_exhausted_1": true,
+        "fuel_exhausted_2": true,
+        "fuel_exhausted_3": true,
+        "poison_1": true,
+        "poison_2": true,
+        "poison_3": true,
+        "poison_4": true,
+        "rate_limited_1": true,
+        "transient_5xx_1": true,
+        "transient_dns_1": true,
+        "transient_leader_1": true,
+        "transient_lock_1": true,
+        "transient_net_1": true,
+        "transient_net_2": true,
+        "transient_pool_1": true,
+        "transient_replica_1": true
+      }
     }
   },
-  "llm_calls_at_least": 6,
+  "llm_calls_at_least": 76,
   "pins": {
     "authoring": {
       "corpus_hash": "authoring:a12e91cbb8aca59943742a3952c15d06b0e0930e8981723b9aab1ca90314f51d",
       "corpus_size": 15,
-      "k": 1
+      "k": 3
     },
     "restart": {
       "corpus_hash": "restart:25d47338822e283bb05dd905a2dbecab422ebe3624511ebdff7cd105917ddc8e",
@@ -56,6 +114,6 @@
       "k": 1
     }
   },
-  "run_at": "2026-07-16T23:22:23Z",
-  "wall_seconds": 17
+  "run_at": "2026-07-17T10:04:29Z",
+  "wall_seconds": 520
 }

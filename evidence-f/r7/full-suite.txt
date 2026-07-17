@@ -1,0 +1,26 @@
+# R7 acceptance — uncached full suite against real PostgreSQL 16.13
+# Command:
+#   go clean -testcache && go test ./... -count=1
+# Captured: 2026-07-17T20:41:06Z
+# ----------------------------------------------------------------------------------------------
+
+ok  	regel.dev/regel/cmd/regel	3.254s
+ok  	regel.dev/regel/gate/m5eval	4.603s
+?   	regel.dev/regel/gate/nativetcb	[no test files]
+?   	regel.dev/regel/gate/redpath	[no test files]
+ok  	regel.dev/regel/internal/admission	19.587s
+ok  	regel.dev/regel/internal/catalog	3.881s
+ok  	regel.dev/regel/internal/cek	1.615s
+ok  	regel.dev/regel/internal/cfr	5.775s
+ok  	regel.dev/regel/internal/gitproj	5.385s
+ok  	regel.dev/regel/internal/kernel	422.655s
+ok  	regel.dev/regel/internal/lower	2.095s
+ok  	regel.dev/regel/internal/mcp	10.038s
+?   	regel.dev/regel/internal/mutants	[no test files]
+ok  	regel.dev/regel/internal/oracle	1.601s
+ok  	regel.dev/regel/internal/pgwire	1.610s
+ok  	regel.dev/regel/internal/rast	0.451s
+ok  	regel.dev/regel/internal/tsx	0.744s
+ok  	regel.dev/regel/internal/ui	0.417s
+
+=== GOTEST_EXIT=0 ===

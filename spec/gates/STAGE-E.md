@@ -291,11 +291,20 @@ durability machinery implemented existing ADR law without deviation.
    re-derived ADR-first to `ceil((p95_iter + 1) × cost × 1.5)` (ADR-12 §5
    BUILD-E R6) — floor 15 covers measured p95 fuel 10, capacity 15 now
    formula-derived with no adjustment in `derived_from`.
-7. **R7 restart-flip depth**: the flip's authority change is proven (refused
-   `RESTART_DISABLED` while red → accepted after green); the harness's post-flip
-   call then hits `INTERNAL` on its synthetic-frames continuation — agent-driven
-   restart of a REAL parked workflow end-to-end rides the Stage-B/D restart
-   machinery, not re-proven under the flip.
+7. **R7 restart-flip depth — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r7/`)**:
+   the flip's authority change is proven (refused `RESTART_DISABLED` while red →
+   accepted after green); the harness's post-flip call then hit `INTERNAL` on its
+   synthetic-frames continuation. Stage-F retires that synthetic evidence:
+   `internal/kernel/r7_restart_flip_depth_test.go` (`TestR7AgentRestartRealParkedWorkflow`)
+   admits a real `taak.signal` workflow, runs it on the REAL reactor/CEK machine to a
+   REAL `durable_condition` with REAL CFR frames, then drives an AGENT-DRIVEN
+   `condition.restart` over the real MCP door under the flipped authority — it runs to
+   the correct final result (`resolved:approve`) with exactly-once effects (1 outbox
+   row, 0 dupes) and an idempotent second-restart reject. RED witnessed first
+   (`evidence-f/r7/red-path.txt`): with the green gate withheld the agent restart is
+   REFUSED and the condition stays open with zero trace; GREEN in
+   `evidence-f/r7/green-path.txt`. The deep path now rides REAL frames on the
+   Stage-B/D restart machinery, not synthetic ones.
 8. **R8 canary pipeline leg** scoped to product-scope app defs (std native bodies
    are un-relowerable by construction; the encoder leg covers ALL defs, so tamper
    anywhere screams). Overlay scope rides the product proof.

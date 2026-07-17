@@ -1,0 +1,19 @@
+# R7 RED-PATH witness — agent-driven restart of a REAL parked workflow is REFUSED without the flip machinery
+# Command:
+#   R7_RED_WITNESS=1 go test ./internal/kernel/ -run TestR7AgentRestartRealParkedWorkflow -count=1 -v
+# Captured: 2026-07-17T20:40:56Z — real PostgreSQL 16.13
+# Expectation: FAIL. With the green restart m5_gate row withheld, the agent-driven restart of the
+#   REAL parked workflow is refused RESTART_DISABLED (see the RED log line below) and the deep
+#   end-to-end path cannot complete. The RED-block assertions that ran before the deliberate fatal
+#   confirm the clean/no-trace refusal: condition still open, workflow still parked, ZERO effects.
+# ----------------------------------------------------------------------------------------------
+
+=== RUN   TestR7AgentRestartRealParkedWorkflow
+    r7_restart_flip_depth_test.go:107: RED: agent condition.restart on the REAL parked workflow (cond=7c31bd1a-48f5-4b01-a122-88ebdcb6b675, frameHash=6d810950240c…) refused: status=refused code=RESTART_DISABLED detail=agent-facing condition.restart is disabled: restart-decision eval has not been run for this epoch (no m5_gate row) — use condition.list / workflow.inspect. Human operators retain the operator-plane restart buttons.
+    r7_restart_flip_depth_test.go:125: R7_RED_WITNESS: green gate withheld — the agent-driven restart of the REAL parked workflow stays refused (RESTART_DISABLED); the deep path cannot run to done without the flipped authority. This is the red witness R7 requires.
+--- FAIL: TestR7AgentRestartRealParkedWorkflow (0.26s)
+FAIL
+FAIL	regel.dev/regel/internal/kernel	0.663s
+FAIL
+
+=== GOTEST_EXIT=1 (nonzero = RED, as required) ===

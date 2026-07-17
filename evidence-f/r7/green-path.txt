@@ -1,0 +1,19 @@
+# R7 GREEN-PATH — agent-driven restart of a REAL parked workflow runs to a correct final result under the flip
+# Command:
+#   go test ./internal/kernel/ -run TestR7AgentRestartRealParkedWorkflow -count=1 -v
+# Captured: 2026-07-17T20:40:58Z — real PostgreSQL 16.13
+# Path proven: admit (taak.signal -> durable condition + restarts, then channel.send, then result)
+#   -> REAL reactor steps it to a REAL durable_condition with REAL CFR frames
+#   -> green restart m5_gate row flips the ADR-12 §7 authority ON
+#   -> AGENT condition.restart over the REAL MCP door -> ADR-05 §6 fenced pick + ClaimAndResume
+#   -> workflow done, result 'resolved:approve', exactly ONE outbox row (0 dupes),
+#      durable_condition resolved_by=agent:r7a, second restart idempotently ALREADY_RESOLVED.
+# ----------------------------------------------------------------------------------------------
+
+=== RUN   TestR7AgentRestartRealParkedWorkflow
+    r7_restart_flip_depth_test.go:107: RED: agent condition.restart on the REAL parked workflow (cond=e2ebcf70-742f-484d-8b0b-cdaf0fdb5f2f, frameHash=6d810950240c…) refused: status=refused code=RESTART_DISABLED detail=agent-facing condition.restart is disabled: restart-decision eval has not been run for this epoch (no m5_gate row) — use condition.list / workflow.inspect. Human operators retain the operator-plane restart buttons.
+--- PASS: TestR7AgentRestartRealParkedWorkflow (0.26s)
+PASS
+ok  	regel.dev/regel/internal/kernel	0.578s
+
+=== GOTEST_EXIT=0 (0 = GREEN) ===

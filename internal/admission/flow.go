@@ -398,7 +398,105 @@ func (w *v2walk) walkStmt(st *rast.Node) {
 		if len(st.Kids) > 0 && st.Kids[0] != nil {
 			w.walkStmts(st.Kids[0].Kids)
 		}
+	// BUILD-E C4 (STAGE-C §10.4): the full statement grammar. Before these arms a
+	// statement inside for / for-of / while / do-while / switch / try was never
+	// walked — a pii escape smuggled through any of them was admitted blind
+	// (RED: c4_controlflow_test.go, 'outcome = "admitted" … diags=[]'). Binder
+	// scope discipline mirrors the ADR-02 printer exactly (print.go).
+	case rast.KThrow:
+		if len(st.Kids) > 0 {
+			w.checkExpr(st.Kids[0])
+		}
+	case rast.KFor:
+		// Kids = [init|None, cond|None, incr|None, body]; init binders scoped to the loop.
+		base := len(w.env)
+		if !st.Kids[0].IsNone() {
+			if st.Kids[0].Kind == rast.KVarDecl {
+				w.walkStmt(st.Kids[0])
+			} else {
+				w.checkExpr(st.Kids[0])
+			}
+		}
+		if !st.Kids[1].IsNone() {
+			w.checkExpr(st.Kids[1])
+		}
+		if !st.Kids[2].IsNone() {
+			w.checkExpr(st.Kids[2])
+		}
+		w.walkStmt(st.Kids[3])
+		w.env = w.env[:base]
+	case rast.KForOf:
+		// Kids = [decl(KVarDecl→KList→KDeclr→pattern), iterExpr, body]; the iterable
+		// is evaluated in the outer scope; an element of a pii-bearing iterable IS
+		// pii (tainted() recurses arrays), so the loop binder inherits the taint.
+		base := len(w.env)
+		iter := st.Kids[1]
+		w.checkExpr(iter)
+		pii := w.tainted(iter)
+		var ids []*rast.Node
+		collectBindIds(st.Kids[0].Kids[0].Kids[0].Kids[0], &ids)
+		for _, b := range ids {
+			w.push(w.di.nameOf[b], pii)
+		}
+		w.walkStmt(st.Kids[2])
+		w.env = w.env[:base]
+	case rast.KWhile:
+		w.checkExpr(st.Kids[0])
+		w.walkStmt(st.Kids[1])
+	case rast.KDoWhile:
+		w.walkStmt(st.Kids[0])
+		w.checkExpr(st.Kids[1])
+	case rast.KSwitch:
+		// Kids = [disc, KList of KClause]; clause binders pop at clause end
+		// (walkStmts), matching the printer's per-clause intro/pop.
+		w.checkExpr(st.Kids[0])
+		for _, cl := range st.Kids[1].Kids {
+			if cl.U&1 == 0 && !cl.Kids[0].IsNone() {
+				w.checkExpr(cl.Kids[0])
+			}
+			w.walkStmts(cl.Kids[1].Kids)
+		}
+	case rast.KTry:
+		// Kids = [tryBlock, catch|None, finallyBlock|None]. The catch binder is
+		// tainted CONSERVATIVELY when the try block throws any non-literal value —
+		// a thrown pii value re-enters scope through it.
+		w.walkStmt(st.Kids[0])
+		if !st.Kids[1].IsNone() {
+			c := st.Kids[1] // KCatch: U bit0 hasParam; Kids=[pattern|None, block]
+			base := len(w.env)
+			if c.U&1 == 1 {
+				pii := throwsNonLiteral(st.Kids[0])
+				var ids []*rast.Node
+				collectBindIds(c.Kids[0], &ids)
+				for _, b := range ids {
+					w.push(w.di.nameOf[b], pii)
+				}
+			}
+			w.walkStmt(c.Kids[1])
+			w.env = w.env[:base]
+		}
+		if !st.Kids[2].IsNone() {
+			w.walkStmt(st.Kids[2])
+		}
 	}
+}
+
+// throwsNonLiteral reports whether any KThrow under n throws a non-literal
+// expression (the conservative catch-binder taint trigger: only literal throws
+// are provably pii-free without cross-scope resolution).
+func throwsNonLiteral(n *rast.Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.Kind == rast.KThrow && len(n.Kids) > 0 && !isLiteralNode(n.Kids[0]) {
+		return true
+	}
+	for _, k := range n.Kids {
+		if throwsNonLiteral(k) {
+			return true
+		}
+	}
+	return false
 }
 
 // collectPiiRefs records the names of every pii binder referenced in a sink
@@ -647,6 +745,94 @@ func (w *v5walk) walkStmt(st *rast.Node) {
 	case rast.KBlock:
 		if len(st.Kids) > 0 && st.Kids[0] != nil {
 			w.walkStmts(st.Kids[0].Kids)
+		}
+	// BUILD-E C4 (STAGE-C §10.4): full statement grammar for the capture verifier.
+	// Before these arms an await INSIDE for/for-of/while/do-while/switch/try was
+	// invisible — no snapshotAtRisk ever fired, so a host resource live across it
+	// was admitted blind (RED: c4_controlflow_test.go). Loop bodies re-execute:
+	// any await ANYWHERE in a loop makes every in-scope non-serializable binder
+	// live across a checkpoint on the next iteration, so loops snapshot AT ENTRY
+	// (loop-carried liveness), then walk their parts in order.
+	case rast.KThrow:
+		if len(st.Kids) > 0 {
+			w.refsAtRisk(st.Kids[0])
+			if containsAwait(st.Kids[0]) {
+				w.snapshotAtRisk()
+			}
+		}
+	case rast.KFor:
+		base := len(w.env)
+		if containsAwait(st) {
+			w.snapshotAtRisk()
+		}
+		if !st.Kids[0].IsNone() {
+			if st.Kids[0].Kind == rast.KVarDecl {
+				w.walkStmt(st.Kids[0])
+			} else {
+				w.refsAtRisk(st.Kids[0])
+			}
+		}
+		if !st.Kids[1].IsNone() {
+			w.refsAtRisk(st.Kids[1])
+		}
+		if !st.Kids[2].IsNone() {
+			w.refsAtRisk(st.Kids[2])
+		}
+		w.walkStmt(st.Kids[3])
+		w.env = w.env[:base]
+	case rast.KForOf:
+		base := len(w.env)
+		if containsAwait(st) {
+			w.snapshotAtRisk()
+		}
+		w.refsAtRisk(st.Kids[1])
+		var ids []*rast.Node
+		collectBindIds(st.Kids[0].Kids[0].Kids[0].Kids[0], &ids)
+		for _, b := range ids {
+			w.push(w.di.nameOf[b], false)
+		}
+		w.walkStmt(st.Kids[2])
+		w.env = w.env[:base]
+	case rast.KWhile:
+		if containsAwait(st) {
+			w.snapshotAtRisk()
+		}
+		w.refsAtRisk(st.Kids[0])
+		w.walkStmt(st.Kids[1])
+	case rast.KDoWhile:
+		if containsAwait(st) {
+			w.snapshotAtRisk()
+		}
+		w.walkStmt(st.Kids[0])
+		w.refsAtRisk(st.Kids[1])
+	case rast.KSwitch:
+		w.refsAtRisk(st.Kids[0])
+		if containsAwait(st.Kids[0]) {
+			w.snapshotAtRisk()
+		}
+		for _, cl := range st.Kids[1].Kids {
+			if cl.U&1 == 0 && !cl.Kids[0].IsNone() {
+				w.refsAtRisk(cl.Kids[0])
+			}
+			w.walkStmts(cl.Kids[1].Kids)
+		}
+	case rast.KTry:
+		w.walkStmt(st.Kids[0])
+		if !st.Kids[1].IsNone() {
+			c := st.Kids[1]
+			base := len(w.env)
+			if c.U&1 == 1 {
+				var ids []*rast.Node
+				collectBindIds(c.Kids[0], &ids)
+				for _, b := range ids {
+					w.push(w.di.nameOf[b], false)
+				}
+			}
+			w.walkStmt(c.Kids[1])
+			w.env = w.env[:base]
+		}
+		if !st.Kids[2].IsNone() {
+			w.walkStmt(st.Kids[2])
 		}
 	}
 }

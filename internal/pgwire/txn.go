@@ -20,6 +20,18 @@ func (c *Conn) BeginSerializable(ctx context.Context) error {
 	return err
 }
 
+// BeginReadSnapshot starts a REPEATABLE READ, READ ONLY transaction — the
+// SERVE-side read isolation (ADR-05 §7 / L7 R1 P2.7). Every read issued inside sees
+// ONE consistent snapshot, so a name_pointer / derived-artifact flip a concurrent
+// admission commits mid-serve cannot split dispatch across two reads (a READ
+// COMMITTED serve can). READ ONLY keeps it out of SSI, so it never contends with the
+// SERIALIZABLE writers. Admission and the step transaction stay SERIALIZABLE
+// (BeginSerializable); this is only for the read-only render/mount phase.
+func (c *Conn) BeginReadSnapshot(ctx context.Context) error {
+	_, err := c.ExecSimple(ctx, "BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+	return err
+}
+
 // Commit commits the current transaction.
 func (c *Conn) Commit(ctx context.Context) error {
 	_, err := c.ExecSimple(ctx, "COMMIT")

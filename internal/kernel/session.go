@@ -605,6 +605,26 @@ type mountResult struct {
 // mountSession resolves a view, renders first paint, and creates the session
 // continuation row + its subscriptions in ONE transaction (ADR-11 §5). The row is
 // message-parked on its own id channel; eventSeq starts at step_seq 0.
+// serveReadSnapshot runs fn inside a REPEATABLE READ, READ ONLY transaction on conn
+// — the SERVE-side read isolation (L7 R1 P2.7). The render/mount read phase issues
+// several reads (loadViewMeta's resource + template artifact, the component
+// template, the mask context, renderView's data rows); at READ COMMITTED a
+// concurrent admission committing a name_pointer / derived-artifact flip BETWEEN two
+// of them splits dispatch (template from one epoch, rows from another). One snapshot
+// pins them all. Mirrors dbreader.Query's asOf snapshot. fn must not write (the
+// SERIALIZABLE write phase runs AFTER this returns); the read-only txn is committed
+// (nothing to persist) or rolled back on error.
+func serveReadSnapshot(ctx context.Context, conn *pgwire.Conn, fn func() error) error {
+	if err := conn.BeginReadSnapshot(ctx); err != nil {
+		return err
+	}
+	if err := fn(); err != nil {
+		_ = conn.Rollback(ctx)
+		return err
+	}
+	return conn.Commit(ctx)
+}
+
 func (s *Server) mountSession(ctx context.Context, view, principal, horizon, component string, asOf *time.Time) (mountResult, error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
@@ -612,60 +632,82 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon, com
 	}
 	defer s.pool.Release(conn)
 
-	// BUILD-E D2: the operatorPlane is a GLOBAL operator surface, not backed by a
-	// derived resource — a dedicated server-rendered read of the live substrate
-	// tables (durable_condition inbox + gate_refusal ledger). Read-only in v1 (no
-	// SSE/continuation row; named cut in operatorplane.go).
-	if strings.Trim(view, "/") == "operatorPlane" {
-		html, herr := s.renderOperatorPlane(ctx, conn)
-		if herr != nil {
-			return mountResult{}, herr
+	// The whole read/render phase runs under ONE REPEATABLE READ snapshot (L7): the
+	// template artifact, the component template, and the data rows are all resolved
+	// against the same instant, so a concurrent re-derivation cannot split dispatch.
+	var (
+		resource, kind, rowID string
+		vm                    *viewMeta
+		defHash               string
+		sess                  *sessionCFR
+		html                  string
+		state                 map[string]ui.Materialized
+		subs                  []subKey
+		rowVersion            string
+		rows                  []ui.RowData
+		earlyOP               *mountResult // operatorPlane early return (read-only, no continuation)
+	)
+	if rerr := serveReadSnapshot(ctx, conn, func() error {
+		// BUILD-E D2: the operatorPlane is a GLOBAL operator surface, not backed by a
+		// derived resource — a dedicated server-rendered read of the live substrate
+		// tables (durable_condition inbox + gate_refusal ledger). Read-only in v1 (no
+		// SSE/continuation row; named cut in operatorplane.go).
+		if strings.Trim(view, "/") == "operatorPlane" {
+			opHTML, herr := s.renderOperatorPlane(ctx, conn)
+			if herr != nil {
+				return herr
+			}
+			earlyOP = &mountResult{SessionID: admission.NewUUID(), EventSeq: 0, HTML: opHTML}
+			return nil
 		}
-		return mountResult{SessionID: admission.NewUUID(), EventSeq: 0, HTML: html}, nil
-	}
 
-	resource, kind, rowID, perr := parseView(view)
-	if perr != nil {
-		return mountResult{}, perr
-	}
-	vm, err := loadViewMeta(ctx, conn, resource, asOf)
-	if err != nil {
-		return mountResult{}, err
-	}
-	// BUILD-E D3: a `?component=<name>` mount overlays a hand-authored component into
-	// the detail slot — same resource row (props), same rowId subscription, same
-	// render/diff path as the derived detail it replaces (ADR-10 §7 "polish overlays
-	// derivation; a hand-built component admits into the same slot a derived one
-	// filled"). defHash comes from the component's own template.
-	defHash := ""
-	if component != "" {
-		kind = "component"
-		ct, cerr := loadComponentTemplate(ctx, conn, component, vm)
-		if cerr != nil {
-			return mountResult{}, cerr
+		var perr error
+		resource, kind, rowID, perr = parseView(view)
+		if perr != nil {
+			return perr
 		}
-		defHash = ct.DefHash
-	} else {
-		// BUILD-E D2 (red-path a): board is derivable ONLY for a states-bearing
-		// resource; a board mount on a stateless one is a clean derivation refusal,
-		// not a crash — the template is simply absent.
-		if vm.template(kind) == nil {
-			return mountResult{}, fmt.Errorf("session: %s has no %s surface (board requires a states field)", resource, kind)
+		var verr error
+		vm, verr = loadViewMeta(ctx, conn, resource, asOf)
+		if verr != nil {
+			return verr
 		}
-		defHash = vm.template(kind).DefHash
+		// BUILD-E D3: a `?component=<name>` mount overlays a hand-authored component into
+		// the detail slot — same resource row (props), same rowId subscription, same
+		// render/diff path as the derived detail it replaces (ADR-10 §7 "polish overlays
+		// derivation; a hand-built component admits into the same slot a derived one
+		// filled"). defHash comes from the component's own template.
+		if component != "" {
+			kind = "component"
+			ct, cerr := loadComponentTemplate(ctx, conn, component, vm)
+			if cerr != nil {
+				return cerr
+			}
+			defHash = ct.DefHash
+		} else {
+			// BUILD-E D2 (red-path a): board is derivable ONLY for a states-bearing
+			// resource; a board mount on a stateless one is a clean derivation refusal,
+			// not a crash — the template is simply absent.
+			if vm.template(kind) == nil {
+				return fmt.Errorf("session: %s has no %s surface (board requires a states field)", resource, kind)
+			}
+			defHash = vm.template(kind).DefHash
+		}
+		mc, merr := admission.BuildMaskCtx(ctx, conn, principal)
+		if merr != nil {
+			return merr
+		}
+		sess = &sessionCFR{
+			View: view, Kind: kind, Resource: resource, Component: component, Table: vm.Table, DefHash: defHash,
+			RowID: rowID, Principal: principal, Horizon: horizon,
+			Draft: map[string]string{}, UILocal: map[string]string{},
+		}
+		html, state, subs, rowVersion, rows, err = renderView(ctx, conn, vm, sess, mc)
+		return err
+	}); rerr != nil {
+		return mountResult{}, rerr
 	}
-	mc, err := admission.BuildMaskCtx(ctx, conn, principal)
-	if err != nil {
-		return mountResult{}, err
-	}
-	sess := &sessionCFR{
-		View: view, Kind: kind, Resource: resource, Component: component, Table: vm.Table, DefHash: defHash,
-		RowID: rowID, Principal: principal, Horizon: horizon,
-		Draft: map[string]string{}, UILocal: map[string]string{},
-	}
-	html, state, subs, rowVersion, rows, err := renderView(ctx, conn, vm, sess, mc)
-	if err != nil {
-		return mountResult{}, err
+	if earlyOP != nil {
+		return *earlyOP, nil
 	}
 	sess.LastSnap = snapOf(state)
 	sess.setDigest(ui.FullDigest(sess.LastSnap))

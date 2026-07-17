@@ -225,38 +225,47 @@ func (s *Server) resyncSession(ctx context.Context, sessionID string) (resyncRes
 	}
 	defer s.pool.Release(conn)
 
-	var framesHex string
-	var seq int64
-	found, err := conn.QueryRow(ctx,
-		`SELECT encode(frames,'hex'), step_seq FROM continuation WHERE id=$1 AND kind='session'`,
-		[]any{sessionID}, &framesHex, &seq)
-	if err != nil {
-		return resyncResult{}, err
-	}
-	if !found {
-		return resyncResult{}, fmt.Errorf("session: no such session %q", sessionID)
-	}
-	st, derr := decodeFramesHex(framesHex)
-	if derr != nil {
-		return resyncResult{}, derr
-	}
-	sess, serr := sessionFromState(st)
-	if serr != nil {
-		return resyncResult{}, serr
-	}
-	// Resync/live steps resolve the HEAD template (asOf nil). An as-of mount is a
-	// read-only historical FIRST PAINT (BUILD-E scenario d); subsequent live steps
-	// track head — documented cut, not a correctness gap for a point-in-time view.
-	vm, verr := loadViewMeta(ctx, conn, sess.Resource, nil)
-	if verr != nil {
-		return resyncResult{}, verr
-	}
-	mc, merr := admission.BuildMaskCtx(ctx, conn, sess.Principal)
-	if merr != nil {
-		return resyncResult{}, merr
-	}
-	html, state, _, _, _, rerr := renderView(ctx, conn, vm, sess, mc)
-	if rerr != nil {
+	// The resync re-render reads the continuation, the template artifact, the mask
+	// context, and the data rows — one snapshot pins them (L7), so a resync issued
+	// while an admission commits a template flip cannot cross-wire the rebuilt frame.
+	var (
+		seq   int64
+		html  string
+		state map[string]ui.Materialized
+	)
+	if rerr := serveReadSnapshot(ctx, conn, func() error {
+		var framesHex string
+		found, e := conn.QueryRow(ctx,
+			`SELECT encode(frames,'hex'), step_seq FROM continuation WHERE id=$1 AND kind='session'`,
+			[]any{sessionID}, &framesHex, &seq)
+		if e != nil {
+			return e
+		}
+		if !found {
+			return fmt.Errorf("session: no such session %q", sessionID)
+		}
+		st, derr := decodeFramesHex(framesHex)
+		if derr != nil {
+			return derr
+		}
+		sess, serr := sessionFromState(st)
+		if serr != nil {
+			return serr
+		}
+		// Resync/live steps resolve the HEAD template (asOf nil). An as-of mount is a
+		// read-only historical FIRST PAINT (BUILD-E scenario d); subsequent live steps
+		// track head — documented cut, not a correctness gap for a point-in-time view.
+		vm, verr := loadViewMeta(ctx, conn, sess.Resource, nil)
+		if verr != nil {
+			return verr
+		}
+		mc, merr := admission.BuildMaskCtx(ctx, conn, sess.Principal)
+		if merr != nil {
+			return merr
+		}
+		html, state, _, _, _, err = renderView(ctx, conn, vm, sess, mc)
+		return err
+	}); rerr != nil {
 		return resyncResult{}, rerr
 	}
 	disp := displayMapOf(state)

@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Taal — a small language for building the BEAM on Go</title>
+<style>
+  :root{
+    --paper:#f8f3ea;
+    --paper-deep:#f1eadd;
+    --ink:#1c1811;
+    --muted:#6e6455;
+    --line:#d9cfbd;
+    --orange:#ff6200;
+    --orange-ink:#c44a00;
+    --code-bg:#181410;
+    --code-ink:#e8ddca;
+    --code-dim:#8a7d68;
+    --code-key:#ff8a3d;
+    --code-str:#c9b458;
+    --code-typ:#9fc0a8;
+    --code-com:#6e6152;
+    --display:"Fraunces","Charter","Iowan Old Style",Georgia,serif;
+    --body:"Inter","Helvetica Neue",system-ui,-apple-system,sans-serif;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto}
+    *,*::before,*::after{animation:none!important;transition:none!important}
+  }
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--body);
+    font-size:17px;
+    line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{background:var(--orange);color:#fff}
+  a{color:var(--orange-ink);text-decoration:none;border-bottom:1px solid var(--line)}
+  a:hover{border-bottom-color:var(--orange-ink)}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--orange-ink);outline-offset:3px;border-radius:2px}
+
+  .wrap{max-width:980px;margin:0 auto;padding:0 28px}
+
+  /* ---------- top rail ---------- */
+  .topbar{
+    border-bottom:1px solid var(--line);
+    background:var(--paper);
+    position:sticky;top:0;z-index:20;
+  }
+  .topbar .wrap{
+    display:flex;align-items:baseline;justify-content:space-between;
+    padding-top:14px;padding-bottom:14px;
+  }
+  .wordmark{font-family:var(--display);font-weight:600;font-size:1.15rem;letter-spacing:-.01em;border:none}
+  .wordmark .dot{color:var(--orange)}
+  .topnav{display:flex;gap:22px;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase}
+  .topnav a{color:var(--muted);border:none}
+  .topnav a:hover{color:var(--orange-ink)}
+  @media(max-width:720px){.topnav{display:none}}
+
+  /* ---------- hero ---------- */
+  .hero{padding:84px 0 60px;border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--orange-ink);margin-bottom:26px;display:flex;align-items:center;gap:12px;
+  }
+  .eyebrow::before{content:"";display:inline-block;width:34px;height:2px;background:var(--orange)}
+  h1{
+    font-family:var(--display);font-weight:560;font-variation-settings:"opsz" 72;
+    font-size:clamp(2.5rem,6.4vw,4.4rem);line-height:1.04;letter-spacing:-.022em;
+    max-width:17ch;
+  }
+  h1 em{font-style:italic;color:var(--orange-ink)}
+  .hero p.dek{
+    margin-top:28px;max-width:58ch;font-size:1.12rem;color:var(--muted);line-height:1.7;
+  }
+  .hero p.dek strong{color:var(--ink);font-weight:600}
+
+  /* pipeline rail — the signature */
+  .pipeline{
+    margin-top:56px;display:flex;align-items:stretch;gap:0;
+    font-family:var(--mono);font-size:.8rem;flex-wrap:wrap;
+  }
+  .pipe-node{
+    border:1px solid var(--line);background:var(--paper-deep);
+    padding:14px 20px;display:flex;flex-direction:column;gap:3px;min-width:150px;
+  }
+  .pipe-node .t{font-weight:700;color:var(--ink)}
+  .pipe-node .s{color:var(--muted);font-size:.7rem}
+  .pipe-node.hot{background:var(--orange);border-color:var(--orange)}
+  .pipe-node.hot .t{color:#fff}
+  .pipe-node.hot .s{color:#ffd9c0}
+  .pipe-arrow{
+    display:flex;align-items:center;padding:0 12px;color:var(--orange-ink);
+    font-size:1rem;user-select:none;
+  }
+  @media(max-width:720px){
+    .pipeline{flex-direction:column}
+    .pipe-arrow{padding:6px 0 6px 20px;transform:rotate(90deg);transform-origin:20px center;width:20px}
+  }
+
+  /* ---------- sections ---------- */
+  section{padding:72px 0;border-bottom:1px solid var(--line)}
+  .kicker{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--orange-ink);margin-bottom:14px;
+  }
+  h2{
+    font-family:var(--display);font-weight:560;font-size:clamp(1.7rem,3.4vw,2.4rem);
+    letter-spacing:-.015em;line-height:1.15;max-width:26ch;margin-bottom:22px;
+  }
+  section p{max-width:66ch;margin-bottom:18px}
+  section p:last-child{margin-bottom:0}
+  .lede{font-size:1.08rem}
+  .note{
+    border-left:3px solid var(--orange);background:var(--paper-deep);
+    padding:16px 20px;max-width:66ch;margin:26px 0;font-size:.95rem;color:var(--muted);
+  }
+  .note strong{color:var(--ink)}
+
+  /* ---------- code ---------- */
+  pre{
+    background:var(--code-bg);color:var(--code-ink);
+    font-family:var(--mono);font-size:.82rem;line-height:1.62;
+    padding:22px 24px;overflow-x:auto;border-radius:0;
+    margin:0;
+  }
+  .codeblock{margin:30px 0;max-width:860px}
+  .codelabel{
+    display:flex;justify-content:space-between;align-items:center;
+    font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;
+    background:var(--ink);color:#cbbfa8;padding:8px 16px;
+  }
+  .codelabel .lang{color:var(--code-key)}
+  .k{color:var(--code-key)}
+  .s{color:var(--code-str)}
+  .ty{color:var(--code-typ)}
+  .c{color:var(--code-com);font-style:italic}
+  .dim{color:var(--code-dim)}
+
+  /* side-by-side */
+  .duo{display:grid;grid-template-columns:1fr 1fr;gap:0;margin:34px 0;position:relative}
+  .duo .codeblock{margin:0}
+  .duo .seam{
+    position:absolute;left:50%;top:0;bottom:0;width:2px;background:var(--orange);
+    transform:translateX(-1px);z-index:2;
+  }
+  .duo .seamlabel{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;
+    background:var(--orange);color:#fff;font-family:var(--mono);font-size:.66rem;
+    letter-spacing:.1em;padding:5px 10px;text-transform:uppercase;white-space:nowrap;
+  }
+  @media(max-width:860px){
+    .duo{grid-template-columns:1fr}
+    .duo .seam{display:none}
+    .duo .seamlabel{position:static;transform:none;display:inline-block;margin:0}
+    .duo .seamwrap{display:flex;justify-content:center;padding:10px 0}
+  }
+  @media(min-width:861px){.duo .seamwrap{display:contents}}
+
+  /* ---------- layer stack ---------- */
+  .stack{margin:40px 0 10px;max-width:860px}
+  .layer{
+    border:1px solid var(--line);border-bottom:none;background:var(--paper);
+    display:grid;grid-template-columns:170px 1fr;gap:0;
+  }
+  .layer:last-child{border-bottom:1px solid var(--line)}
+  .layer .name{
+    padding:20px 22px;border-right:1px solid var(--line);
+    font-family:var(--display);font-weight:600;font-size:1.25rem;letter-spacing:-.01em;
+    display:flex;flex-direction:column;gap:4px;justify-content:center;
+  }
+  .layer .name .nl{font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--orange-ink);font-weight:500}
+  .layer .body{padding:20px 24px;font-size:.94rem;color:var(--muted)}
+  .layer .body strong{color:var(--ink)}
+  .layer .body .analog{
+    font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--orange-ink);display:block;margin-bottom:6px;
+  }
+  .layer.substrate{background:var(--paper-deep)}
+  .layer.taal-layer{background:var(--ink);color:var(--paper)}
+  .layer.taal-layer .name{color:var(--paper);border-right-color:#3a3226}
+  .layer.taal-layer .body{color:#b8ac95}
+  .layer.taal-layer .body strong{color:var(--paper)}
+  .layer.taal-layer .name .nl,.layer.taal-layer .body .analog{color:var(--orange)}
+  @media(max-width:680px){
+    .layer{grid-template-columns:1fr}
+    .layer .name{border-right:none;border-bottom:1px solid var(--line);flex-direction:row;align-items:baseline;gap:12px}
+    .layer.taal-layer .name{border-bottom-color:#3a3226}
+  }
+
+  /* ---------- principle grid ---------- */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+    border:1px solid var(--line);margin:34px 0;max-width:860px}
+  .cell{background:var(--paper);padding:24px 26px}
+  .cell h3{font-family:var(--display);font-weight:600;font-size:1.06rem;margin-bottom:8px;letter-spacing:-.01em}
+  .cell p{font-size:.9rem;color:var(--muted);max-width:none;margin:0}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+
+  /* not-list */
+  .nots{margin:30px 0;max-width:860px;border:1px solid var(--line)}
+  .not{
+    display:grid;grid-template-columns:200px 1fr;border-bottom:1px solid var(--line);
+  }
+  .not:last-child{border-bottom:none}
+  .not .what{
+    padding:16px 22px;font-family:var(--mono);font-size:.8rem;color:var(--ink);
+    border-right:1px solid var(--line);background:var(--paper-deep);
+    text-decoration:line-through;text-decoration-color:var(--orange);text-decoration-thickness:2px;
+    display:flex;align-items:center;
+  }
+  .not .why{padding:16px 22px;font-size:.9rem;color:var(--muted)}
+  @media(max-width:680px){
+    .not{grid-template-columns:1fr}
+    .not .what{border-right:none;border-bottom:1px dashed var(--line)}
+  }
+
+  /* footer */
+  footer{padding:56px 0 72px}
+  .family{
+    font-family:var(--mono);font-size:.78rem;letter-spacing:.12em;text-transform:lowercase;
+    color:var(--muted);display:flex;gap:18px;flex-wrap:wrap;align-items:baseline;
+  }
+  .family .this{color:var(--orange-ink);font-weight:700}
+  footer p{margin-top:22px;font-size:.85rem;color:var(--muted);max-width:60ch}
+</style>
+</head>
+<body>
+
+<nav class="topbar" aria-label="Page">
+  <div class="wrap">
+    <a class="wordmark" href="#top">taal<span class="dot">.</span></a>
+    <div class="topnav">
+      <a href="#premise">Premise</a>
+      <a href="#inversion">The inversion</a>
+      <a href="#stack">The stack</a>
+      <a href="#language">The language</a>
+      <a href="#agents">Agents</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="eyebrow">taal · dutch, “language” · rhymes with “ahl”</div>
+    <h1>Humans write Taal.<br>Agents verify <em>Go</em>.</h1>
+    <p class="dek">
+      Taal is a small, strict ML that compiles to <strong>gofmt-clean, idiomatic Go</strong> —
+      and a framework that rebuilds the load-bearing ideas of the BEAM on the Go runtime.
+      One binary. One database. Actors, supervision, live views, declarative resources,
+      transactional jobs, durable execution. <strong>No externalities except Postgres.</strong>
+    </p>
+
+    <div class="pipeline" aria-label="Compilation pipeline">
+      <div class="pipe-node">
+        <span class="t">invoice.taal</span>
+        <span class="s">what humans author</span>
+      </div>
+      <div class="pipe-arrow" aria-hidden="true">→</div>
+      <div class="pipe-node hot">
+        <span class="t">taalc</span>
+        <span class="s">the whole framework</span>
+      </div>
+      <div class="pipe-arrow" aria-hidden="true">→</div>
+      <div class="pipe-node">
+        <span class="t">invoice.go</span>
+        <span class="s">what agents verify</span>
+      </div>
+      <div class="pipe-arrow" aria-hidden="true">→</div>
+      <div class="pipe-node">
+        <span class="t">./mono</span>
+        <span class="s">one static binary + postgres</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="premise">
+  <div class="wrap">
+    <div class="kicker">Premise</div>
+    <h2>The monolith that scales by attaching monoliths</h2>
+    <p class="lede">
+      Every node runs the same binary and carries the whole system's code. What differs is
+      <strong>tuning</strong>: at boot, a node is told which roles to serve — web, live views,
+      workers, analytics — and its supervision tree starts only those subtrees. Capacity is
+      added by starting another binary and pointing it at the swarm. There is no orchestration
+      layer, no message broker, no cache tier, no job service. The database is the only
+      externality, and it doubles as the coordination fabric.
+    </p>
+    <p>
+      This is the architecture the BEAM was built for, transplanted onto a substrate chosen for
+      a different virtue: Go's compiler, formatter, and runtime form the fastest, most
+      unambiguous verification loop in mainstream software. Taal exists to close the gap between
+      those two worlds — Erlang's <em>shape</em>, Go's <em>feedback</em>.
+    </p>
+  </div>
+</section>
+
+<section id="inversion">
+  <div class="wrap">
+    <div class="kicker">The inversion</div>
+    <h2>The generated code is the interface</h2>
+    <p class="lede">
+      Most compile-to-X languages treat their output as exhaust. Taal treats it as a
+      <strong>contract</strong>: everything <code style="font-family:var(--mono);font-size:.88em">taalc</code>
+      emits is gofmt-formatted, idiomatically named, and structured the way a careful Go
+      engineer would have written it by hand. That single decision does most of the work in
+      this system:
+    </p>
+
+    <div class="grid2">
+      <div class="cell">
+        <h3>Agents never need to learn Taal</h3>
+        <p>An agent reviews, tests, profiles, and debugs the emitted Go with tools it already
+        masters — go vet, the race detector, pprof, delve. Taal is upstream of the loop, never
+        inside it.</p>
+      </div>
+      <div class="cell">
+        <h3>The escape hatch is always open</h3>
+        <p>Any file can be ejected: delete the .taal source, keep the .go output, and continue
+        by hand. Adopting Taal is never a one-way door.</p>
+      </div>
+      <div class="cell">
+        <h3>Two verifiers, one edit</h3>
+        <p>Every change is checked twice — first by Taal's typechecker (ADTs, exhaustiveness,
+        no nil), then by the Go compiler. Both are sub-second. Both produce pointed,
+        one-sentence errors.</p>
+      </div>
+      <div class="cell">
+        <h3>The corpus stays canonical</h3>
+        <p>gofmt means there is exactly one way the output looks. A model trained or prompted
+        on this corpus sees zero stylistic variance — the property that makes generation
+        reliable.</p>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>The macro layer Go never had.</strong> Elixir's Ash derives APIs, authorization,
+      and state machines from declarations using macros. Go can't express that — but a compiler
+      can. Taal performs the same derivation as code generation, and the result is arguably
+      better for agents than macros: the derived behavior exists as inspectable Go, not
+      compile-time magic.
+    </div>
+  </div>
+</section>
+
+<section id="stack">
+  <div class="wrap">
+    <div class="kicker">The stack</div>
+    <h2>Five layers, one binary, one database</h2>
+    <p>
+      Each layer is a small framework kernel with a Dutch name and a familiar ancestor. Every
+      layer compiles into the same binary; a node's role tuning decides which ones wake up.
+    </p>
+
+    <div class="stack">
+      <div class="layer taal-layer">
+        <div class="name">Taal <span class="nl">the language</span></div>
+        <div class="body">
+          <span class="analog">ancestor · elixir, gleam</span>
+          A strict, eager ML: algebraic data types, exhaustive matching, Result over
+          <strong>if err != nil</strong>, no nil, local inference. Compiles every layer below
+          into readable Go.
+        </div>
+      </div>
+      <div class="layer">
+        <div class="name">Bron <span class="nl">“source”</span></div>
+        <div class="body">
+          <span class="analog">ancestor · ash</span>
+          Declarative resources. Fields, types, actions, and policies in one place — REST
+          handlers, authorization checks, validations, migrations, and state machines
+          <strong>derived</strong> at compile time.
+        </div>
+      </div>
+      <div class="layer">
+        <div class="name">Zicht <span class="nl">“sight”</span></div>
+        <div class="body">
+          <span class="analog">ancestor · liveview</span>
+          Stateful views over websockets. One goroutine per socket holds the view's state;
+          templates render to a static/dynamic split so only changed slots cross the wire.
+          Postgres LISTEN/NOTIFY is the pubsub bus.
+        </div>
+      </div>
+      <div class="layer">
+        <div class="name">Werk <span class="nl">“work”</span></div>
+        <div class="body">
+          <span class="analog">ancestor · oban</span>
+          Jobs and durable execution on Postgres. Enqueue is transactional — a job commits
+          atomically with the data that caused it, or not at all. Workflows checkpoint each
+          step and survive restarts.
+        </div>
+      </div>
+      <div class="layer">
+        <div class="name">Zwerm <span class="nl">“swarm”</span></div>
+        <div class="body">
+          <span class="analog">ancestor · otp + distributed erlang</span>
+          Actors, mailboxes, supervision trees, and the node mesh. Attaching a monolith is a
+          flag. Crashed actors restart by strategy; crashed nodes shed work back to the swarm.
+        </div>
+      </div>
+      <div class="layer substrate">
+        <div class="name">Go + Postgres <span class="nl">substrate</span></div>
+        <div class="body">
+          <span class="analog">the only dependencies</span>
+          Goroutines, channels, the stdlib's HTTP/TLS/crypto, and a from-scratch Postgres wire
+          protocol client over net.Conn. No cgo, no drivers, no third-party modules.
+        </div>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>One honest asymmetry with the BEAM.</strong> Goroutines share memory, so a
+      panicking actor can't promise it corrupted nothing — the guarantee Erlang's isolated
+      heaps give for free. Taal's answer is linguistic, not runtime: actor state is only
+      reachable through messages, and the typechecker rejects code that smuggles references
+      across a mailbox. A small language can make that rule unbreakable.
+    </div>
+  </div>
+</section>
+
+<section id="language">
+  <div class="wrap">
+    <div class="kicker">The language</div>
+    <h2>One declaration in, one system out</h2>
+    <p>
+      A Bron resource is the canonical Taal artifact: the domain model, its legal state
+      transitions, and its derived surface in one screen of code. English keywords, always —
+      the corpus should read natively to every model that touches it.
+    </p>
+
+    <div class="duo">
+      <div class="codeblock">
+        <div class="codelabel"><span>what you write</span><span class="lang">invoice.taal</span></div>
+        <pre><span class="k">resource</span> <span class="ty">Invoice</span> {
+  <span class="k">field</span> id     <span class="ty">Uuid</span>    <span class="dim">@primary</span>
+  <span class="k">field</span> total  <span class="ty">Money</span>   <span class="dim">@min(0)</span>
+  <span class="k">field</span> status <span class="ty">Status</span>  = Draft
+
+  <span class="k">type</span> <span class="ty">Status</span> = Draft | Sent | Paid | Void
+
+  <span class="k">action</span> send(self) -> <span class="ty">Result</span>(<span class="ty">Invoice</span>, <span class="ty">SendError</span>) {
+    <span class="k">match</span> self.status {
+      Draft -> Ok({ ..self, status: Sent })
+      _     -> Err(AlreadySent)
+    }
+  }
+
+  <span class="k">derive</span> api.rest        <span class="c">// handlers + routes</span>
+  <span class="k">derive</span> authz(owner)    <span class="c">// policy checks</span>
+  <span class="k">derive</span> migration       <span class="c">// schema diff → sql</span>
+}</pre>
+      </div>
+      <div class="seamwrap"><div class="seam" aria-hidden="true"></div><div class="seamlabel">taalc</div></div>
+      <div class="codeblock">
+        <div class="codelabel"><span>what agents verify</span><span class="lang">invoice.go</span></div>
+        <pre><span class="c">// Code generated by taalc.
+// Readable by design — edit invoice.taal, or
+// delete it and own this file.</span>
+
+<span class="k">type</span> <span class="ty">InvoiceStatus</span> <span class="k">int</span>
+
+<span class="k">const</span> (
+  <span class="ty">InvoiceDraft</span> <span class="ty">InvoiceStatus</span> = <span class="k">iota</span>
+  <span class="ty">InvoiceSent</span>
+  <span class="ty">InvoicePaid</span>
+  <span class="ty">InvoiceVoid</span>
+)
+
+<span class="k">func</span> (i <span class="ty">Invoice</span>) <span class="ty">Send</span>() (<span class="ty">Invoice</span>, <span class="k">error</span>) {
+  <span class="k">switch</span> i.Status {
+  <span class="k">case</span> <span class="ty">InvoiceDraft</span>:
+    i.Status = <span class="ty">InvoiceSent</span>
+    <span class="k">return</span> i, <span class="k">nil</span>
+  <span class="k">default</span>:
+    <span class="k">return</span> i, <span class="ty">ErrAlreadySent</span>
+  }
+}
+
+<span class="c">// + invoice_http.go, invoice_authz.go,
+//   0007_invoice.sql — all inspectable.</span></pre>
+      </div>
+    </div>
+
+    <p>
+      Supervision reads like OTP because it is OTP's shape. A node's <code style="font-family:var(--mono);font-size:.88em">--role</code>
+      flags select which supervisors boot:
+    </p>
+
+    <div class="codeblock">
+      <div class="codelabel"><span>zwerm · actors &amp; tuning</span><span class="lang">billing.taal</span></div>
+      <pre><span class="k">supervisor</span> <span class="ty">Billing</span> {
+  <span class="k">strategy</span> one_for_one
+  <span class="k">roles</span> [worker]                        <span class="c">// only wakes on worker-tuned nodes</span>
+
+  <span class="k">child</span> <span class="ty">Ledger</span>        { restart: permanent }
+  <span class="k">child</span> <span class="ty">InvoiceMailer</span> { restart: transient, pool: 8 }
+}
+
+<span class="k">actor</span> <span class="ty">Ledger</span> {
+  <span class="k">state</span> { balances <span class="ty">Map</span>(<span class="ty">AccountId</span>, <span class="ty">Money</span>) }
+
+  <span class="k">handle</span> <span class="ty">Post</span>(entry <span class="ty">Entry</span>) -> <span class="ty">Result</span>(<span class="ty">Money</span>, <span class="ty">LedgerError</span>) {
+    <span class="c">// state is reachable only here — the checker forbids leaking it</span>
+    ...
+  }
+}</pre>
+    </div>
+
+    <div class="codeblock">
+      <div class="codelabel"><span>werk · transactional jobs</span><span class="lang">checkout.taal</span></div>
+      <pre><span class="k">tx</span> {
+  invoice = <span class="ty">Invoice</span>.create(order)?
+  <span class="ty">Werk</span>.enqueue(<span class="ty">SendInvoice</span> { id: invoice.id })   <span class="c">// commits with the row, or not at all</span>
+}</pre>
+    </div>
+
+    <div class="codeblock">
+      <div class="codelabel"><span>zicht · a live view</span><span class="lang">board.taal</span></div>
+      <pre><span class="k">view</span> <span class="ty">InvoiceBoard</span> {
+  <span class="k">state</span> { invoices <span class="ty">List</span>(<span class="ty">Invoice</span>) = [] }
+
+  <span class="k">mount</span>(socket) {
+    subscribe(<span class="s">"invoices"</span>)                    <span class="c">// postgres LISTEN under the hood</span>
+    { ..state, invoices: <span class="ty">Invoice</span>.list()? }
+  }
+
+  <span class="k">event</span> <span class="s">"mark_paid"</span>(id <span class="ty">Uuid</span>) {
+    <span class="ty">Invoice</span>.get(id)?.pay()?                  <span class="c">// NOTIFY fans the diff to every node</span>
+  }
+}</pre>
+    </div>
+
+    <div class="codeblock">
+      <div class="codelabel"><span>zwerm · attaching a monolith</span><span class="lang">shell</span></div>
+      <pre><span class="dim">$</span> ./mono --role=web,zicht --join=10.0.0.12:4369
+<span class="dim">$</span> ./mono --role=worker    --join=10.0.0.12:4369   <span class="c"># capacity is a process, not a platform</span></pre>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="kicker">Restraint</div>
+    <h2>What Taal refuses to have</h2>
+    <p>
+      The surface area is the product. Every exclusion below is load-bearing — each one removes
+      a way for two codebases to disagree, or for an error message to point somewhere far from
+      the mistake.
+    </p>
+    <div class="nots">
+      <div class="not">
+        <div class="what">laziness</div>
+        <div class="why">Go's runtime is strict; so is Taal. Costs stay visible in the source, and a tuned node's resource profile stays predictable.</div>
+      </div>
+      <div class="not">
+        <div class="what">typeclasses / HKTs</div>
+        <div class="why">Go's generics can't express them, and inference distance is how Haskell's errors got indirect. Dispatch is explicit; errors stay one sentence long.</div>
+      </div>
+      <div class="not">
+        <div class="what">language extensions</div>
+        <div class="why">There is one Taal. No pragma stacks, no dialects — the property that keeps a corpus canonical.</div>
+      </div>
+      <div class="not">
+        <div class="what">global inference</div>
+        <div class="why">Signatures are annotated; bodies are inferred. Every error points at the line that caused it.</div>
+      </div>
+      <div class="not">
+        <div class="what">nil</div>
+        <div class="why">Option and Result, checked exhaustively. The emitted Go handles every branch because the source had to.</div>
+      </div>
+      <div class="not">
+        <div class="what">third-party modules</div>
+        <div class="why">Go stdlib plus a from-scratch Postgres wire client. The dependency graph fits in a sentence.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="agents">
+  <div class="wrap">
+    <div class="kicker">Agent experience</div>
+    <h2>The loop is the product</h2>
+    <p class="lede">
+      An agent's effectiveness is a function of its edit-verify loop: how fast the signal
+      arrives and how little it can be misread. Taal is designed backward from that loop.
+    </p>
+    <div class="grid2">
+      <div class="cell">
+        <h3>Diagnostics as API</h3>
+        <p>Every taalc error states what's wrong, where, and one concrete fix — machine-stable
+        format, human-legible prose. The checker is treated as an interface with an SLA, not a
+        gatekeeper with opinions.</p>
+      </div>
+      <div class="cell">
+        <h3>Sub-second, twice</h3>
+        <p>taalc is a small strict-ML compiler; go build is go build. Two full verifications
+        per edit, both under a second on a workshop-scale codebase.</p>
+      </div>
+      <div class="cell">
+        <h3>The corpus ships with the compiler</h3>
+        <p>Because the framework and language are built together, the canonical corpus —
+        resources, actors, views, jobs, with their emitted Go — is authored once and stays in
+        lockstep. Agents learn one dialect because only one exists.</p>
+      </div>
+      <div class="cell">
+        <h3>Debug in Go, always</h3>
+        <p>Stack traces, pprof flames, race reports, and delve sessions all land in the emitted
+        Go — which was written to be read. The agent never hits a layer it can't see through.</p>
+      </div>
+    </div>
+    <p>
+      The endgame is a division of labor with a clean seam: humans and agents author intent in
+      a language with almost no surface, and agents verify consequence in a language with almost
+      no ambiguity. The compiler is the whole framework; the framework is one binary; the binary
+      needs nothing but Postgres and a peer to join.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="family">
+      <span>samen</span><span>·</span>
+      <span>eigen</span><span>·</span>
+      <span>kern</span><span>·</span>
+      <span class="this">taal</span>
+    </div>
+    <p>
+      Taal — a concept study: a strict ML compiling to gofmt-clean Go, carrying the BEAM's
+      architecture on Go's verification loop. One binary, one database, no externalities.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eigen — one binary, one Postgres, nothing else</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #F7F8F5;
+    --card: #FDFEFB;
+    --ink: #17201B;
+    --muted: #5C6B62;
+    --faint: #8A9A8F;
+    --rule: #DDE5DD;
+    --accent: #0E8A5F;
+    --accent-deep: #0A6647;
+    --accent-wash: #E9F5EE;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --display: 'Fraunces', Georgia, serif;
+    --body: 'Inter', -apple-system, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  ::selection { background: var(--accent); color: #fff; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--paper); color: var(--ink); font-family: var(--body);
+    font-size: 17px; line-height: 1.65; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 28px; }
+  .measure { max-width: 62ch; }
+
+  nav { display: flex; align-items: baseline; justify-content: space-between; padding: 28px 0 26px; border-bottom: 1px solid var(--rule); }
+  .wordmark { font-family: var(--display); font-weight: 560; font-size: 22px; letter-spacing: -0.01em; }
+  .wordmark .dot { color: var(--accent); }
+  nav .tag { font-family: var(--mono); font-size: 12.5px; color: var(--faint); letter-spacing: 0.02em; }
+
+  .hero { padding: 96px 0 72px; }
+  .kicker { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent-deep); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 28px; }
+  h1 { font-family: var(--display); font-weight: 560; font-size: clamp(44px, 7vw, 76px); line-height: 1.04; letter-spacing: -0.022em; max-width: 15ch; }
+  h1 em { font-style: italic; font-weight: 400; color: var(--accent-deep); }
+  .hero .sub { margin-top: 32px; font-size: 20px; line-height: 1.6; color: var(--muted); max-width: 56ch; }
+  .hero .sub strong { color: var(--ink); font-weight: 600; }
+  .surfaces { margin-top: 44px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .surface-pill { font-family: var(--mono); font-size: 13px; padding: 7px 14px; border: 1px solid var(--rule); border-radius: 100px; background: var(--card); color: var(--muted); }
+  .surface-pill b { color: var(--ink); font-weight: 500; }
+  .surface-pill.lit { border-color: var(--accent); color: var(--accent-deep); background: var(--accent-wash); }
+
+  .fade { opacity: 0; transform: translateY(14px); animation: rise .7s cubic-bezier(.2,.6,.2,1) forwards; }
+  .d1 { animation-delay: .05s } .d2 { animation-delay: .15s } .d3 { animation-delay: .25s } .d4 { animation-delay: .35s }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .fade { animation: none; opacity: 1; transform: none; } }
+
+  section { padding: 84px 0; border-top: 1px solid var(--rule); }
+  .sec-label { font-family: var(--mono); font-size: 12.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin-bottom: 20px; }
+  .sec-label::before { content: "— "; color: var(--accent); }
+  h2 { font-family: var(--display); font-weight: 560; font-size: clamp(30px, 4vw, 42px); line-height: 1.12; letter-spacing: -0.015em; max-width: 24ch; margin-bottom: 24px; }
+  h2 em { font-style: italic; font-weight: 400; color: var(--accent-deep); }
+  .prose p { color: var(--muted); margin-bottom: 18px; }
+  .prose p strong { color: var(--ink); font-weight: 600; }
+  .prose code { font-family: var(--mono); font-size: 14px; background: var(--accent-wash); padding: 2px 7px; border-radius: 5px; color: var(--accent-deep); }
+
+  .axioms { display: grid; grid-template-columns: 1fr 1fr; margin: 44px 0 36px; border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; background: var(--card); }
+  .axiom { padding: 34px 32px; }
+  .axiom + .axiom { border-left: 1px solid var(--rule); }
+  .axiom .who { font-family: var(--mono); font-size: 12.5px; color: var(--faint); margin-bottom: 14px; letter-spacing: 0.03em; }
+  .axiom .claim { font-family: var(--display); font-size: 23px; font-weight: 560; line-height: 1.3; letter-spacing: -0.01em; }
+  .resolution { border: 1px solid var(--accent); background: var(--accent-wash); border-radius: 14px; padding: 34px 36px; display: flex; gap: 22px; align-items: baseline; }
+  .resolution .mark { font-family: var(--display); font-style: italic; font-size: 30px; color: var(--accent); flex-shrink: 0; }
+  .resolution .claim { font-family: var(--display); font-size: clamp(22px, 2.6vw, 28px); font-weight: 560; line-height: 1.3; letter-spacing: -0.012em; color: var(--accent-deep); }
+  .resolution .claim span { color: var(--ink); }
+
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 48px; }
+  .mode { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 30px 28px; transition: border-color .2s; }
+  .mode:hover { border-color: var(--accent); }
+  .mode .flag { font-family: var(--mono); font-size: 12.5px; font-weight: 500; color: var(--accent-deep); background: var(--accent-wash); border-radius: 6px; padding: 4px 9px; display: inline-block; margin-bottom: 18px; }
+  .mode h3 { font-family: var(--display); font-size: 21px; font-weight: 560; margin-bottom: 10px; letter-spacing: -0.01em; }
+  .mode p { font-size: 15px; color: var(--muted); line-height: 1.6; }
+  .mode .fine { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--rule); font-family: var(--mono); font-size: 12px; color: var(--faint); }
+
+  .mirror { margin-top: 48px; border: 1px solid var(--rule); border-radius: 14px; background: var(--card); overflow: hidden; }
+  .mirror-cols { display: grid; grid-template-columns: 1fr 56px 1fr; }
+  .mirror-side { padding: 30px 28px; }
+  .mirror-side .side-label { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin-bottom: 18px; }
+  .mirror-box { border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; background: var(--paper); }
+  .mirror-box.same { border-color: var(--accent); background: var(--accent-wash); }
+  .mirror-box .bt { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+  .mirror-box .bs { font-size: 12.5px; color: var(--muted); }
+  .mirror-seam { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-left: 1px dashed var(--rule); border-right: 1px dashed var(--rule); }
+  .mirror-seam span { writing-mode: vertical-rl; font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent-deep); }
+  .mirror-note { border-top: 1px dashed var(--rule); padding: 14px 28px; font-family: var(--mono); font-size: 12px; color: var(--faint); display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+  .feature-grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 56px; align-items: start; margin-top: 12px; }
+  .codecard { background: #14201A; border-radius: 14px; padding: 26px 26px 22px; color: #E2EDE4; font-family: var(--mono); font-size: 13.5px; line-height: 1.75; overflow-x: auto; }
+  .codecard .bar { display: flex; gap: 7px; margin-bottom: 18px; }
+  .codecard .bar i { width: 10px; height: 10px; border-radius: 50%; background: #35473C; }
+  .codecard .bar i:first-child { background: var(--accent); }
+  .codecard .cm { color: #7E9186; }
+  .codecard .kw { color: #8FD8B4; }
+  .codecard .str { color: #D3C98F; }
+  .codecard .fn { color: #F0EAD2; }
+  .fanout { margin-top: 22px; display: grid; gap: 10px; }
+  .fan { display: grid; grid-template-columns: 24px 160px 1fr; gap: 14px; align-items: baseline; background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; }
+  .fan .arrow { color: var(--accent); font-family: var(--mono); font-weight: 500; }
+  .fan .to { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+  .fan .what { font-size: 14px; color: var(--muted); }
+
+  .deleted { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 44px; }
+  .gone { background: var(--card); border: 1px dashed var(--rule); border-radius: 12px; padding: 20px 22px; }
+  .gone .name { font-family: var(--mono); font-size: 14px; font-weight: 500; text-decoration: line-through; text-decoration-color: var(--accent); text-decoration-thickness: 1.5px; color: var(--faint); margin-bottom: 5px; }
+  .gone p { font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+  .gone p b { color: var(--accent-deep); font-weight: 500; font-family: var(--mono); font-size: 12.5px; }
+
+  .why-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+  .sizes { margin-top: 8px; border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; background: var(--card); }
+  .size-row { display: grid; grid-template-columns: 120px 1fr 90px; gap: 18px; align-items: center; padding: 18px 24px; }
+  .size-row + .size-row { border-top: 1px solid var(--rule); }
+  .size-row .name { font-family: var(--mono); font-size: 13.5px; font-weight: 500; }
+  .size-row .track { height: 8px; border-radius: 100px; background: var(--paper); position: relative; overflow: hidden; }
+  .size-row .bar { position: absolute; inset: 0 auto 0 0; border-radius: 100px; background: var(--faint); }
+  .size-row.hero-row .bar { background: var(--accent); }
+  .size-row .val { font-family: var(--mono); font-size: 13.5px; text-align: right; color: var(--muted); }
+  .size-row.hero-row .val { color: var(--accent-deep); font-weight: 500; }
+  .size-note { font-family: var(--mono); font-size: 12px; color: var(--faint); padding: 14px 24px; border-top: 1px dashed var(--rule); }
+
+  .stack { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 44px; }
+  .brick { background: var(--card); border: 1px solid var(--rule); border-radius: 12px; padding: 22px 24px; }
+  .brick .lib { font-family: var(--mono); font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+  .brick p { font-size: 14px; color: var(--muted); line-height: 1.55; }
+  .brick .badge { float: right; font-family: var(--mono); font-size: 11px; color: var(--accent-deep); background: var(--accent-wash); border-radius: 5px; padding: 3px 8px; }
+  .brick .badge.dim { color: var(--faint); background: var(--paper); border: 1px dashed var(--rule); }
+
+  .honest { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 34px 36px; margin-top: 44px; }
+  .honest .h-label { font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-deep); margin-bottom: 16px; }
+  .honest ul { list-style: none; }
+  .honest li { padding: 10px 0 10px 26px; position: relative; color: var(--muted); font-size: 15px; }
+  .honest li + li { border-top: 1px dashed var(--rule); }
+  .honest li::before { content: "↳"; position: absolute; left: 0; color: var(--accent); font-family: var(--mono); }
+  .honest li strong { color: var(--ink); font-weight: 600; }
+
+  .cta { padding: 100px 0 110px; }
+  .cta h2 { max-width: 28ch; }
+  .cta .actions { margin-top: 36px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .btn { font-family: var(--mono); font-size: 14px; font-weight: 500; text-decoration: none; padding: 14px 26px; border-radius: 10px; transition: transform .15s, background .15s; display: inline-block; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-deep); transform: translateY(-1px); }
+  .btn-ghost { border: 1px solid var(--rule); color: var(--ink); background: var(--card); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent-deep); }
+  footer { border-top: 1px solid var(--rule); padding: 26px 0 40px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  footer span { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+
+  @media (max-width: 820px) {
+    .modes, .axioms, .feature-grid, .why-grid, .stack, .deleted { grid-template-columns: 1fr; }
+    .axiom + .axiom { border-left: none; border-top: 1px solid var(--rule); }
+    .mirror-cols { grid-template-columns: 1fr; }
+    .mirror-seam { flex-direction: row; padding: 10px 0; border: none; border-top: 1px dashed var(--rule); border-bottom: 1px dashed var(--rule); }
+    .mirror-seam span { writing-mode: horizontal-tb; }
+    .hero { padding: 64px 0 56px; }
+    section { padding: 64px 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <nav>
+    <div class="wordmark">eigen<span class="dot">.</span></div>
+    <div class="tag">eigen server · eigen data</div>
+  </nav>
+
+  <header class="hero">
+    <div class="kicker fade d1">A local-first hypermedia framework for Rust</div>
+    <h1 class="fade d2">One binary. One Postgres. <em>Nothing else.</em></h1>
+    <p class="sub fade d3">Eigen compiles your application into <strong>one static binary</strong> and keeps every kind of state in <strong>one Postgres</strong>. The binary is your web app, your desktop app, your phone app, and your API. Postgres is your database, your job queue, your cron scheduler, your sync log, your transaction engine — and your complete history. <strong>The framework supplies everything in between</strong> — the sync engine, the reactive UI layer, the workflow engine, the component library — as code inside the binary, not services beside it. Two things, and you can point at both of them.</p>
+    <div class="surfaces fade d4">
+      <span class="surface-pill"><b>./crm</b> — one file, a few MB</span>
+      <span class="surface-pill"><b>postgres://</b> — the only stateful thing</span>
+      <span class="surface-pill lit">there is no third thing</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="sec-label">The tension nobody resolved</div>
+    <h2>Two good ideas, built on opposite axioms</h2>
+    <p class="prose measure" style="color:var(--muted)">For a decade, application architecture has forced a choice of religion: effortless server-driven reactivity, or offline-capable client-owned data. The frameworks that give you one are philosophically incapable of the other.</p>
+    <div class="axioms">
+      <div class="axiom">
+        <div class="who">Hypermedia — LiveView, htmx, Datastar</div>
+        <div class="claim">“The server owns the state. The client is a thin terminal.”</div>
+      </div>
+      <div class="axiom">
+        <div class="who">Local-first — Electric, PowerSync, Automerge</div>
+        <div class="claim">“The client owns the state. The server is a dumb relay.”</div>
+      </div>
+    </div>
+    <div class="resolution">
+      <div class="mark">∴</div>
+      <div class="claim">Eigen dissolves the choice: <span>every node is a server. The UI always talks to “the server” — sometimes it's three milliseconds away on loopback.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">How it deploys</div>
+    <h2>Three modes. One codebase. Zero forks.</h2>
+    <p class="prose measure" style="color:var(--muted)">One rule makes it work: <strong style="color:var(--ink)">rendering never crosses the network — only data does.</strong> Whatever binary is closest to the screen renders, against whatever database is closest to it. Connectivity becomes a property of the sync engine, not a mode you write.</p>
+    <div class="modes">
+      <div class="mode">
+        <span class="flag">--mode=server</span>
+        <h3>The web app &amp; API</h3>
+        <p>Public listener. Serves the hypermedia plane to browsers and the data plane to native peers and integrations. Postgres behind it.</p>
+        <div class="fine">render: remote · data: direct</div>
+      </div>
+      <div class="mode">
+        <span class="flag">--mode=native</span>
+        <h3>The app — laptop or phone</h3>
+        <p>The same handlers render into a Tauri&nbsp;2 shell against a local SQLite replica that syncs in the background. Tauri already ships desktop, iOS, and Android — eigen doesn't build shells, it inhabits them, bound to loopback.</p>
+        <div class="fine">render: local · data: synced</div>
+      </div>
+      <div class="mode">
+        <span class="flag">--mode=native, offline</span>
+        <h3>The dead-zone app</h3>
+        <p>Not a mode — a circumstance, and on a phone it's a daily one: the basement, the job site, the plane. Mutations queue, remote changes apply on reconnect. No spinner, because the database never left the device.</p>
+        <div class="fine">render: local · data: queued</div>
+      </div>
+    </div>
+
+    <div class="mirror">
+      <div class="mirror-cols">
+        <div class="mirror-side">
+          <div class="side-label">On the device — laptop · phone</div>
+          <div class="mirror-box"><div class="bt">Tauri 2 shell</div><div class="bs">system webview — UI only, over loopback</div></div>
+          <div class="mirror-box same"><div class="bt">EIGEN BINARY — native mode</div><div class="bs">resources · typed components · diff engine · workflows (queue offline) · sync loop (pull &amp; queue)</div></div>
+          <div class="mirror-box"><div class="bt">SQLite replica</div><div class="bs">working set · membership horizon · tokens, never PII · works when it can't sync</div></div>
+        </div>
+        <div class="mirror-seam"><span>the seam — data only</span></div>
+        <div class="mirror-side">
+          <div class="side-label">In the cloud — identical nodes</div>
+          <div class="mirror-box"><div class="bt">Browsers · integrations</div><div class="bs">thin HTML clients · API &amp; webhooks</div></div>
+          <div class="mirror-box same"><div class="bt">EIGEN BINARY — server mode</div><div class="bs">same build · same handlers · workflow checkpoints · exactly-once intent replay</div></div>
+          <div class="mirror-box"><div class="bt">Postgres</div><div class="bs">truth · queue · cron · history = sync log · PII vault — shreddable</div></div>
+        </div>
+      </div>
+      <div class="mirror-note"><span>HTML never crosses the seam — only data does</span><span>one change stream moves state along this axis</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 1 — the resource</div>
+    <h2>Declare once. <em>Everything derives.</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>Every guarantee in this document has to know your schema: sync needs the horizon, the vault needs the PII fields, history needs the tables, forms need the types, policy needs the scope. So eigen has <strong>one source of truth: the resource</strong> — a declaration the whole framework derives from, the idea Ash proved on the BEAM, translated to Rust's terms.</p>
+        <p>From one <code>resource!</code> block, <code>cargo eigen</code> derives the SQL schema and its migrations, the history tables, the sync horizon, the intent endpoints and their policy checks, the form components — and the invariants that bind them. In Rust the verifier layer is mostly the compiler: <strong>a hallucinated field doesn't need a linter; it doesn't compile.</strong> Cross-resource invariants run in <code>cargo eigen check</code>.</p>
+        <p>Deliberately a <strong>closed derivation pipeline, not a meta-framework</strong>: a fixed set of derivations done deeply, not an open extension system. That's the honest Rust translation of Ash — and the reason one person can maintain it.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="kw">resource!</span> {</div>
+          <div>&nbsp;&nbsp;<span class="fn">Deal</span> {</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;stage: <span class="kw">Stage</span>, <span class="cm">// history: every version</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;amount: <span class="kw">Money</span>,</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;owner: <span class="kw">Pii</span>&lt;<span class="kw">Contact</span>&gt;, <span class="cm">// vault-routed, never syncs</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;company: <span class="kw">BelongsTo</span>&lt;<span class="kw">Company</span>&gt;,</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;horizon: <span class="fn">by</span>(<span class="kw">Assignment</span>), <span class="cm">// who syncs this row</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;policy: <span class="fn">org_scoped</span> + <span class="fn">role</span>(<span class="kw">Sales</span>),</div>
+          <div>&nbsp;&nbsp;}</div>
+          <div>}</div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">schema</span><span class="what">tables + migrations, generated and versioned</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">history</span><span class="what">every version of every row — audit, as-of, and the sync log</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">sync + policy</span><span class="what">horizon membership, intent endpoints, org-scope + RBAC checks</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">UI</span><span class="what">form and field components with types, validation, and PII masking built in</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 2 — the reactive layer</div>
+    <h2>Typed components, diffed on the server, <em>patched in bytes.</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>Handlers never emit markup. They emit <strong>typed semantic components</strong> — and because the tree is typed, eigen does at compile time what LiveView does on the BEAM: split every component into static parts (sent once) and dynamic bindings (tracked). When <code>deal.stage</code> changes, the patch on the wire is <strong>a few bytes, not a re-rendered fragment</strong>. Rust doesn't have this today; eigen is where it gets built.</p>
+        <p>Eigen owns the patch protocol end to end. The v1 client runtime is the <strong>vendored Datastar client</strong> — MIT, ~15&nbsp;KB, pinned, shipped from the binary, audited once — replaced by eigen's own smaller runtime once production usage has written the real spec. Owning both ends of the wire makes the dependency a file in the repo, not a vendor.</p>
+        <p>And the runtime is <strong>latency-adaptive</strong> — the one thing no generic library will ever ship. On loopback, round trips are free and optimistic UI machinery simply turns off. Over WAN, local-echo signals cover the gap. Same components, same protocol, tuned to how far away “the server” happens to be.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">// the handler emits meaning, not markup</span></div>
+          <div><span class="kw">#[component]</span></div>
+          <div><span class="kw">fn</span> <span class="fn">deal_card</span>(d: &amp;<span class="kw">Deal</span>) -&gt; <span class="kw">View</span> {</div>
+          <div>&nbsp;&nbsp;<span class="fn">card</span>((</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="fn">badge</span>(d.stage), <span class="cm">// dynamic: tracked</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="fn">label</span>(<span class="str">"Amount"</span>), <span class="cm">// static: sent once</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="fn">money</span>(d.amount), <span class="cm">// dynamic: tracked</span></div>
+          <div>&nbsp;&nbsp;))</div>
+          <div>}</div>
+          <div>&nbsp;</div>
+          <div><span class="cm">// stage → ClosedWon: the patch is ~12 bytes</span></div>
+          <div><span class="cm">// v1 wire: owned protocol · vendored client applies it</span></div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">browsers</span><span class="what">byte-sized patches over SSE — the hypermedia plane</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">webviews</span><span class="what">same patches over loopback — optimistic UI unnecessary</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">native, later</span><span class="what">same patch semantics, a JSON payload dialect — SwiftUI/Compose reconcile</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="resolution" style="margin-top:44px">
+      <div class="mark">⌁</div>
+      <div class="claim">Every production server-driven UI dies offline — the composing server is across the network. <span>Eigen's composing server is in your pocket. Server-driven UI that survives a dead zone is a category of one.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">The component vocabulary</div>
+    <h2>A closed set of components — <em>because the native lane demands it.</em></h2>
+    <div class="prose measure">
+      <p>Eigen ships a standard vocabulary — roughly twenty-five semantic components: <code>page</code>, <code>nav</code>, <code>form</code>, <code>field</code>, <code>table</code>, <code>list</code>, <code>card</code>, <code>dialog</code>, <code>badge</code>, and kin — headless, themed by CSS variables, composed into your own components freely. This is not a styling opinion; it's load-bearing architecture. <strong>The future native renderers can only reconcile a vocabulary they know.</strong> A closed, versioned component set is what makes “same handlers, native widgets later” a promise instead of a hope.</p>
+      <p>The vocabulary compounds with the resource: <code>form(deal)</code> derives its fields from the declaration — types drive inputs, constraints drive validation, and <strong>a <code>Pii&lt;&gt;</code> field renders masked automatically</strong>, because the component knows what the schema knows. The escape hatch is honest: raw HTML is allowed anywhere, and marks that subtree HTML-only — visibly opting it out of the native lane, a trade you make on purpose, per subtree, never by accident.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 3 — sync</div>
+    <h2>The sync log is a table <em>you already have.</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>Sync engines are company-sized because they bolt onto arbitrary schemas they don't control — generic replication decoding, bucket abstractions, their own storage. <strong>Eigen owns the schema, and eigen already keeps history</strong> — every version of every row, sequenced. The change stream isn't a new subsystem; it's an indexed query against the history tier. One table, three features: audit, time travel, sync.</p>
+        <p>The replica is a <strong>projection, not a peer</strong>. Down: cursor-based delta pulls, each batch applied in one SQLite transaction. Up: durable intents — the same form submit, queued, intent ID = workflow ID, so retries are no-ops. The device never merges; the server replays intents in order, policy decides, and a rejected intent comes back as UI, not a silent conflict.</p>
+        <p><strong>Horizons are membership tables</strong> (org, assignment, territory) — not arbitrary predicates — so revoking access <em>naturally emits delete markers</em> into the stream: the hardest problem in partial replication becomes ordinary rows. And the v1 rule a general engine can't afford: <strong>when in doubt, resnapshot.</strong> Replicas hold a working set, not a warehouse.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">-- the entire down-sync, conceptually</span></div>
+          <div><span class="kw">select</span> * <span class="kw">from</span> changes</div>
+          <div>&nbsp;<span class="kw">where</span> seq &gt; <span class="str">$device_cursor</span></div>
+          <div>&nbsp;&nbsp;&nbsp;<span class="kw">and</span> horizon @&gt; <span class="str">$device_scopes</span></div>
+          <div>&nbsp;<span class="kw">order by</span> seq <span class="kw">limit</span> 500;</div>
+          <div>&nbsp;</div>
+          <div><span class="cm">-- live: the SSE channel the UI already holds</span></div>
+          <div><span class="cm">-- carries "changes available" — one socket, both planes</span></div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">down</span><span class="what">scoped snapshots + delta pulls — checkpoint-consistent by construction</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">up</span><span class="what">durable intents, idempotent by workflow ID — server-authoritative replay</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">revocation</span><span class="what">membership change = delete markers in the stream — offline devices catch up honestly</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">migrations</span><span class="what">version handshake; v1 answer is resnapshot — brutal, correct, then refined</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 4 — the transaction model</div>
+    <h2>Workflows that survive crashes, deploys, and airplanes</h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>A workflow is ordinary code, checkpointed step-by-step in Postgres — the durable-execution pattern DBOS proved, implemented natively in eigen. Crash, redeploy, or kill the process — on restart it resumes from the last completed step. Steps that touch the database commit their effect and their checkpoint <strong>in one transaction: exactly-once, guaranteed by Postgres itself.</strong></p>
+        <p>No orchestrator cluster. No Temporal server on the critical path. Durable execution is a library inside the binary — checkpoints are just rows.</p>
+        <p>And because enqueueing a workflow is a database write — and eigen already syncs database writes — a follow-up scheduled offline at 30,000 feet lands in the queue when you do. <strong>Devices enqueue; servers execute.</strong> A step with real-world effects only ever runs where the truth lives.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">// a drip sequence, durable by construction</span></div>
+          <div><span class="kw">async fn</span> <span class="fn">follow_up</span>(wf: &amp;<span class="kw">Wf</span>, deal: <span class="kw">DealId</span>) -&gt; <span class="kw">Result</span>&lt;()&gt; {</div>
+          <div>&nbsp;&nbsp;wf.<span class="fn">step</span>(<span class="fn">send_intro</span>(deal)).<span class="kw">await</span>?;</div>
+          <div>&nbsp;&nbsp;wf.<span class="fn">sleep</span>(<span class="kw">days</span>(3)).<span class="kw">await</span>?; <span class="cm">// survives deploys</span></div>
+          <div>&nbsp;&nbsp;<span class="kw">let</span> ok = wf.<span class="fn">recv</span>::&lt;<span class="kw">Approval</span>&gt;().<span class="kw">await</span>?; <span class="cm">// waits for a human</span></div>
+          <div>&nbsp;&nbsp;<span class="kw">if</span> ok { wf.<span class="fn">step</span>(<span class="fn">send_contract</span>(deal)).<span class="kw">await</span>?; }</div>
+          <div>&nbsp;&nbsp;<span class="kw">Ok</span>(())</div>
+          <div>}</div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">✓</span><span class="to">sync ingestion</span><span class="what">client intent ID = workflow ID — retries are no-ops</span></div>
+          <div class="fan"><span class="arrow">✓</span><span class="to">recovery</span><span class="what">any server node resumes any workflow from its last step</span></div>
+          <div class="fan"><span class="arrow">✓</span><span class="to">queues &amp; cron</span><span class="what">rows in Postgres — concurrency, priority, dedup</span></div>
+          <div class="fan"><span class="arrow">✓</span><span class="to">offline</span><span class="what">workflows scheduled on a plane run when you land</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Simplicity, measured in deletions</div>
+    <h2>Infrastructure you will never run</h2>
+    <p class="prose measure" style="color:var(--muted)">Every box below is a thing most stacks deploy, version, secure, monitor, and pay for. In eigen, each one is a table, a query, or a library call — inside the two things you already have.</p>
+    <div class="deleted">
+      <div class="gone"><div class="name">Redis</div><p><b>→ postgres</b> — caching is a solved read; state was never Redis's job</p></div>
+      <div class="gone"><div class="name">Message broker</div><p><b>→ postgres</b> — LISTEN/NOTIFY and durable queues, transactional with your data</p></div>
+      <div class="gone"><div class="name">Orchestrator cluster</div><p><b>→ the binary</b> — durable execution is a library, not a Temporal deployment</p></div>
+      <div class="gone"><div class="name">Cron service</div><p><b>→ postgres</b> — scheduled workflows are delayed rows</p></div>
+      <div class="gone"><div class="name">Job runner</div><p><b>→ the binary</b> — every server node is already a worker</p></div>
+      <div class="gone"><div class="name">Webhook retrier</div><p><b>→ workflows</b> — delivery is a step; steps retry and checkpoint</p></div>
+      <div class="gone"><div class="name">Sync service</div><p><b>→ the binary</b> — the history tier is the sync log; the loop ships inside</p></div>
+      <div class="gone"><div class="name">Analytics warehouse</div><p><b>→ postgres</b> — partitioned history + framework-refreshed rollups; dashboards read summaries</p></div>
+      <div class="gone"><div class="name">Auth service</div><p><b>→ postgres</b> — identity is a core resource: orgs, users, roles, sessions, policy</p></div>
+      <div class="gone"><div class="name">Frontend framework</div><p><b>→ the binary</b> — typed components diffed server-side; a vendored ~15&nbsp;KB runtime applies patches</p></div>
+      <div class="gone"><div class="name">Frontend build pipeline</div><p><b>→ gone</b> — no bundler, no node_modules, no second deployable drifting out of sync</p></div>
+      <div class="gone"><div class="name">ORM + admin scaffold</div><p><b>→ the resource</b> — schema, queries, forms, and policy derive from one declaration</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">The mental model</div>
+    <h2>Postgres for what's true now — <em>and for what's ever been.</em></h2>
+    <div class="prose measure">
+      <p>The routing rule isn't hot-versus-cold storage — it's read intent. A live page asks “what's true right now, and let me change it”: a point read and a write, against indexed rows. A report asks “what happened, over time”: a scan, against <strong>partitioned history tables and framework-refreshed rollups in the same Postgres</strong>. Dashboards read the small summary, never the raw stream.</p>
+      <p>Most databases are amnesiac by construction: every UPDATE overwrites the evidence. Eigen never runs a destructive update against truth — the change stream keeps <strong>every version of every row</strong>, time-partitioned, in the database you already run. So “as of” stops being a forensic project and becomes a WHERE clause — and the same rows are the sync log the replicas pull from. Audit, undo, as-reported reporting, and offline sync aren't four systems. They're one tier, read four ways.</p>
+    </div>
+    <div class="feature-grid" style="margin-top:36px">
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">-- the account, exactly as it stood that day</span></div>
+          <div><span class="kw">select</span> * <span class="kw">from</span> accounts <span class="kw">as of</span> <span class="str">'2025-03-01'</span></div>
+          <div>&nbsp;&nbsp;<span class="kw">where</span> id = 4812;</div>
+          <div>&nbsp;</div>
+          <div><span class="cm">-- everything that changed, and when</span></div>
+          <div><span class="kw">select</span> * <span class="kw">from</span> accounts.history</div>
+          <div>&nbsp;&nbsp;<span class="kw">where</span> id = 4812 <span class="kw">order by</span> valid_from;</div>
+        </div>
+      </div>
+      <div class="fanout" style="margin-top:0">
+        <div class="fan"><span class="arrow">✓</span><span class="to">as-of state</span><span class="what">“what did the record say on March 1” — free from the log</span></div>
+        <div class="fan"><span class="arrow">✓</span><span class="to">change diff</span><span class="what">every version, with who and when</span></div>
+        <div class="fan"><span class="arrow">✓</span><span class="to">replay</span><span class="what">rebuild any projection, dashboard, or replica from history</span></div>
+        <div class="fan"><span class="arrow">✓</span><span class="to">two clocks</span><span class="what">transaction-time automatic · valid-time when you model it</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Trust, baked into the schema</div>
+    <h2>Replay everything. Forget anyone. <em>Carry nothing.</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>An immutable history and “delete my data” look like a contradiction. Eigen resolves it in the schema: a <code>Pii&lt;&gt;</code> field never enters the history stream — it lives in a <strong>mutable, keyed vault in Postgres</strong>; everything downstream carries only the key reference. And because the sync log <em>is</em> the history stream, the protocol is <strong>structurally incapable of shipping PII to a device</strong> — not filtered out; never present.</p>
+        <p>Online, actuals stream from the vault at render time and are never written to the replica; offline, the same field — the same derived form component — renders its abstraction: a label and ••••. The field tech in the dead zone sees the job, the schedule, the notes. <strong>The customer's phone number was never on the phone.</strong></p>
+        <p>Erasure means destroying the key — <strong>crypto-shredding</strong>. History still replays perfectly; personal values come back null. And because no device ever persisted plaintext, erasure has no stragglers in the field. GDPR-compliant event sourcing goes from oxymoron to checkbox.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="kw">resource!</span> { <span class="fn">Account</span> {</div>
+          <div>&nbsp;&nbsp;stage: <span class="kw">Stage</span>, <span class="cm">// history: every version</span></div>
+          <div>&nbsp;&nbsp;owner: <span class="kw">Pii</span>&lt;<span class="kw">Contact</span>&gt;, <span class="cm">// key reference only</span></div>
+          <div>} }</div>
+          <div>&nbsp;</div>
+          <div><span class="cm">// right-to-erasure, in one line</span></div>
+          <div><span class="fn">vault</span>.<span class="fn">shred</span>(owner_key).<span class="kw">await</span>?;</div>
+          <div><span class="cm">// history intact · PII unrecoverable</span></div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">the history</span><span class="what">references + non-personal facts, immutable — and it's the sync log</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">the vault</span><span class="what">personal data, mutable, per-subject keys — server-side only</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">the replica</span><span class="what">tokens, never actuals — offline renders the abstraction</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">erasure</span><span class="what">shred the key — replay returns null, and no device ever held a copy</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Why Rust</div>
+    <h2>Memory safety is a feature you <em>sell.</em></h2>
+    <div class="why-grid">
+      <div class="prose">
+        <p>This binary is a long-lived daemon on your customers' hardware, holding their business data, parsing input from the network, for years between updates. In an unsafe language that is a CVE surface; in safe Rust the whole bug class is gone — <strong>an answer a B2B security questionnaire accepts.</strong> No GC, so no pauses under ten thousand open SSE streams.</p>
+        <p>Rust also supplies the two machines eigen is built from: <strong>proc macros</strong> — the compile-time metaprogramming that makes the resource derivation pipeline and the static/dynamic component split possible, with the compiler itself as the first verifier — and <strong>a mature crate floor</strong>: tokio + axum on the server plane, sqlx against Postgres, rusqlite over the replica, serde at every boundary, Tauri&nbsp;2 as the shipped shell on desktop, iOS, and Android. The runtime dependency surface is your binary and Postgres. Everything else is a build-time artifact you pin, audit, and own.</p>
+      </div>
+      <div>
+        <div class="sizes">
+          <div class="size-row"><span class="name">Electron</span><span class="track"><span class="bar" style="width:100%"></span></span><span class="val">~150 MB</span></div>
+          <div class="size-row"><span class="name">Tauri</span><span class="track"><span class="bar" style="width:6%"></span></span><span class="val">~4 MB</span></div>
+          <div class="size-row hero-row"><span class="name">Eigen</span><span class="track"><span class="bar" style="width:9%"></span></span><span class="val">~8 MB</span></div>
+          <div class="size-note">Tauri ships the shell — your backend still lives somewhere else. Eigen's 8 MB is the whole product: app + server + SQLite + sync + workflows + UI runtime, statically linked into the shell Tauri provides.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Who it serves</div>
+    <h2>Sized for almost everyone</h2>
+    <div class="prose measure">
+      <p>A single well-provisioned Postgres sustains tens of thousands of workflow steps per second. The median SaaS never sees one percent of that. Vertical SaaS, B2B platforms, internal tools, ops software — and above all the <strong>field teams that lose signal daily</strong> and get told “offline is on the roadmap” by every vendor they evaluate. This architecture covers the overwhelming majority of software businesses with two deployed things and one on-call runbook.</p>
+      <p>Scale up by buying a bigger Postgres — the most boring, best-understood move in the industry. Scale out by adding identical stateless binaries. You will exit this envelope around the time you can afford a platform team to build the next one.</p>
+    </div>
+    <div class="stack">
+      <div class="brick"><span class="badge">exists</span><div class="lib">Tauri 2</div><p>Desktop, iOS, and Android shells — shipped, stable, someone else's roadmap. Eigen binds to loopback inside them; the shell workstream is deleted.</p></div>
+      <div class="brick"><span class="badge">exists</span><div class="lib">tokio · axum · sqlx · rusqlite · serde</div><p>The server plane, both databases, every boundary — the most exercised crates in the ecosystem.</p></div>
+      <div class="brick"><span class="badge">exists</span><div class="lib">Postgres primitives</div><p>Logical sequencing, LISTEN/NOTIFY, partitioning, transactional DDL — the sync log, live channel, and history tier are queries, not services.</p></div>
+      <div class="brick"><span class="badge dim">vendored</span><div class="lib">Datastar client (transitional)</div><p>MIT, ~15 KB, pinned and shipped from the binary — the v1 patch applier. Replaced by eigen's own runtime once production usage writes the spec. A file in the repo, not a vendor.</p></div>
+      <div class="brick"><span class="badge dim">prior art</span><div class="lib">Ash · LiveView · DBOS</div><p>The resource-derivation idea, the static/dynamic diff split, and durable execution over Postgres tables — proven elsewhere, implemented natively here. Credits, not dependencies.</p></div>
+      <div class="brick"><span class="badge">eigen</span><div class="lib">The resource pipeline</div><p><code style="font-family:var(--mono);font-size:12.5px">resource!</code> + <code style="font-family:var(--mono);font-size:12.5px">cargo eigen</code>: schema, migrations, history, horizons, intents, policy, forms — one declaration, a closed set of derivations, the compiler as first verifier.</p></div>
+      <div class="brick"><span class="badge">eigen</span><div class="lib">The reactive layer</div><p>Typed component tree, compile-time static/dynamic tracking, byte-sized patches, an owned wire protocol, latency-adaptive delivery. LiveView's crown jewel, transplanted to Rust.</p></div>
+      <div class="brick"><span class="badge">eigen</span><div class="lib">The component vocabulary</div><p>~25 semantic, headless, themeable components — closed and versioned because the native lane requires it; forms derived from resources, PII masked by construction.</p></div>
+      <div class="brick"><span class="badge">eigen</span><div class="lib">The sync loop</div><p>History-native deltas down, durable intents up, membership horizons, resnapshot as the correctness escape hatch. Small because the schema is owned — the flagship, not the 70%.</p></div>
+      <div class="brick"><span class="badge">eigen</span><div class="lib">The workflow engine</div><p>Checkpoints as rows, effect + checkpoint in one transaction, queues and cron as delayed rows — devices enqueue, servers execute.</p></div>
+      <div class="brick"><span class="badge">eigen</span><div class="lib">The PII vault + offline abstraction</div><p>Crypto-shredding as a schema primitive; actuals render server-fed and never persist on a device — masked is what offline looks like.</p></div>
+      <div class="brick"><span class="badge">eigen</span><div class="lib">Identity, in the core</div><p>Orgs, users, roles, sessions — not a bundled app, but the resources horizons, policy, and the vault are structurally built on. The only scope the framework ships.</p></div>
+    </div>
+
+    <div class="honest">
+      <div class="h-label">What we won't pretend</div>
+      <ul>
+        <li><strong>The sync loop's correctness burden is ours now.</strong> Resumable cursors, exactly-once apply, tombstone compaction, fleet schema migration — bounded by owning the schema and by the resnapshot rule, but owned, tested red-path-first, and shipped before anything else gets clever.</li>
+        <li><strong>The browser runtime is deferred on purpose.</strong> DOM morphing that preserves focus, selection, and IME state is years of quirk archaeology — so v1 vendors the Datastar client and eigen's own runtime is built later, against a red-path suite harvested from production, not from imagination.</li>
+        <li><strong>A closed vocabulary is a real constraint.</strong> Raw HTML is always available — and visibly exits the native lane for that subtree. The trade is explicit, per subtree, never accidental.</li>
+        <li><strong>Not a business-in-a-box.</strong> Identity ships in the core because the guarantees are built on it. Billing, CRM, and support are apps you build on eigen — extracted into packs later by the Rule of Three, if ever. The fastest way to ship zero products is to preset every scope before one exists.</li>
+        <li><strong>Offline means masked PII.</strong> The dead-zone app shows the work, not the personal actuals — the design consequence of a vault no device ever holds. A workflow that genuinely needs actuals offline is a scoped, expiring exception to design deliberately — never a default.</li>
+        <li><strong>Workflows are for mutations, never reads.</strong> Each step costs a Postgres write. The render path stays out of the engine — a design rule, not a tip.</li>
+        <li><strong>History lives in Postgres, and Postgres has a ceiling.</strong> Partitioning + rollups carry most products indefinitely; past ~100M+ raw history rows with ad-hoc scan appetite, a columnar engine is a per-product bolt-on decision — the stack does not carry a warehouse for the day you might need one.</li>
+        <li><strong>Erasure is as final as your backup posture.</strong> The key table rides outside the history stream and is built to be excluded from long-lived backups; a shredded subject lingers in cold backups exactly as long as your stated retention. Name it.</li>
+        <li><strong>Mobile means a shell, and shells have landlords.</strong> Store review policies, background sync at the OS's pleasure — design for foreground sync, queue the rest. New native widget kinds, when that lane opens, ride a store release.</li>
+        <li><strong>Rust taxes you at compile time, not at 3am.</strong> Build times, proc-macro debugging, and the learning curve are real. That's the trade for a memory-safe daemon deployed on hardware you don't control — and a framework whose first verifier is the compiler.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="cta" style="border-top:1px solid var(--rule)">
+    <div class="sec-label">The pitch, in one sentence</div>
+    <h2>Your web app, desktop app, mobile app, API, UI runtime, sync layer, queue, cron, history, and transaction engine are two things. <em>You can point at both of them.</em></h2>
+    <div class="actions">
+      <a class="btn btn-primary" href="#">Read the design doc</a>
+      <a class="btn btn-ghost" href="#">Follow the build</a>
+    </div>
+  </section>
+
+  <footer>
+    <span>eigen — dutch for “own”: your server, your data, your binary — everywhere you are</span>
+    <span>rust ⚡ tauri ⚡ sqlite ⚡ postgres</span>
+  </footer>
+</div>
+
+</body>
+</html>

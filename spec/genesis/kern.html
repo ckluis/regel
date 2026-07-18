@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kern — one kernel, one Postgres, the code is rows</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400..700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #F7F5FB;
+    --card: #FDFCFE;
+    --ink: #1B1626;
+    --muted: #5F5873;
+    --faint: #8E86A3;
+    --rule: #E2DDED;
+    --accent: #6D3BD6;
+    --accent-deep: #4F2A9E;
+    --accent-wash: #EFE9FB;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --display: 'Fraunces', Georgia, serif;
+    --body: 'Inter', -apple-system, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  ::selection { background: var(--accent); color: #fff; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--paper); color: var(--ink); font-family: var(--body);
+    font-size: 17px; line-height: 1.65; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 28px; }
+  .measure { max-width: 62ch; }
+
+  nav { display: flex; align-items: baseline; justify-content: space-between; padding: 28px 0 26px; border-bottom: 1px solid var(--rule); }
+  .wordmark { font-family: var(--display); font-weight: 560; font-size: 22px; letter-spacing: -0.01em; }
+  .wordmark .dot { color: var(--accent); }
+  nav .tag { font-family: var(--mono); font-size: 12.5px; color: var(--faint); letter-spacing: 0.02em; }
+
+  .hero { padding: 96px 0 72px; }
+  .kicker { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent-deep); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 28px; }
+  h1 { font-family: var(--display); font-weight: 560; font-size: clamp(44px, 7vw, 76px); line-height: 1.04; letter-spacing: -0.022em; max-width: 15ch; }
+  h1 em { font-style: italic; font-weight: 400; color: var(--accent-deep); }
+  .hero .sub { margin-top: 32px; font-size: 20px; line-height: 1.6; color: var(--muted); max-width: 56ch; }
+  .hero .sub strong { color: var(--ink); font-weight: 600; }
+  .surfaces { margin-top: 44px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .surface-pill { font-family: var(--mono); font-size: 13px; padding: 7px 14px; border: 1px solid var(--rule); border-radius: 100px; background: var(--card); color: var(--muted); }
+  .surface-pill b { color: var(--ink); font-weight: 500; }
+  .surface-pill.lit { border-color: var(--accent); color: var(--accent-deep); background: var(--accent-wash); }
+
+  .fade { opacity: 0; transform: translateY(14px); animation: rise .7s cubic-bezier(.2,.6,.2,1) forwards; }
+  .d1 { animation-delay: .05s } .d2 { animation-delay: .15s } .d3 { animation-delay: .25s } .d4 { animation-delay: .35s }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .fade { animation: none; opacity: 1; transform: none; } }
+
+  section { padding: 84px 0; border-top: 1px solid var(--rule); }
+  .sec-label { font-family: var(--mono); font-size: 12.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin-bottom: 20px; }
+  .sec-label::before { content: "— "; color: var(--accent); }
+  h2 { font-family: var(--display); font-weight: 560; font-size: clamp(30px, 4vw, 42px); line-height: 1.12; letter-spacing: -0.015em; max-width: 26ch; margin-bottom: 24px; }
+  h2 em { font-style: italic; font-weight: 400; color: var(--accent-deep); }
+  .prose p { color: var(--muted); margin-bottom: 18px; }
+  .prose p strong { color: var(--ink); font-weight: 600; }
+  .prose code { font-family: var(--mono); font-size: 14px; background: var(--accent-wash); padding: 2px 7px; border-radius: 5px; color: var(--accent-deep); }
+
+  .axioms { display: grid; grid-template-columns: 1fr 1fr; margin: 44px 0 36px; border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; background: var(--card); }
+  .axiom { padding: 34px 32px; }
+  .axiom + .axiom { border-left: 1px solid var(--rule); }
+  .axiom .who { font-family: var(--mono); font-size: 12.5px; color: var(--faint); margin-bottom: 14px; letter-spacing: 0.03em; }
+  .axiom .claim { font-family: var(--display); font-size: 23px; font-weight: 560; line-height: 1.3; letter-spacing: -0.01em; }
+  .resolution { border: 1px solid var(--accent); background: var(--accent-wash); border-radius: 14px; padding: 34px 36px; display: flex; gap: 22px; align-items: baseline; }
+  .resolution .mark { font-family: var(--display); font-style: italic; font-size: 30px; color: var(--accent); flex-shrink: 0; }
+  .resolution .claim { font-family: var(--display); font-size: clamp(22px, 2.6vw, 28px); font-weight: 560; line-height: 1.3; letter-spacing: -0.012em; color: var(--accent-deep); }
+  .resolution .claim span { color: var(--ink); }
+
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 48px; }
+  .mode { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 30px 28px; transition: border-color .2s; }
+  .mode:hover { border-color: var(--accent); }
+  .mode .flag { font-family: var(--mono); font-size: 12.5px; font-weight: 500; color: var(--accent-deep); background: var(--accent-wash); border-radius: 6px; padding: 4px 9px; display: inline-block; margin-bottom: 18px; }
+  .mode h3 { font-family: var(--display); font-size: 21px; font-weight: 560; margin-bottom: 10px; letter-spacing: -0.01em; }
+  .mode p { font-size: 15px; color: var(--muted); line-height: 1.6; }
+  .mode .fine { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--rule); font-family: var(--mono); font-size: 12px; color: var(--faint); }
+
+  .mirror { margin-top: 48px; border: 1px solid var(--rule); border-radius: 14px; background: var(--card); overflow: hidden; }
+  .mirror-cols { display: grid; grid-template-columns: 1fr 56px 1fr; }
+  .mirror-side { padding: 30px 28px; }
+  .mirror-side .side-label { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin-bottom: 18px; }
+  .mirror-box { border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; background: var(--paper); }
+  .mirror-box.same { border-color: var(--accent); background: var(--accent-wash); }
+  .mirror-box .bt { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+  .mirror-box .bs { font-size: 12.5px; color: var(--muted); }
+  .mirror-seam { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-left: 1px dashed var(--rule); border-right: 1px dashed var(--rule); }
+  .mirror-seam span { writing-mode: vertical-rl; font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent-deep); }
+  .mirror-note { border-top: 1px dashed var(--rule); padding: 14px 28px; font-family: var(--mono); font-size: 12px; color: var(--faint); display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+  .feature-grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 56px; align-items: start; margin-top: 12px; }
+  .codecard { background: #191330; border-radius: 14px; padding: 26px 26px 22px; color: #E8E3F4; font-family: var(--mono); font-size: 13.5px; line-height: 1.75; overflow-x: auto; }
+  .codecard .bar { display: flex; gap: 7px; margin-bottom: 18px; }
+  .codecard .bar i { width: 10px; height: 10px; border-radius: 50%; background: #3B3258; }
+  .codecard .bar i:first-child { background: var(--accent); }
+  .codecard .cm { color: #7E75A0; }
+  .codecard .kw { color: #B79CFF; }
+  .codecard .str { color: #C8E29A; }
+  .codecard .fn { color: #F0EAD2; }
+  .fanout { margin-top: 22px; display: grid; gap: 10px; }
+  .fan { display: grid; grid-template-columns: 24px 160px 1fr; gap: 14px; align-items: baseline; background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; }
+  .fan .arrow { color: var(--accent); font-family: var(--mono); font-weight: 500; }
+  .fan .to { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+  .fan .what { font-size: 14px; color: var(--muted); }
+
+  .deleted { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 44px; }
+  .gone { background: var(--card); border: 1px dashed var(--rule); border-radius: 12px; padding: 20px 22px; }
+  .gone .name { font-family: var(--mono); font-size: 14px; font-weight: 500; text-decoration: line-through; text-decoration-color: var(--accent); text-decoration-thickness: 1.5px; color: var(--faint); margin-bottom: 5px; }
+  .gone p { font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+  .gone p b { color: var(--accent-deep); font-weight: 500; font-family: var(--mono); font-size: 12.5px; }
+
+  .stack { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 44px; }
+  .brick { background: var(--card); border: 1px solid var(--rule); border-radius: 12px; padding: 22px 24px; }
+  .brick .lib { font-family: var(--mono); font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+  .brick p { font-size: 14px; color: var(--muted); line-height: 1.55; }
+  .brick .badge { float: right; font-family: var(--mono); font-size: 11px; color: var(--accent-deep); background: var(--accent-wash); border-radius: 5px; padding: 3px 8px; }
+  .brick .badge.dim { color: var(--faint); background: var(--paper); border: 1px dashed var(--rule); }
+
+  .honest { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 34px 36px; margin-top: 44px; }
+  .honest .h-label { font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-deep); margin-bottom: 16px; }
+  .honest ul { list-style: none; }
+  .honest li { padding: 10px 0 10px 26px; position: relative; color: var(--muted); font-size: 15px; }
+  .honest li + li { border-top: 1px dashed var(--rule); }
+  .honest li::before { content: "↳"; position: absolute; left: 0; color: var(--accent); font-family: var(--mono); }
+  .honest li strong { color: var(--ink); font-weight: 600; }
+
+  .cta { padding: 100px 0 110px; }
+  .cta h2 { max-width: 28ch; }
+  .cta .actions { margin-top: 36px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .btn { font-family: var(--mono); font-size: 14px; font-weight: 500; text-decoration: none; padding: 14px 26px; border-radius: 10px; transition: transform .15s, background .15s; display: inline-block; }
+  .btn-primary { background: var(--accent-deep); color: #fff; }
+  .btn-primary:hover { background: var(--accent); transform: translateY(-1px); }
+  .btn-ghost { border: 1px solid var(--rule); color: var(--ink); background: var(--card); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent-deep); }
+  footer { border-top: 1px solid var(--rule); padding: 26px 0 40px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  footer span { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+
+  @media (max-width: 820px) {
+    .modes, .axioms, .feature-grid, .stack, .deleted { grid-template-columns: 1fr; }
+    .axiom + .axiom { border-left: none; border-top: 1px solid var(--rule); }
+    .mirror-cols { grid-template-columns: 1fr; }
+    .mirror-seam { flex-direction: row; padding: 10px 0; border: none; border-top: 1px dashed var(--rule); border-bottom: 1px dashed var(--rule); }
+    .mirror-seam span { writing-mode: horizontal-tb; }
+    .hero { padding: 64px 0 56px; }
+    section { padding: 64px 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <nav>
+    <div class="wordmark">kern<span class="dot">.</span></div>
+    <div class="tag">the kernel evaluates · the database remembers</div>
+  </nav>
+
+  <header class="hero">
+    <div class="kicker fade d1">A homoiconic SaaS substrate — Lisp, one kernel, one Postgres</div>
+    <h1 class="fade d2">One kernel. One Postgres. <em>The code is rows.</em></h1>
+    <p class="sub fade d3">Kern is a Lisp framework where <strong>the application itself is data</strong> — every resource, component, view, workflow, policy, translation, tenant customization, resident agent, and agent-written patch is a versioned, content-addressed row in the same Postgres that holds your business. The binary is a small evaluator that rarely changes. <strong>Deploying is a transaction. Rolling back is a WHERE clause.</strong> And an AI agent doesn't read your codebase through grep — it queries it, because the codebase has a schema.</p>
+    <div class="surfaces fade d4">
+      <span class="surface-pill"><b>./kern</b> — the evaluator, a few MB</span>
+      <span class="surface-pill"><b>postgres://</b> — truth, queue, history, and the application</span>
+      <span class="surface-pill lit">there is no build artifact</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="sec-label">The tension nobody resolved</div>
+    <h2>Every company runs two machineries — <em>and governs only one</em></h2>
+    <p class="prose measure" style="color:var(--muted)">For fifty years, software has governed its data with one discipline and its code with another. Your database gives every fact a transaction, a history, an audit trail, a permission model, and a query language. Your codebase gets a text repository, a build pipeline, an artifact registry, deploy gates, feature flags, and a rollback runbook — <strong style="color:var(--ink)">a hand-assembled, weaker imitation of the guarantees the database already provides.</strong> That divide was tolerable when humans wrote all the code, slowly. Now agents write code fast — and the code is the least governed artifact in the company.</p>
+    <div class="axioms">
+      <div class="axiom">
+        <div class="who">The data machinery — Postgres</div>
+        <div class="claim">“Every fact is transactional, versioned, audited, queryable, and bound by policy.”</div>
+      </div>
+      <div class="axiom">
+        <div class="who">The code machinery — git · CI · registry · deploys</div>
+        <div class="claim">“Except one: the application itself — shipped as an artifact, with none of those guarantees.”</div>
+      </div>
+    </div>
+    <div class="resolution">
+      <div class="mark">∴</div>
+      <div class="claim">Kern ends the divide: <span>the application is data in the database. Deploying, auditing, versioning, and governing code becomes the machinery you already trust with everything else.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">How it runs</div>
+    <h2>The kernel has three jobs. <em>Everything else is rows.</em></h2>
+    <p class="prose measure" style="color:var(--muted)">Homoiconicity is the license: in a Lisp, code is s-expressions, s-expressions are data, and data has a home. The kernel — a reactor, an evaluator, a verifier suite, and a wire protocol — is the only compiled artifact, and it changes on the timescale of a database engine, not an application. It ships zero business logic: it is to your product what Postgres is to your rows.</p>
+    <div class="modes">
+      <div class="mode">
+        <span class="flag">admit</span>
+        <h3>Code enters by transaction</h3>
+        <p>New definitions are inserted, verified, catalogued, and compiled <em>in one transaction</em> — with their schema migration, if they carry one. Rejected code never becomes code. Atomic, fail-closed, no pipeline.</p>
+        <div class="fine">deploy = commit · rollback = as-of</div>
+      </div>
+      <div class="mode">
+        <span class="flag">evaluate</span>
+        <h3>Two tiers, one substance</h3>
+        <p>Admitted definitions compile native through SBCL at admission — <code style="font-family:var(--mono);font-size:12.5px">compile</code> is a core-language function, not a build system. Sandbox-tier code (tenants, agents) runs in kern's own interpreter, <strong>fuel-metered</strong>: exact step and allocation budgets per evaluation.</p>
+        <div class="fine">trusted: native · untrusted: metered</div>
+      </div>
+      <div class="mode">
+        <span class="flag">resume</span>
+        <h3>Everything paused is a row</h3>
+        <p>Workflows, UI sessions, and signalled conditions are serialized continuations — expression + environment, stored with a wake condition. Any node resumes any of them. Crash, deploy, or drain: nothing is lost, because nothing lived only in memory.</p>
+        <div class="fine">state: postgres · memory: a cache</div>
+      </div>
+    </div>
+
+    <div class="mirror">
+      <div class="mirror-cols">
+        <div class="mirror-side">
+          <div class="side-label">The kernel — stateless, boring, rarely changes</div>
+          <div class="mirror-box same"><div class="bt">KERN BINARY</div><div class="bs">async reactor (epoll/io_uring) · the evaluator + fuel meter · SBCL compile-at-admission · verifier suite · byte-patch wire protocol</div></div>
+          <div class="mirror-box"><div class="bt">no app code inside</div><div class="bs">scale out by adding identical kernels — sessions are rows, so no node is special and none is sticky</div></div>
+        </div>
+        <div class="mirror-seam"><span>the seam — admission only</span></div>
+        <div class="mirror-side">
+          <div class="side-label">The database — the application, and everything it has ever been</div>
+          <div class="mirror-box same"><div class="bt">DEFINITIONS</div><div class="bs">content-addressed code rows · the catalog · resources · components · views · policies · translations · prompts · agents</div></div>
+          <div class="mirror-box"><div class="bt">RUNTIME STATE</div><div class="bs">continuations (workflows · sessions · conditions · agents) · queue · cron · history · PII vault</div></div>
+        </div>
+      </div>
+      <div class="mirror-note"><span>code crosses the seam as transactions — nothing else does</span><span>one history tier versions the data and the code that shaped it</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 1 — the resource</div>
+    <h2>Declare once. Everything derives. <em>And the declaration is a row.</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>Every guarantee in this document has to know your schema — sync, policy, forms, history, the vault. So kern has <strong>one source of truth: the resource</strong>, a declaration the whole framework derives from. In a homoiconic language the idea reaches its native form: <strong>the DSL is just the language</strong>, and macroexpansion <em>is</em> the derivation pipeline. No DSL compiler, no code generation step — a <code>defresource</code> form expands into schema, migrations, history tables, sync horizons, policy checks, and form components, and the expansion is inspectable data, not compiler internals.</p>
+        <p>Because the declaration is itself a row, the catalog stops being generated documentation and becomes <strong>the storage format</strong>. Kern catalogues <em>every definition</em> — resources, functions, components, policies, workflows, prompts — because being in the catalog is what being code means. There is no definition an agent can see that the catalog doesn't describe, structurally, by construction.</p>
+        <p>And because code and schema live in the same database, they migrate <strong>in the same transaction</strong>. The handler that reads a new column and the migration that adds it commit together or not at all — the “deploy window” where code and schema disagree simply has no representation.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">;; the declaration is data — stored, hashed, catalogued</span></div>
+          <div>(<span class="kw">defresource</span> <span class="fn">deal</span></div>
+          <div>&nbsp;&nbsp;(<span class="kw">attributes</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;(stage&nbsp;&nbsp; stage-enum&nbsp;&nbsp;&nbsp;&nbsp;<span class="str">:history :every-version</span>)</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;(amount&nbsp; money)</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;(owner&nbsp;&nbsp; (<span class="kw">pii</span> contact)&nbsp;<span class="str">:vault pii-contact</span>)</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;(company (<span class="kw">belongs-to</span> company)))</div>
+          <div>&nbsp;&nbsp;(<span class="kw">horizon</span> (by assignment))</div>
+          <div>&nbsp;&nbsp;(<span class="kw">policy</span>&nbsp; (<span class="kw">and</span> org-scoped (role sales))))</div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">schema</span><span class="what">tables + migrations, admitted in the same transaction as the code</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">history</span><span class="what">every version of every row — audit, as-of, and the change stream</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">policy + vault</span><span class="what">org-scope, RBAC, PII routing, masked-by-default forms</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">catalog</span><span class="what">a content-addressed row — the hash is the identity, the name is a pointer</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">api</span><span class="what">REST + OpenAPI + MCP — the endpoint exists the moment the resource does</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 2 — the workflow engine</div>
+    <h2>Durable workflows are <em>continuations</em>, not checkpoint-replay</h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>Durable-execution engines persist step <em>results</em> and re-execute deterministic code to recover position. It works — and it drags a constraint through everything: workflow code must be replay-safe, and versioning a workflow mid-flight is the problem that haunts the whole category. A Lisp interpreter can do the honest thing instead: <strong>serialize the actual continuation.</strong> The paused program is an expression plus an environment — which is to say, a row.</p>
+        <p>Versioning dissolves into the history tier: <strong>a paused workflow resumes against the exact code hashes it started with</strong>, because old definitions are immortal rows. “As-of” for code solves what replay-compatibility gymnastics never quite did. Steps that touch the database commit their effect and their checkpoint in one transaction — <strong>exactly-once, guaranteed by Postgres itself.</strong></p>
+        <p>And the condition system — Lisp's resumable-error discipline — becomes the human-in-the-loop primitive. A failed step doesn't throw; it signals a <strong>durable condition</strong> whose restarts are data, presented in the operator plane (or to an agent) as choices. Pick one; the continuation resumes. “Workflow errored, an operator chooses a restart, work continues” is the true shape of SaaS operations, and no mainstream engine has it as a language feature.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div>(<span class="kw">defworkflow</span> <span class="fn">follow-up</span> (deal-id)</div>
+          <div>&nbsp;&nbsp;(<span class="kw">step</span>&nbsp; (send-intro deal-id))</div>
+          <div>&nbsp;&nbsp;(<span class="kw">sleep</span> (days 3))&nbsp;&nbsp;<span class="cm">; continuation → row · survives deploys</span></div>
+          <div>&nbsp;&nbsp;(<span class="kw">when</span> (<span class="kw">await</span> <span class="str">'approval</span>)&nbsp;<span class="cm">; human or agent — same row</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;(<span class="kw">step</span> (send-contract deal-id))))</div>
+          <div>&nbsp;</div>
+          <div><span class="cm">;; a failed step signals a DURABLE CONDITION —</span></div>
+          <div><span class="cm">;; restarts are data, offered in the operator plane</span></div>
+          <div>(<span class="kw">restart-case</span> (<span class="kw">step</span> (charge-card invoice))</div>
+          <div>&nbsp;&nbsp;(<span class="fn">retry-with-new-card</span> (card) …)</div>
+          <div>&nbsp;&nbsp;(<span class="fn">write-off</span> () …))</div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">✓</span><span class="to">versioning</span><span class="what">paused code resumes against its exact hashes — as-of, not replay gymnastics</span></div>
+          <div class="fan"><span class="arrow">✓</span><span class="to">restarts</span><span class="what">errors pause into choices; operators or agents pick; the continuation resumes</span></div>
+          <div class="fan"><span class="arrow">✓</span><span class="to">exactly-once</span><span class="what">step effect + checkpoint commit in one transaction — Postgres guarantees it</span></div>
+          <div class="fan"><span class="arrow">✓</span><span class="to">queues &amp; cron</span><span class="what">rows — concurrency, priority, dedup, no orchestrator cluster</span></div>
+          <div class="fan"><span class="arrow">✓</span><span class="to">triggers</span><span class="what">record events, cron, webhook, manual — declared as data; every run is a queryable row</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 3 — the reactive layer</div>
+    <h2>Server-driven UI — with <em>durable sessions</em> and dependency-exact patches</h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>Handlers never emit markup. Components are typed sexps drawn from a <strong>closed vocabulary of ~25 semantic components</strong> — <code>page</code>, <code>form</code>, <code>table</code>, <code>card</code>, <code>badge</code>, and kin — headless, themed by CSS variables, composed freely. A macro splits every component into static parts (sent once) and dynamic bindings (tracked) at expansion time; the server diffs and ships <strong>byte-sized patches</strong> over an owned wire protocol to a vendored ~15&nbsp;KB client. The closed set is load-bearing: it is what makes derived forms, automatic PII masking, and a future native-renderer lane possible.</p>
+        <p>Then kern goes past diffing. Because every component's reads are analyzable forms against catalogued resources, the framework knows <strong>statically which fields each component depends on</strong>. A change to <code>deal.stage</code> invalidates exactly the components bound to it — no per-socket re-render-and-diff of everything in scope. Server-side diffing was always a clever recovery from not knowing dependencies; <strong>kern knows them.</strong></p>
+        <p>And the session itself is a continuation. Hot state lives in the reactor's memory; on disconnect, deploy, or drain it checkpoints to a row — so <strong>any node resumes any session</strong>, and the reconnect storm that haunts stateful-socket frameworks becomes a rehydration, not a re-mount stampede. Serializable-continuation web serving has two decades of prior art; marrying it to server-diffed reactive UI and a database is the opening.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">;; components emit meaning, not markup</span></div>
+          <div>(<span class="kw">defcomponent</span> <span class="fn">deal-card</span> (deal)</div>
+          <div>&nbsp;&nbsp;(<span class="fn">card</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;(<span class="fn">badge</span> (deal <span class="str">:stage</span>))&nbsp;&nbsp;<span class="cm">; dynamic: tracked</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;(<span class="fn">label</span> <span class="str">"Amount"</span>)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">; static: sent once</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;(<span class="fn">money</span> (deal <span class="str">:amount</span>))))&nbsp;<span class="cm">; dynamic: tracked</span></div>
+          <div>&nbsp;</div>
+          <div><span class="cm">;; the catalog knows deal-card reads deal.stage +</span></div>
+          <div><span class="cm">;; deal.amount — invalidation is exact, patches are bytes</span></div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">browsers</span><span class="what">byte patches over SSE — real HTML first paint, no SPA, no hydration</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">invalidation</span><span class="what">dependency-exact, derived from the catalog — not diff-everything</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">sessions</span><span class="what">continuations — deploys and node loss don't drop UI state</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">native, later</span><span class="what">the closed vocabulary keeps the native-renderer lane open</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 4 — governed evaluation</div>
+    <h2>The database has a <em>type system for code</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>Grounding an agent on a catalog stops schema hallucination: a column that isn't in the catalog can't be referenced, because the reference fails verification. Kern takes grounding to its limit — <strong>admission</strong>. Agent-written code is data submitted to the database, and the verifier suite — catalog parity, capability audit, PII flow, contracts — runs <em>inside the insert transaction</em>. Rejected code never becomes code. And the grounding surface can't rot, because it is populated by the agent's own admitted work: <strong>being catalogued is what admission means.</strong></p>
+        <p>Policy enforcement moves from checks to <strong>environments</strong>. Code runs in an environment where only its granted capabilities are bound — an unauthorized call isn't rejected, it's <em>unnameable</em>. There is no ambient authority to escalate, no forgotten middleware, no bypass path: the environment is the policy.</p>
+        <p>This closes the quiet failure mode of every hand-built framework: <strong>a policy that is declared, exported, documented — and wired into nothing.</strong> A permission model that no query path actually calls looks identical, in the source and in the demo, to one that holds; the gap only surfaces as a breach. Because kern's verifiers run at admission, <strong>“declared but unenforced” is a build failure, not a latent hole</strong> — a resource whose policy no admitted path consults fails catalog parity and never becomes code. The guarantee isn't that engineers wire enforcement correctly; it's that unwired enforcement can't be admitted.</p>
+        <p>One mechanism, not two: <strong>tenant customization and agent patches are the same primitive</strong> — governed evaluation. Sandboxed expressions, capability-scoped environments, fuel-metered, catalog-verified, audit-rowed. The customization ladder every serious SaaS eventually builds and the agent-in-the-loop every SaaS is about to need collapse into a single thing to secure.</p>
+        <p>And the framework ships its own <strong>MCP server</strong>: agents query the catalog, fetch definitions by hash, submit patches as sexps, and receive verifier verdicts as structured data. Today every coding agent reverse-engineers a codebase through file reads and grep; kern's answer is that the codebase is already a database with a schema. <strong>The IDE is an API.</strong></p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">;; an agent's patch is data — admission runs the</span></div>
+          <div><span class="cm">;; verifiers IN the insert transaction</span></div>
+          <div>(<span class="kw">admit!</span> <span class="fn">patch-7f3a</span></div>
+          <div>&nbsp;&nbsp;<span class="str">:capabilities</span> '(crm.read billing.read)&nbsp;<span class="cm">; else unnameable</span></div>
+          <div>&nbsp;&nbsp;<span class="str">:fuel</span>&nbsp;&nbsp;1e6&nbsp;&nbsp;<span class="cm">; sandbox tier — metered exactly</span></div>
+          <div>&nbsp;&nbsp;<span class="str">:verify</span> '(catalog-parity capability-audit</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pii-flow contracts))</div>
+          <div>&nbsp;</div>
+          <div><span class="cm">;; rejected code never becomes code.</span></div>
+          <div><span class="cm">;; admitted code IS the catalog.</span></div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">capabilities</span><span class="what">the environment is the policy — unbound means unnameable</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">fuel</span><span class="what">exact step + allocation budgets per evaluation — untrusted code is priced, not trusted</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">review</span><span class="what">structural diffs in the same UI as record audit — code changes get audit rows</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">MCP</span><span class="what">catalog queries, hash-addressed fetches, verdicts as data — built in</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="resolution" style="margin-top:44px">
+      <div class="mark">⌁</div>
+      <div class="claim">Every agent framework bolts guardrails onto a codebase that is still text. <span>In kern the codebase is a database with a schema — the guardrails are the storage format. A substrate agents can't hallucinate off of is a category of one.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 5 — the mutable surface</div>
+    <h2>Change the application while it runs — <em>editing is admission</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>The runtime-metadata products — Salesforce's config plane, Airtable, Twenty — proved something loud: <strong>users want to reshape live software.</strong> Custom objects, fields, views, and automations, created from Settings, live in seconds, no deploy. And every one of them is built the same way: a metadata engine interpreting rows at runtime, running <em>beside</em> a codebase that is still text shipped through CI. That seam is the product's ceiling — what Settings can't express needs a pull request, and the two substances version, audit, and migrate under different laws. Kern doesn't have the seam. <strong>Metadata was always code that lived in the database. In kern, all of it does.</strong></p>
+        <p>So the no-code surface is not a second engine — it is a thin client of admission. Attributes draw from a <strong>closed vocabulary of semantic types</strong> — money, email, phone, address, select, relation, and kin — each carrying its validation, rendering, masking, and locale behavior. A Settings edit arrives as an <code>extend-resource</code> form and passes the same gate as everything else: verified, versioned, audit-rowed, live on commit. A trigger-action workflow drawn in the builder lands as the same <code>defworkflow</code> sexp an engineer would write. Roles are the same story — a role is a named bundle of capabilities, a row, grantable to a human, a key, or an agent alike. <strong>The Settings UI is an agent</strong> — a well-behaved one whose patches happen to be forms filled in by humans.</p>
+        <p>Tenant customization is the same mechanism, one column deeper. <strong>Scope is a column on the definition row</strong> — product, package, org, team, user — and the catalog resolves through the chain: a tenant sees the base product plus their org's overlay; a rep sees personal views above the team's. When an org admin adds a field to <code>deal</code> from Settings, the admitted form is scoped to their org — forms, views, policy, API, and history know it seconds later, and no other tenant's catalog moves at all. Extension needs no reserved prefixes and no hand-assigned “universal identifiers” to survive deploys — identity is the hash, and an extension references the exact base definition it extends. Who may edit is the same machinery one level up: schema-editing is a capability granted through roles, not a hardcoded admin flag. And because the overlay is code, the customization ladder has no cliff — a field today, a computed field tomorrow, a validation, a workflow, a component — the same substance throughout, priced in capability grants, not in “call us” tiers.</p>
+        <p>And the surface users shape most — <strong>views, layouts, dashboards</strong> — is rows by the same argument. A saved view is a catalogued query plus a projection: table, board, and calendar are three renderings of one form; filters, sorts, and groupings are data; a dashboard is widgets over the same queries; record pages compose the closed component vocabulary. Because views are definitions, they inherit the machinery unasked — dependency-exact invalidation, policy scoping, per-role sharing, as-of history. “Who changed the pipeline board” is the same query as “who changed the record.”</p>
+        <p>And here is what the substrate uniquely buys the builder: <strong>round-trip.</strong> Every visual builder ships with an eject cliff — the UI writes config until config runs out, someone drops to code, and the builder can never render that object again; from that day the product has a made-in-the-UI half and a made-by-engineers half, drifting. Kern's builders are <strong>projectional editors over the catalog</strong>: the workflow canvas, the form designer, and the view editor read and write the same sexps engineers do, and the canonical printer guarantees the rendering is one-to-one. Whatever the UI writes, an engineer can open in a buffer; whatever an engineer admits, the UI renders back as editable structure — a form the closed vocabulary can't express appears as an inline code node on the same canvas, not a locked door. Drafts are rows; activating one is admission; and because a running workflow is a continuation, the canvas can open a <em>live run</em> — showing which step it sleeps on, with a durable condition's restarts rendered as buttons an operator presses.</p>
+        <p>So make it official: <strong>the builder is a first-class object.</strong> Every kern product ships a workflow builder for its tenants not as a feature someone built but as a derived surface — the canvas, the palette, and the property panels are catalogued components like everything else: admitted, versioned, scoped, as-of queryable. Cash that out. The palette is a query — it offers exactly the step types the current user's capabilities can admit, so <em>unnameable</em> extends to the UI: a step you may not use is not greyed out, it is absent. A package that ships a new action ships its palette entry and property panel as fields on the same definition row — installed, it appears on every canvas allowed to name it, with no builder release. Property panels derive the way forms derive from resources, because def-forms are themselves typed, catalogued grammar — the builder is what happens when the derivation machinery is pointed at the language itself. And the fixed point holds: the builder's own definition opens on its own canvas. Smalltalk shipped its browser inside the image fifty years ago; kern ships its builder inside the catalog, where a product team, a tenant, or an agent can patch it — and roll it back — like any other rows.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">;; a tenant admin adds a field — an admission like any other</span></div>
+          <div>(<span class="kw">admit!</span> (<span class="kw">extend-resource</span> <span class="fn">deal</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(win-chance percent))</div>
+          <div>&nbsp;&nbsp;<span class="str">:scope</span> (org acme)&nbsp;&nbsp;<span class="cm">; their overlay — no other tenant sees it</span></div>
+          <div>&nbsp;&nbsp;<span class="str">:by</span> (member 312)&nbsp;<span class="str">:via</span> settings)&nbsp;&nbsp;<span class="cm">; or :via agent — same gate</span></div>
+          <div>&nbsp;</div>
+          <div><span class="cm">;; a saved view is a catalogued query + a projection</span></div>
+          <div>(<span class="kw">defview</span> <span class="fn">pipeline</span> (deal)</div>
+          <div>&nbsp;&nbsp;(<span class="fn">board</span> <span class="str">:group-by</span> stage <span class="str">:sum</span> amount)&nbsp;<span class="cm">; table · board · calendar</span></div>
+          <div>&nbsp;&nbsp;(<span class="kw">where</span> (mine owner))</div>
+          <div>&nbsp;&nbsp;(<span class="kw">show</span> stage amount company close-date))</div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">live schema</span><span class="what">the field exists in seconds — forms, policy, history, and the API already know it</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">scope chain</span><span class="what">product · package · org · team · user — one column, resolved per request; upgrades re-verify every overlay</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">views</span><span class="what">table · board · calendar — one query, three projections; filters and sorts are data</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">layouts</span><span class="what">record pages and dashboards compose the closed vocabulary — no plugin runtime</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">the builder</span><span class="what">itself rows — the palette is a capability query, panels derive from the grammar, the canvas opens its own definition</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">one gate</span><span class="what">user edit, agent patch, developer deploy — the same transaction, the same audit row</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="resolution" style="margin-top:44px">
+      <div class="mark">⟲</div>
+      <div class="claim">The eject cliff is deleted: <span>“config” and “code” were always one substance rendered two ways. The builder writes sexps, engineers write sexps, agents write sexps — one gate admits them, and one canvas renders them all back — a canvas that is itself rows.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 6 — the derived edge</div>
+    <h2>The API, every webhook, every locale — <em>projections of the catalog</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>An admitted resource is already an API. List, get, create, update, delete — over REST and the sexp wire — with filters and sorts drawn from the same query forms views use, executing inside capability environments so an endpoint <em>cannot</em> out-permission the application. The OpenAPI document is a query against the catalog: it can't drift from the schema because it <strong>is</strong> the schema, projected. Declare a resource and the endpoint exists seconds later — not a codegen pipeline, a SELECT. And <strong>API keys are capability grants</strong> — scoped, expiring, audit-rowed — not ambient tokens with a name.</p>
+        <p>Outbound crossings hold the same discipline. A webhook is a <strong>subscription row on the change stream</strong> — transactional with the write that caused it, durable, replayable from history when the receiver was down. An import is a governed transaction: a CSV maps onto resource forms, runs the same verifiers as every other write, dry-runs as a transaction that reports instead of committing — then lands whole or not at all, provenance on every row.</p>
+        <p>Translations complete the argument. Components emit meaning, not markup, so every human-visible string has one home: a label field on a catalogued definition. <strong>A translation is a row</strong> — (hash, locale) → string — bound at patch time, while the semantic types localize themselves: money, dates, and addresses format per locale from the type, not the template. A locale's coverage is a completeness query; an agent can translate the catalog overnight and the verifier reports exactly what's missing. No extraction pipeline, no .po files, no string that escaped them.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">;; the endpoint exists because the resource does —</span></div>
+          <div><span class="cm">;; GET /api/deal?stage=won&amp;sort=-amount · policy-scoped</span></div>
+          <div><span class="cm">;; openapi.json is a SELECT against the catalog</span></div>
+          <div>&nbsp;</div>
+          <div>(<span class="kw">defhook</span> <span class="fn">ledger-sync</span> (deal <span class="str">:on</span> (create update))</div>
+          <div>&nbsp;&nbsp;<span class="str">:post</span> <span class="str">"https://ledger.example/hooks"</span> <span class="str">:sign</span> hmac)</div>
+          <div>&nbsp;</div>
+          <div><span class="cm">;; a translation is a row — types carry the formats</span></div>
+          <div>(<span class="kw">translations</span> <span class="fn">deal</span> <span class="str">:nl</span></div>
+          <div>&nbsp;&nbsp;(stage <span class="str">"fase"</span>) (close-date <span class="str">"sluitdatum"</span>))</div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">rest + openapi</span><span class="what">endpoints and docs derive from the catalog — keys are capability grants</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">webhooks</span><span class="what">subscription rows — transactional with the write, replayable from history</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">import / export</span><span class="what">map, verify, dry-run, commit whole — one transaction, provenance kept</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">locales</span><span class="what">translations are rows, coverage is a query — semantic types carry the formats</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Unique feature № 7 — the resident agent</div>
+    <h2>An agent isn't a client at the seam — <em>it's a resident inside it</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>Strip the frameworks and an agent is embarrassingly small: a recursive function over a growing list of messages, whose one tool is <code>eval</code>, whose memory is JSON on a disk. Governed evaluation — the admission gate — already governs the code such an agent <em>writes</em>, treating it as an author standing at the seam. This is the other half, and the inversion: <strong>the agent itself becomes a resident object.</strong> Because every part it is made of already has a first-class home here — the loop is a continuation, the tool is governed evaluation, the memory is the catalog, the audit is the history tier — making it native is almost entirely <em>reuse</em>. The one new thing is a name for the composition: <code>defagent</code>.</p>
+        <p>The loop is a <strong>continuation</strong>. The accumulated message history is its environment, each model call is a step, and the whole conversation is a row — so it survives a deploy, parks for three days on a human's approval at zero cost, and resumes on any node. The article threads that state by hand and writes it to disk in twenty lines; the continuation store already holds workflows and sessions exactly this way, and the agent simply joins them. And the tool is <strong>admission</strong>. The article's most powerful move — one tool, <code>eval</code> — carries its one caveat: eval requires a sandbox, so the author runs it in Docker. Kern <em>is</em> that sandbox, as the storage format — reasoning-time evals run fuel-metered in the interpreter tier, where an ungranted capability is <em>unnameable</em>, not refused. There is no box to bolt on, because isolation is where the code already lives.</p>
+        <p>And the skills. Handed an API key mid-conversation, the article's agent writes a <code>brave-search</code> function into its running image — a real capability, invented at runtime — but it lives only in the transcript: a fresh session must re-read its own history and re-<code>eval</code> its own code to get it back. <em>Capability is just a story the agent tells itself.</em> Kern makes learning <strong>admission</strong>: a skill worth keeping passes the same gate as engineer code — catalog parity, capability audit, PII flow, contracts, inside the insert transaction — and becomes a content-addressed row, verified once, named by hash, scoped to its org, revocable, and live in every future session with no rehydration. The story it tells itself becomes <strong>a row it can query</strong> — and the transcript still holds the reasoning that built it, as provenance and an as-of trail of exactly how the skill was learned, not code that must be re-run to exist.</p>
+        <p>What is genuinely new is the <strong>identity</strong>. A <code>defagent</code> is a definition like a resource or a workflow — a row binding a catalogued prompt, a role (its capability bundle, and so its blast radius), a fuel budget, a model endpoint held as a <strong>metered capability</strong>, and a tool surface: the exact set of definitions it may name. It is content-addressed, scope-columned, versioned, as-of queryable, and delegable by attenuation — a user grants it a subset of their own capabilities and never more. So the agent is a <strong>principal</strong>, the same kind of row a human or an API key is, the same substance as the application it operates on; a role was already a named bundle of capabilities grantable to a human, a key, or an agent alike — this is the agent that phrase was always describing. Its self-authored skills stay sandbox-tier — metered, interpreted, capability-scoped — because admitted native code shares the kernel's heap; promotion to the native tier is a capability the agent does not hold, gated behind an operator's restart. Self-extension is real, and it is fenced exactly where the honest edges draw the line.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">;; an agent is a definition — a row: prompt, role, budget, scope</span></div>
+          <div>(<span class="kw">defagent</span> <span class="fn">deal-desk</span></div>
+          <div>&nbsp;&nbsp;(<span class="kw">prompt</span> sales-copilot)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">; a catalogued prompt — by hash</span></div>
+          <div>&nbsp;&nbsp;(<span class="kw">model</span>&nbsp; (opus <span class="str">:budget</span> 2e5 tokens))&nbsp;<span class="cm">; a metered capability</span></div>
+          <div>&nbsp;&nbsp;(<span class="kw">grant</span>&nbsp; (<span class="kw">role</span> sales-agent))&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">; its tools ARE its capabilities</span></div>
+          <div>&nbsp;&nbsp;(<span class="kw">fuel</span>&nbsp;&nbsp; 1e6) (<span class="kw">scope</span> (org acme)))&nbsp;<span class="cm">; sandbox tier · one overlay</span></div>
+          <div>&nbsp;</div>
+          <div><span class="cm">;; the loop isn't written — it's a continuation over the thread;</span></div>
+          <div><span class="cm">;; a skill it learns is an admission, not a story it re-tells</span></div>
+          <div>(<span class="kw">defworkflow</span> <span class="fn">turn</span> (deal-desk thread)</div>
+          <div>&nbsp;&nbsp;(<span class="kw">let</span> ((said (<span class="kw">step</span> (complete deal-desk thread))))&nbsp;<span class="cm">; model call · metered · journaled</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;(<span class="kw">case</span> (kind said)</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(<span class="str">:say</span>&nbsp;&nbsp; said)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">; base case — answered in words</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(<span class="str">:learn</span> (<span class="kw">admit!</span> (skill said)&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">; it WROTE a capability, mid-loop —</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="str">:verify</span> '(catalog-parity capability-audit pii-flow contracts))&nbsp;<span class="cm">; a row now, not a re-eval</span></div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(<span class="kw">await</span> (turn deal-desk (add thread said))))</div>
+          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(<span class="str">:do</span>&nbsp;&nbsp;&nbsp; (<span class="kw">await</span> (turn deal-desk (add thread (<span class="kw">step</span> (invoke said)))))))))&nbsp;<span class="cm">; ungranted is unnameable</span></div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">the loop</span><span class="what">a continuation over the message history — survives deploys, parks on await at zero cost, resumes anywhere</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">the tool</span><span class="what">governed eval, fuel-metered — the Docker box the article bolts on is the storage format</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">skills</span><span class="what">admitted catalog rows — verified, hash-named, scoped, revocable; queried by hash, not re-eval'd from a transcript</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">memory</span><span class="what">the history tier — the transcript is provenance, as-of: replay the exact skills that ran that day</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">identity</span><span class="what">a defagent principal — content-addressed, scoped, versioned, delegable by attenuation</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">exactly-once</span><span class="what">the invoked tool's effect + the appended message commit in one transaction — the tool never double-fires on a crash</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="resolution" style="margin-top:44px">
+      <div class="mark">λ</div>
+      <div class="claim">Every agent framework hand-rolls the loop, the memory, and the sandbox — because its substrate offers none. <span>Kern offers all three as its normal behavior, so the agent was never a client at the seam: it is a resident — its loop a continuation, its skills the catalog, its memory the history tier, its identity a row you can SELECT.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Trust, baked into the schema</div>
+    <h2>Audit everything. Forget anyone. <em>Including the code.</em></h2>
+    <div class="feature-grid">
+      <div class="prose">
+        <p>A <code>(pii …)</code> field never enters the history stream — it lives in a <strong>mutable, per-subject-keyed vault</strong>, with keys held in an external KMS outside the backup surface; everything downstream carries only a token. The derived components know what the schema knows, so a PII field <strong>renders masked by default</strong> — plaintext materializes only behind an explicit, expiring reveal grant, approved by a second party and written to a tamper-evident audit row. Erasure is <strong>crypto-shredding</strong>: destroy a subject's key and every copy of their personal data — live, replica, history, backup — becomes permanently undecryptable ciphertext, while the history itself still replays perfectly.</p>
+        <p>One deliberate exception to “nothing else”: <strong>the vault's cipher and the password hash bind to a vetted, audited implementation — never a hand-rolled one.</strong> The two primitives that actually guard secrets — authenticated symmetric encryption and the password KDF — are also the two whose subtle errors are invisible to ordinary tests: a broken cipher still round-trips, a wrong hash still verifies against itself. A vault is exactly where “from scratch” stops being a virtue, so kern uses an authenticated construction (AEAD, not unauthenticated CBC) from a reviewed library and treats the primitive as a dependency to pin and audit, not to write.</p>
+        <p>The operator plane derives from the same resources as the product: your support console, account views, and billing rollups are queries against the objects you already ship, not a second admin app built six months later. An operator impersonating a tenant sees the tenant's real UI with <strong>PII masked by default</strong> — support without disclosure, structurally.</p>
+        <p>And because code is rows, <strong>the audit story finally covers the whole system</strong>. Who changed this workflow, when, what did it look like before, who approved it — the questions a SOC&nbsp;2 auditor calls “change management” and every other stack answers with screenshots of a CI dashboard — are, in kern, the same query as “who changed this record.” One audit machinery, both substances.</p>
+      </div>
+      <div>
+        <div class="codecard">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div><span class="cm">;; right-to-erasure, in one line</span></div>
+          <div>(<span class="kw">vault-shred!</span> subject-key)</div>
+          <div><span class="cm">;; history intact · PII unrecoverable</span></div>
+          <div>&nbsp;</div>
+          <div><span class="cm">;; change management is a query, not a screenshot</span></div>
+          <div>(<span class="kw">select</span> (definitions <span class="str">:as-of</span> <span class="str">"2026-03-01"</span>)</div>
+          <div>&nbsp;&nbsp;<span class="str">:where</span> (= name <span class="str">'follow-up</span>))</div>
+          <div><span class="cm">;; → the exact workflow that ran that day,</span></div>
+          <div><span class="cm">;;   who admitted it, and what the verifiers said</span></div>
+        </div>
+        <div class="fanout">
+          <div class="fan"><span class="arrow">→</span><span class="to">the vault</span><span class="what">personal data, mutable, per-subject keys — tokens everywhere downstream</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">masking</span><span class="what">the default render, derived from the declaration — reveals are granted, expiring, logged</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">the operator plane</span><span class="what">the same objects, masked impersonation — support without disclosure</span></div>
+          <div class="fan"><span class="arrow">→</span><span class="to">change management</span><span class="what">code has audit rows and as-of — the compliance answer is a query</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">The language</div>
+    <h2>Designed for machine writing, <em>human auditing</em></h2>
+    <div class="prose measure">
+      <p>“World-class for AI” is a language-design spec, not a marketing line, and kern's dialect is built to it. <strong>Every definition is stored content-addressed</strong> — the idea Unison proved — so the hash is the identity and names are catalog pointers. Renames are metadata. Drift is impossible. An agent's patch references exact hashes; there is no “which <code>status</code> did it mean.”</p>
+      <p><strong>One canonical printer.</strong> Exactly one rendering of every form — no formatting diffs, no style debates, minimal tokens. Structural diffs are the only diffs; the review UI shows semantic change or nothing. <strong>A deliberately small, boring core:</strong> no reader macros in the application dialect, a fixed special-form set, effects only through capabilities. Every constraint on human expressiveness is a gift to machine verifiability — and in this substrate, humans audit more than they type. Contracts, docstrings, and examples are machine-readable fields on the definition's row, not comments beside it — so the reference manual is a projection of the catalog, never stale, and because views and components are definitions too, its screenshots are live renders, not images that rot.</p>
+      <p>The host split is pragmatic: <strong>the kernel is Common Lisp on SBCL</strong> — a mature native compiler available <em>at runtime</em>, plus the condition system the workflow engine is built on. <strong>The application dialect is kern's own</strong>, CPS-transformed so continuations serialize, compiled through SBCL at admission for the hot path. The host provides an engine; the dialect is the product.</p>
+    </div>
+    <div class="stack">
+      <div class="brick"><span class="badge">exists</span><div class="lib">SBCL</div><p>A world-class native compiler where <code style="font-family:var(--mono);font-size:12.5px">compile</code> is a core function — compile-on-admission is a language feature, not a build system. Conditions, restarts, and thirty years of image-based living systems.</p></div>
+      <div class="brick"><span class="badge">exists</span><div class="lib">Postgres primitives</div><p>LISTEN/NOTIFY as the bus, SKIP LOCKED queues, partitioned history, transactional DDL — pubsub, presence, cron, and the change stream are queries, not services. The database is the distribution layer.</p></div>
+      <div class="brick"><span class="badge dim">prior art</span><div class="lib">Smalltalk · Unison · Racket · LiveView · DBOS · Ash · Twenty</div><p>The browser inside the image, content-addressed code, serializable-continuation web serving, the static/dynamic split, durable execution over rows, resource derivation, runtime-mutable metadata with APIs generated from it. Proven separately, elsewhere — kern is where they meet. Credits, not dependencies.</p></div>
+      <div class="brick"><span class="badge">kern</span><div class="lib">The evaluator + fuel meter</div><p>Kern's own dialect: CPS-transformed, capability-scoped environments, exact step and allocation budgets for sandbox tiers, native compilation for admitted code.</p></div>
+      <div class="brick"><span class="badge">kern</span><div class="lib">The admission pipeline</div><p>Verifiers in the insert transaction: catalog parity, capability audit, PII flow, contracts. The type system the dynamic dialect must earn — fail-closed, per transaction.</p></div>
+      <div class="brick"><span class="badge">kern</span><div class="lib">The continuation store</div><p>Workflows, sessions, and conditions serialized as rows with wake conditions — resumable by any node, versioned against exact code hashes.</p></div>
+      <div class="brick"><span class="badge">kern</span><div class="lib">The reactive layer</div><p>Expansion-time static/dynamic split, dependency-exact invalidation derived from the catalog, byte patches on an owned wire, a closed ~25-component vocabulary.</p></div>
+      <div class="brick"><span class="badge">kern</span><div class="lib">The vault + operator plane</div><p>Per-subject keyed PII vault, crypto-shred erasure, masked-by-default rendering, expiring reveal grants, and an operator plane derived from the same resources — trust as schema, not process.</p></div>
+      <div class="brick"><span class="badge">kern</span><div class="lib">The mutable surface</div><p>Semantic field types, views · boards · dashboards as catalogued queries, a workflow canvas that is itself catalogued components, and a Settings client that submits admission transactions — no-code and code are one substance.</p></div>
+      <div class="brick"><span class="badge">kern</span><div class="lib">The derived edge</div><p>REST + OpenAPI projected from the catalog, API keys as capability grants, webhook subscription rows, per-locale translation rows bound at patch time.</p></div>
+      <div class="brick"><span class="badge">kern</span><div class="lib">The resident agent</div><p>A <code style="font-family:var(--mono);font-size:12.5px">defagent</code> binds a catalogued prompt, a role, a fuel budget, and a metered model endpoint — its loop a continuation, its learned skills admitted rows, its memory the history tier. Not a subsystem: a composition of the rows above.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Simplicity, measured in deletions</div>
+    <h2>Infrastructure you will never run</h2>
+    <p class="prose measure" style="color:var(--muted)">Every box below is a thing most stacks deploy, version, secure, monitor, and pay for. In kern, each one is a table, a query, or the evaluator's normal behavior — inside the two things you already have. The last row is the unusual one: kern deletes the machinery of <em>shipping software itself</em>, because “ship” stopped being a concept the moment the code became rows.</p>
+    <div class="deleted">
+      <div class="gone"><div class="name">Redis · broker · cron</div><p><b>→ postgres</b> — queues, pubsub, and schedules are rows and NOTIFY, transactional with your data</p></div>
+      <div class="gone"><div class="name">Orchestrator cluster</div><p><b>→ continuations</b> — durable execution is the evaluator's normal behavior, checkpoints are rows</p></div>
+      <div class="gone"><div class="name">Session store</div><p><b>→ rows</b> — sessions are continuations; deploys and node loss don't drop them</p></div>
+      <div class="gone"><div class="name">Deploy pipeline</div><p><b>→ a transaction</b> — admit, don't ship; the verifiers are the gate, commit is the release</p></div>
+      <div class="gone"><div class="name">Artifact registry</div><p><b>→ the history tier</b> — every version of every definition, content-addressed, immortal</p></div>
+      <div class="gone"><div class="name">Rollback choreography</div><p><b>→ as-of</b> — the previous application is a WHERE clause, not a runbook</p></div>
+      <div class="gone"><div class="name">Workflow-versioning machinery</div><p><b>→ as-of</b> — paused workflows resume against the exact hashes they started with</p></div>
+      <div class="gone"><div class="name">Frontend build pipeline</div><p><b>→ gone</b> — no bundler, no node_modules; a vendored ~15 KB patch applier</p></div>
+      <div class="gone"><div class="name">ORM + admin scaffold</div><p><b>→ the resource</b> — schema, queries, forms, policy, and the operator plane derive from declarations</p></div>
+      <div class="gone"><div class="name">Code search / IDE indexer</div><p><b>→ the catalog</b> — the codebase has a schema; agents query it over MCP</p></div>
+      <div class="gone"><div class="name">git as truth</div><p><b>→ a projection</b> — the repo is a deterministic view of the code tables; the image is truth</p></div>
+      <div class="gone"><div class="name">Guardrail bolt-ons</div><p><b>→ admission</b> — capability environments + verifiers in the transaction; governance is the storage format</p></div>
+      <div class="gone"><div class="name">Agent framework · JSON memory · sandbox VM</div><p><b>→ a resident</b> — the loop is a continuation, skills are admitted rows, isolation is the storage format</p></div>
+      <div class="gone"><div class="name">Metadata engine · EAV layer</div><p><b>→ the substrate</b> — custom objects are resource forms; no second engine interpreting a second schema</p></div>
+      <div class="gone"><div class="name">API codegen · gateway config</div><p><b>→ the catalog</b> — endpoints, OpenAPI, webhooks, and keys are projections and grants</p></div>
+      <div class="gone"><div class="name">i18n extraction · .po pipeline</div><p><b>→ rows</b> — labels live on definitions; a locale is a coverage query, translating it is an agent's chore</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">Who it serves</div>
+    <h2>Sized for almost everyone — <em>built for the agent era</em></h2>
+    <div class="prose measure">
+      <p>A single well-provisioned Postgres sustains thousands of governed write-interactions per second; the median SaaS never sees one percent of that. B2B SaaS, vertical products, internal tools, and — above all — <strong>products where an AI agent does the work</strong>: an agent operating on live customer data needs a catalog it can't hallucinate off of, capabilities that bound what it may touch, a vault so it never lands a name in the clear, and an audit row for every action it takes. That is not a feature list to assemble; in kern it is the storage format.</p>
+      <p>Scale up by buying a bigger Postgres — the most boring, best-understood move in the industry. Scale out by adding identical stateless kernels: sessions are rows, so no node is special, none is sticky, and any node resumes anything. You will exit this envelope around the time you can afford a platform team to build the next one.</p>
+    </div>
+    <div class="resolution" style="margin-top:36px">
+      <div class="mark">≈</div>
+      <div class="claim">The two-things test, passed twice: <span>your infrastructure is a kernel and a Postgres — and your entire application, past and present, is something you can SELECT.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-label">What we won't pretend</div>
+    <h2>The honest edges</h2>
+    <div class="honest" style="margin-top:8px">
+      <div class="h-label">Named, not waved away</div>
+      <ul>
+        <li><strong>The runtime pond is us.</strong> No BEAM, no JVM, no Node underneath: kern owns its scheduler, its reactor, and its GC profile. SBCL's generational GC pauses at large heaps — mitigated by the architecture itself (state lives in Postgres, sessions checkpoint out, per-node heaps stay small) — but when it pages, it pages us.</li>
+        <li><strong>Shared heap, stated plainly.</strong> Compiled, admitted code has no memory isolation from the kernel. Fuel metering covers the sandbox tiers; admitted native code is <em>trusted-by-verification</em> — which makes the verifier suite and capability environments load-bearing, and says exactly where the security boundary is. That is the trade for exact metering and one runtime.</li>
+        <li><strong>A model call is an effect the fuel meter can't price.</strong> Fuel counts interpreter steps and allocations; an agent's dominant cost is tokens, dollars, and turns — a loop can be cheap in fuel while burning a fortune, or looping for days. So the metered model endpoint carries its own budget axis, a turn/token/dollar ceiling above the step meter, and each completion is journaled before the turn commits, so a resume replays the recorded answer instead of re-calling and re-billing the model — save for the one narrow window, between the call returning and the journal landing, where a crash forces a single re-call. That is the one honest extension the resident agent asks of the substrate; everything else it needs, kern already had.</li>
+        <li><strong>Capabilities bound the blast radius, not the judgment.</strong> A resident agent is bounded by construction — it cannot name what it wasn't granted, cannot admit outside its capabilities, cannot land a name in the clear. But a prompt-injected agent is still an agent acting <em>inside</em> its grant, and everything inside a grant is, by construction, allowed: an injection turns untrusted data into a within-capability action the verifiers pass, because they type-check the code, not the wisdom of the instruction behind it. An action that stays in the database is a reversible row — as-of rewinds it, the audit row attributes it, an incident cut down to a <code style="font-family:var(--mono);font-size:12.5px">WHERE</code> clause. But a granted <em>egress</em> — a webhook it may post, a mail it may send — crosses the seam and is gone; no clause un-sends it. That an action <em>should</em> have been taken is a guarantee no substrate can offer. Least-capability grants, the narrowest possible egress surface, and human escalation on high-consequence restarts are the mitigation; provable judgment is on offer from no one, and we won't pretend otherwise.</li>
+        <li><strong>A dynamic dialect can't say “it doesn't compile.”</strong> A statically-typed language makes a hallucinated field a compiler error; kern rebuilds that guarantee from contracts and verifiers at admission time. The verifier suite <em>is</em> the type system, and its coverage is the real boundary of every claim in this document — a guarantee the verifiers don't check is a guarantee the framework doesn't have, however confidently the DSL declares it. That is not hypothetical: the default outcome of hand-built frameworks is a policy layer that reads as enforced and is wired into nothing, and the whole point of admission is to make that specific failure impossible. But it relocates trust rather than removing it: kern is exactly as safe as its verifiers are complete, so their coverage is versioned, tested adversarially, and stated as the security boundary it is. A gradually-typed layer is the eventual reinforcement, not the v1 promise.</li>
+        <li><strong>Continuation serialization is the deepest engineering bet.</strong> Closures capturing environments must serialize stably across years. Content-addressing helps — checkpoints reference immortal hashes — but capture discipline has to be designed into the dialect from day one. This burden is owned, tested red-path-first, and shipped before anything else gets clever.</li>
+        <li><strong>Bootstrap cost is real, and it lives in the hardening, not the happy path.</strong> The surface is smaller than it looks — Postgres does queue, cron, pubsub, presence, sessions, and history, so the kernel is a reactor, an evaluator, a verifier, and a wire protocol — and a working end-to-end substrate is a few thousand lines, not a moonshot. The distance is between “passes its own tests” and “survives the network”: a database driver that resynchronizes cleanly after a mid-query error instead of poisoning a pooled connection, a connection layer that can't be exhausted by idle clients holding workers, correct UTF-8 at every byte boundary, TLS on every wire, protocol edge cases handled the way the RFC demands and not the way the demo needed. Mature runtimes carry a decade of exactly that scar tissue; kern re-earns it deliberately, red-path-first, and does not pretend the green path is the hard part.</li>
+        <li><strong>git interop is mandatory, and the inversion will scare people.</strong> A deterministic two-way projection keeps review, CI, and editors working — but the image is truth and the repo is a view, and that reversal terrifies before it comforts. The projection ships in v1 or trust never arrives.</li>
+        <li><strong>One canonical style, no exceptions.</strong> The printer's single rendering deletes formatting diffs and token waste — and personal style with them. Deliberate: in this substrate humans audit far more than they type. A trade stated, not hidden.</li>
+        <li><strong>A new dialect is a small hiring pond.</strong> The counterweight — that the marginal author of code is increasingly an agent, and the language is optimized for machine writing and human auditing — is a thesis, not a fact. We say so, and we ship the git projection and the canonical docs so a strong generalist is productive in days, not months.</li>
+        <li><strong>Postgres has ceilings.</strong> Partitioning and rollups carry most products indefinitely; past ~100M+ raw history rows with ad-hoc scan appetite, a columnar mirror is a per-product bolt-on decision. The primary's write budget is the sharding signal — and because every row is org-scoped, the shard key is the tenant. Nothing about code-as-rows changes either number.</li>
+        <li><strong>Runtime schema change is live DDL.</strong> A tenant's field-add is a migration on a hot table. Admission serializes and verifies it, but lock behavior, backfill cost, and per-tenant divergence are operational budgets, not free moves — additive changes are instant, destructive ones are gated, and the mutable surface is rate-limited by design.</li>
+        <li><strong>A mutable surface is a stability contract.</strong> Once tenants build views, imports, and webhooks on a field, rename and delete become deprecation events. Content-addressing makes renames metadata inside kern — but external callers hold names, so the derived API carries aliases and sunset windows, and deletion is a staged retirement, not a DROP.</li>
+        <li><strong>Tenant overlays meet product upgrades head-on.</strong> Every base release re-verifies every org's overlay against the new catalog. The win is where breakage surfaces — at admission, per tenant, as a named verifier failure before the upgrade lands, never as a runtime surprise after. The cost is fleet machinery: cohort rollouts, migration paths, a support lane for the overlay whose computed field leaned on a column the new base retired. Salesforce built an empire on this being hard. Kern makes it a query instead of a mystery — not free.</li>
+        <li><strong>Derivation buys correctness, not delight.</strong> A property panel derived from the grammar is complete and current — and generic. The surfaces people live in still earn hand-built components; the difference in kern is that the hand-built replacement is admitted into the same slot as rows, so polish overlays derivation instead of forking it.</li>
+        <li><strong>Erasure is as final as your backup posture.</strong> The vault's key store rides outside the WAL and backup surface precisely so a restore resurrects ciphertext, never keys — and a shredded subject lingers in cold backups exactly as long as your stated retention. Name it.</li>
+        <li><strong>Workflows are for mutations, never reads.</strong> Each step costs a Postgres write; the render path stays out of the engine. A design rule, not a tip.</li>
+        <li><strong>A device-resident kernel ships later, deliberately.</strong> Code syncs like rows, so an offline-capable local kernel is a natural consequence of the architecture, not a promise bolted on. v1 is server-rendered SaaS; the device lane is its own product, scoped after the change stream has earned it in production.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="cta" style="border-top:1px solid var(--rule)">
+    <div class="sec-label">The pitch, in one sentence</div>
+    <h2>Your app, your schema, your views, your workflows, your policies, your API, your translations, your agents and the patches they write, and your tenants' customizations are one substance — versioned expressions in one Postgres, evaluated by one kernel. <em>Deploying, auditing, syncing, localizing, and governing them is one mechanism instead of ten.</em></h2>
+    <div class="actions">
+      <a class="btn btn-primary" href="#">Read the design doc</a>
+      <a class="btn btn-ghost" href="#">Follow the build</a>
+    </div>
+  </section>
+
+  <footer>
+    <span>kern — dutch for “core”: and the core is data. the kernel evaluates, the database remembers, the code is rows</span>
+    <span>lisp ⚡ sbcl ⚡ postgres ⚡ nothing else</span>
+  </footer>
+</div>
+
+</body>
+</html>

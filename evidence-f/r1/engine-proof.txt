@@ -1,0 +1,39 @@
+# R1 ENGINE PROOF — the READ ONLY transaction is the load-bearing SELECT-only guarantee
+# Command (exact):
+#   psql "postgres://clank@localhost:5432/postgres" -f evidence-f/r1/engine-proof.sql
+# Captured: 2026-07-17 — real PostgreSQL 16.13.
+#
+# Shows: (1) SELECT nextval() in AUTOCOMMIT is a REAL WRITE (sequence 1 -> 2) — this
+#   is what std/sql.query did before BUILD-F on the non-as-of path; (2) the SAME
+#   statements inside BEGIN READ ONLY are REFUSED by the engine (nextval, setval, and
+#   a data-modifying CTE); (3) the extended (parameterized) protocol std/sql uses is
+#   single-statement, so stacked statements are structurally impossible.
+# ---------------------------------------------------------------------------------
+NOTICE:  table "r1_engine_proof" does not exist, skipping
+DROP TABLE
+CREATE TABLE
+--- (1) autocommit SELECT nextval() WRITES (the pre-fix hole):
+ advanced_to 
+-------------
+           1
+(1 row)
+
+ advanced_to 
+-------------
+           2
+(1 row)
+
+--- (2a) READ ONLY txn REFUSES nextval() (the fix):
+BEGIN
+ERROR:  cannot execute nextval() in a read-only transaction
+ROLLBACK
+--- (2b) READ ONLY txn REFUSES setval():
+BEGIN
+ERROR:  cannot execute setval() in a read-only transaction
+ROLLBACK
+--- (2c) READ ONLY txn REFUSES a data-modifying CTE:
+BEGIN
+ERROR:  cannot execute SELECT in a read-only transaction
+ROLLBACK
+DROP TABLE
+=== PSQL_EXIT=0 ===

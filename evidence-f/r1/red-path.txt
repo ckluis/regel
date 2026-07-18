@@ -1,0 +1,78 @@
+# R1 RED-PATH — the std/sql write side-effect reachable BEFORE the BUILD-F fix
+# Command (exact), run at HEAD BEFORE editing internal/kernel/dbreader.go:
+#   go test ./internal/kernel/ -run 'TestR1SQLInjectionFixtureFamily' -count=1 -v
+# Captured: 2026-07-17 — real PostgreSQL 16.13 (fresh throwaway DB, dropped at end).
+#
+# WITNESS: classes A (param-injection ×6), B (write/DDL text ×8), C (structural ×8)
+# and E (privilege ×1) are ALREADY refused/contained (all PASS below). Class D —
+# SELECT nextval()/setval(), which pass the isReadOnlySQL string check but are REAL
+# writes — GETS THROUGH: the native returns OutDone (kind=0, cond=<nil>) instead of
+# parking, and the Widget id sequence is mutated 2 -> 999999. The non-as-of read
+# path did not wrap the query in a READ ONLY transaction, so PostgreSQL never
+# refused the write. This is the R1 bug; the BUILD-F fix (always READ ONLY) is in
+# green-path.txt.
+# ---------------------------------------------------------------------------------
+=== RUN   TestR1SQLInjectionFixtureFamily
+=== RUN   TestR1SQLInjectionFixtureFamily/control/exact-param-match
+=== RUN   TestR1SQLInjectionFixtureFamily/control/numeric-param
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A1/or-string-true
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A2/or-comment
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A3/stacked-drop
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A4/union-exfil
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A5/quote-comment
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A6/backslash-quote
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B1/update
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B2/delete
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B3/insert
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B4/drop
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B5/alter
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B6/create
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B7/truncate
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B8/grant
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C1/stacked-drop
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C2/stacked-update
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C3/block-comment-write
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C4/line-comment-write
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C5/for-update-lock
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C6/for-share-lock
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C7/data-modifying-cte
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C8/semicolon-in-comment
+=== RUN   TestR1SQLInjectionFixtureFamily/D/D1/nextval
+    r1_sql_injection_test.go:222: engine-write "SELECT nextval(pg_get_serial_sequence('res_app_r1_widget','id'))" must be refused by the read-only txn (sql.error), got kind=0 cond=<nil>
+=== RUN   TestR1SQLInjectionFixtureFamily/D/D2/setval
+    r1_sql_injection_test.go:222: engine-write "SELECT setval(pg_get_serial_sequence('res_app_r1_widget','id'), 999999)" must be refused by the read-only txn (sql.error), got kind=0 cond=<nil>
+=== RUN   TestR1SQLInjectionFixtureFamily/E/ungranted-caller-refused
+=== NAME  TestR1SQLInjectionFixtureFamily
+    r1_sql_injection_test.go:250: Widget id sequence changed 2 -> 999999 — a write side effect got through
+--- FAIL: TestR1SQLInjectionFixtureFamily (0.24s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/control/exact-param-match (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/control/numeric-param (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A1/or-string-true (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A2/or-comment (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A3/stacked-drop (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A4/union-exfil (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A5/quote-comment (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A6/backslash-quote (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B1/update (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B2/delete (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B3/insert (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B4/drop (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B5/alter (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B6/create (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B7/truncate (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B8/grant (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C1/stacked-drop (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C2/stacked-update (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C3/block-comment-write (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C4/line-comment-write (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C5/for-update-lock (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C6/for-share-lock (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C7/data-modifying-cte (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C8/semicolon-in-comment (0.00s)
+    --- FAIL: TestR1SQLInjectionFixtureFamily/D/D1/nextval (0.00s)
+    --- FAIL: TestR1SQLInjectionFixtureFamily/D/D2/setval (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/E/ungranted-caller-refused (0.00s)
+FAIL
+FAIL	regel.dev/regel/internal/kernel	0.545s
+FAIL
+=== GOTEST_EXIT=1 ===

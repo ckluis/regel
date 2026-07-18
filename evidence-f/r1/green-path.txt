@@ -1,0 +1,70 @@
+# R1 GREEN-PATH — SELECT-only is engine-enforced after the BUILD-F fix
+# Command (exact), run AFTER editing internal/kernel/dbreader.go (always READ ONLY txn):
+#   go test ./internal/kernel/ -run 'TestR1SQLInjectionFixtureFamily' -count=1 -v
+# Captured: 2026-07-17 — real PostgreSQL 16.13 (fresh throwaway DB, dropped at end).
+#
+# WITNESS: all 25 hostile fixtures + 2 green controls PASS. Class D (nextval/setval)
+# is now CONTAINED — the READ ONLY transaction makes PG refuse the write (sql.error /
+# "cannot execute ... in a read-only transaction") and the sequence is untouched.
+# Final integrity assertions confirm: no row-count change on either table, no
+# sequence advance, no leaked table (B6/create), no leaked column (B5/alter).
+# ---------------------------------------------------------------------------------
+=== RUN   TestR1SQLInjectionFixtureFamily
+=== RUN   TestR1SQLInjectionFixtureFamily/control/exact-param-match
+=== RUN   TestR1SQLInjectionFixtureFamily/control/numeric-param
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A1/or-string-true
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A2/or-comment
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A3/stacked-drop
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A4/union-exfil
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A5/quote-comment
+=== RUN   TestR1SQLInjectionFixtureFamily/A/A6/backslash-quote
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B1/update
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B2/delete
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B3/insert
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B4/drop
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B5/alter
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B6/create
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B7/truncate
+=== RUN   TestR1SQLInjectionFixtureFamily/B/B8/grant
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C1/stacked-drop
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C2/stacked-update
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C3/block-comment-write
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C4/line-comment-write
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C5/for-update-lock
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C6/for-share-lock
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C7/data-modifying-cte
+=== RUN   TestR1SQLInjectionFixtureFamily/C/C8/semicolon-in-comment
+=== RUN   TestR1SQLInjectionFixtureFamily/D/D1/nextval
+=== RUN   TestR1SQLInjectionFixtureFamily/D/D2/setval
+=== RUN   TestR1SQLInjectionFixtureFamily/E/ungranted-caller-refused
+--- PASS: TestR1SQLInjectionFixtureFamily (0.23s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/control/exact-param-match (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/control/numeric-param (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A1/or-string-true (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A2/or-comment (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A3/stacked-drop (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A4/union-exfil (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A5/quote-comment (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/A/A6/backslash-quote (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B1/update (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B2/delete (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B3/insert (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B4/drop (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B5/alter (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B6/create (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B7/truncate (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/B/B8/grant (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C1/stacked-drop (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C2/stacked-update (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C3/block-comment-write (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C4/line-comment-write (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C5/for-update-lock (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C6/for-share-lock (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C7/data-modifying-cte (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/C/C8/semicolon-in-comment (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/D/D1/nextval (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/D/D2/setval (0.00s)
+    --- PASS: TestR1SQLInjectionFixtureFamily/E/ungranted-caller-refused (0.00s)
+PASS
+ok  	regel.dev/regel/internal/kernel	0.619s
+=== GOTEST_EXIT=0 ===

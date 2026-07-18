@@ -269,10 +269,34 @@ durability machinery implemented existing ADR law without deviation.
 
 ## 9. Named residues (nothing silent)
 
-1. **R1 std/sql policy-predicate injection**: `sql.query` is SELECT-only +
-   capability-gated + as-of-scoped but does NOT auto-inject the org/policy WHERE
-   predicate the erf read path applies — recorded as a `trusted_for` row on its
-   authority inventory; erf reads carry all policy-scoped surfaces in v1.
+1. **R1 std/sql policy-predicate injection — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r1/`)**:
+   the composition surface (a caller-authored SELECT + `$1` bind params, no
+   auto-injected policy predicate) was proven unsubvertible by an adversarial
+   fixture FAMILY of 25 hostile cases (`internal/kernel/r1_sql_injection_test.go`,
+   `TestR1SQLInjectionFixtureFamily`) across five attack classes: param-injection
+   (×6 — OR-bypass/UNION-exfil/stacked/comment-terminate params all bind as literal
+   data, zero rows leaked), write/DDL text (×8 — UPDATE/DELETE/INSERT/DROP/ALTER/
+   CREATE/TRUNCATE/GRANT refused `sql.write_refused` before PG), structural (×8 —
+   stacked statements, `FOR UPDATE/SHARE` locks, data-modifying CTE, comment-hidden
+   writes all refused), engine-enforced (×2), privilege (×1 — ungranted caller
+   `capability.revoked`, no read). **Real bug found + fixed ADR-first (BUILD-F R1,
+   ADR-10 §4):** `isReadOnlySQL` is a prefix check, so `SELECT nextval()`/`setval()`
+   pass it yet are real writes; the non-as-of read path ran them in autocommit with
+   NO transaction, so PG executed the write (red-path witnessed a derived `id`
+   sequence mutated 2 → 999999 through `std/sql.query`). Fix: `dbReader.Query` now
+   runs EVERY read inside a `READ ONLY` transaction (REPEATABLE READ when as-of,
+   READ COMMITTED otherwise) — PG itself refuses the write (`cannot execute … in a
+   read-only transaction` → resumable `sql.error`); `isReadOnlySQL` stays as
+   defense-in-depth. RED `evidence-f/r1/red-path.txt` ("engine-write … got kind=0
+   cond=<nil>" + "sequence changed 2 -> 999999"); GREEN `green-path.txt` (all 27
+   subtests PASS); engine proof `engine-proof.txt` (`ERROR: cannot execute
+   nextval() in a read-only transaction`); full uncached suite `full-suite.txt`
+   EXIT=0. Trust boundary documented in ADR-10 §4 + `native_tcb_coverage.trusted_for`:
+   the SQL text is author-trusted, `std/sql` does NOT auto-inject a tenant WHERE
+   (a cross-org SELECT is bounded by the capability grant + engine-enforced
+   SELECT-only, not a policy predicate) — policy-predicate injection into std/sql
+   reads remains the named later increment; erf reads carry all policy-scoped
+   surfaces in v1.
 2. **R2 Settings form**: the tenant field-add drives the HTTP admission door;
    no point-and-click Settings FORM ships (the gate/scoping/re-derivation are the
    claim; the form is presentation).

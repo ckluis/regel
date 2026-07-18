@@ -174,6 +174,48 @@ are live under the policy horizon while as-of pins the read snapshot (REPEATABLE
 read-needing native fails closed, never a fabricated row) — it is SELECT-only and never
 writes, so it adds no effect authority to the native TCB.
 
+**BUILD-F (R1) — SELECT-only is engine-enforced, not just string-enforced; the composition
+trust boundary named.** The R1 adversarial fixture family (`internal/kernel/r1_sql_injection_test.go`,
+25 hostile cases across param-injection, write/DDL text, structural, engine-enforced, and
+privilege classes) proved the composition surface — a caller-authored SELECT + `$1` bind
+params — cannot be subverted into injection, a write, a schema change, cross-policy escape,
+or privilege escalation, with one real defect found and fixed:
+
+- **The defect (red-first):** the `isReadOnlySQL` string check is a *prefix* check. A
+  `SELECT`-prefixed statement that is nonetheless a write side effect — `SELECT nextval(seq)`,
+  `SELECT setval(seq, …)`, `SELECT` of any VOLATILE writing function — passes it. Before this
+  fix the non-as-of read path ran such a statement in autocommit with NO transaction wrapper,
+  so PostgreSQL executed the write (the R1 red-path witnessed a derived table's `id` sequence
+  mutated 2 → 999999 through `std/sql.query`). Only the as-of path wrapped in `READ ONLY`.
+
+- **The fix:** `dbReader.Query` now runs **every** `std/sql` read inside a `READ ONLY`
+  transaction (`REPEATABLE READ` when as-of pins a snapshot, `READ COMMITTED` otherwise —
+  `READ ONLY` is the load-bearing mode). PostgreSQL itself then refuses any write side effect
+  with `cannot execute … in a read-only transaction`, surfaced as a resumable `sql.error`
+  condition. `isReadOnlySQL` stays as *defense-in-depth* (it fails fast and never sends a
+  DML/DDL statement to the engine); the READ ONLY transaction is the actual SELECT-only
+  guarantee. The extended (Parse/Bind/Execute) protocol structurally forbids multi-statement
+  batches, so stacked statements are impossible regardless of the `;` check.
+
+- **The composition guarantees that hold:** (i) params are *always* bound as `$1…$n`, never
+  string-interpolated, so no param value — however quoted, commented, or `UNION`-shaped — can
+  alter the parsed statement (proven: hostile params match zero rows, never inject); (ii) the
+  statement is read-only, engine-enforced (proven: no fixture writes, drops, alters, or
+  advances a sequence); (iii) the capability gate `sql.query` is required, so an ungranted
+  caller performs no read (privilege escalation refused).
+
+- **The trust boundary, explicit (the R1 residue this discharges names it):** `std/sql.query`
+  does **not** auto-inject an org/policy `WHERE` predicate the way the erf derived read path
+  does (derivation item 4). The **SQL text itself is author-trusted** — an author holding the
+  `sql.query` capability may write a query that reads any derived table in any scope (a
+  cross-org `SELECT`, a `UNION` across tenants). That authority is bounded by the capability
+  grant + the SELECT-only surface, **not** by an auto-injected tenant filter. Out of scope for
+  v1 (named residues, not defects): policy-predicate injection into `std/sql` reads (a later
+  increment — erf reads carry all policy-scoped surfaces today); and non-data side effects that
+  are not writes (session advisory locks, CPU/time) which `READ ONLY` does not constrain and
+  which the capability grant bounds. Recorded on the native's authority inventory as a
+  `native_tcb_coverage.trusted_for` row.
+
 **BUILD-E (D6a) — `std/identity.currentUser/currentOrg` are row-backed.** They read the
 evaluating principal's `user_account` row (`subject` PK → `user_id`, `org_id`, `email`,
 `display_name`, `roles`; ADR-03 DDL, authored in `schema.sql` §11) through the same

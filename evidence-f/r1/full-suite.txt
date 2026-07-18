@@ -1,0 +1,21 @@
+# R1 full uncached suite — go clean -testcache && go test ./... (real PG 16.13), 2026-07-17
+# EXIT=0
+# ------------------------------------------------------------------
+ok  	regel.dev/regel/cmd/regel	3.321s
+ok  	regel.dev/regel/gate/m5eval	2.344s
+?   	regel.dev/regel/gate/nativetcb	[no test files]
+?   	regel.dev/regel/gate/redpath	[no test files]
+ok  	regel.dev/regel/internal/admission	19.605s
+ok  	regel.dev/regel/internal/catalog	4.014s
+ok  	regel.dev/regel/internal/cek	0.904s
+ok  	regel.dev/regel/internal/cfr	5.566s
+ok  	regel.dev/regel/internal/gitproj	5.636s
+ok  	regel.dev/regel/internal/kernel	422.454s
+ok  	regel.dev/regel/internal/lower	1.562s
+ok  	regel.dev/regel/internal/mcp	10.312s
+?   	regel.dev/regel/internal/mutants	[no test files]
+ok  	regel.dev/regel/internal/oracle	1.459s
+ok  	regel.dev/regel/internal/pgwire	1.452s
+ok  	regel.dev/regel/internal/rast	0.672s
+ok  	regel.dev/regel/internal/tsx	0.944s
+ok  	regel.dev/regel/internal/ui	0.358s

@@ -54,10 +54,18 @@ func (d *dbReader) Identity(ctx context.Context, kind, subject string) (map[stri
 // Query runs a parameterized SELECT (already proven read-only at the native
 // boundary) and returns rows as column maps. Every column is read as text (the
 // derived resource tables' display form, mirroring the erf read path's ::text
-// scan) so the result is uniform and CFR-encodable. When asOf is set, the read
-// runs inside a REPEATABLE READ snapshot — the eval's consistent read context
-// (data reads stay live under the policy horizon, as the erf read path does; asOf
-// pins the snapshot boundary).
+// scan) so the result is uniform and CFR-encodable.
+//
+// SELECT-only is ENGINE-enforced (ADR-10 §4, BUILD-F R1): every read runs inside a
+// READ ONLY transaction, so PostgreSQL itself refuses any write side effect that a
+// SELECT-prefixed statement could still carry — nextval()/setval(), a VOLATILE
+// writing function, a data-modifying CTE — with "cannot execute … in a read-only
+// transaction". The native's isReadOnlySQL string check is defense-in-depth (it
+// fails fast, never sending DML/DDL to PG); this transaction is the load-bearing
+// guarantee. When asOf is set the snapshot is REPEATABLE READ (the eval's
+// consistent read context — data reads stay live under the policy horizon, as the
+// erf read path does; asOf pins the snapshot boundary); otherwise READ COMMITTED
+// suffices — READ ONLY is what refuses writes. It NEVER writes.
 func (d *dbReader) Query(ctx context.Context, asOf *time.Time, sql string, params []any) ([]map[string]any, error) {
 	conn, err := d.pool.Acquire(ctx)
 	if err != nil {
@@ -65,17 +73,16 @@ func (d *dbReader) Query(ctx context.Context, asOf *time.Time, sql string, param
 	}
 	defer d.pool.Release(conn)
 
-	snapshot := asOf != nil
-	if snapshot {
-		if _, err := conn.Exec(ctx, `BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY`); err != nil {
-			return nil, err
-		}
+	begin := `BEGIN READ ONLY`
+	if asOf != nil {
+		begin = `BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY`
+	}
+	if _, err := conn.Exec(ctx, begin); err != nil {
+		return nil, err
 	}
 	rows, qerr := conn.Query(ctx, sql, params...)
 	if qerr != nil {
-		if snapshot {
-			_, _ = conn.Exec(ctx, `ROLLBACK`)
-		}
+		_, _ = conn.Exec(ctx, `ROLLBACK`)
 		return nil, qerr
 	}
 	cols := rows.Columns()
@@ -88,9 +95,7 @@ func (d *dbReader) Query(ctx context.Context, asOf *time.Time, sql string, param
 		}
 		if err := rows.Scan(dest...); err != nil {
 			rows.Close()
-			if snapshot {
-				_, _ = conn.Exec(ctx, `ROLLBACK`)
-			}
+			_, _ = conn.Exec(ctx, `ROLLBACK`)
 			return nil, err
 		}
 		m := make(map[string]any, len(cols))
@@ -105,10 +110,8 @@ func (d *dbReader) Query(ctx context.Context, asOf *time.Time, sql string, param
 	}
 	err = rows.Err()
 	rows.Close()
-	if snapshot {
-		if _, cerr := conn.Exec(ctx, `COMMIT`); cerr != nil && err == nil {
-			err = cerr
-		}
+	if _, cerr := conn.Exec(ctx, `COMMIT`); cerr != nil && err == nil {
+		err = cerr
 	}
 	if err != nil {
 		return nil, fmt.Errorf("sql.query: %w", err)

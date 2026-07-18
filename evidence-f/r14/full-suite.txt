@@ -1,0 +1,41 @@
+ok  	regel.dev/regel/cmd/regel	3.348s
+ok  	regel.dev/regel/gate/m5eval	1.938s
+?   	regel.dev/regel/gate/nativetcb	[no test files]
+?   	regel.dev/regel/gate/redpath	[no test files]
+ok  	regel.dev/regel/internal/admission	19.963s
+ok  	regel.dev/regel/internal/catalog	3.946s
+ok  	regel.dev/regel/internal/cek	1.433s
+ok  	regel.dev/regel/internal/cfr	5.676s
+ok  	regel.dev/regel/internal/gitproj	5.685s
+ok  	regel.dev/regel/internal/kernel	163.954s
+ok  	regel.dev/regel/internal/lower	2.007s
+ok  	regel.dev/regel/internal/mcp	10.070s
+?   	regel.dev/regel/internal/mutants	[no test files]
+ok  	regel.dev/regel/internal/oracle	1.199s
+ok  	regel.dev/regel/internal/pgwire	1.517s
+ok  	regel.dev/regel/internal/rast	1.131s
+ok  	regel.dev/regel/internal/tsx	1.048s
+ok  	regel.dev/regel/internal/ui	0.471s
+=== GOTEST_EXIT=0 ===
+
+--- acceptance notes (R14) ---
+Run with REGEL_PG_DSN UNSET (each test package creates its own scratch DB via
+REGEL_PG_TEST_DSN, matching the gate). GOTEST_EXIT=0, 0 FAIL lines.
+Two earlier non-green artifacts, both proven NOT from this change:
+ (1) gate/m5eval "epoch_current does not exist" — caused by exporting
+     REGEL_PG_DSN=regel in the shell: the m5eval harness PREPENDS its scratch DSN
+     then appends os.Environ(), so a set REGEL_PG_DSN wins in the child. Unset ⇒ ok.
+ (2) TestReaperBreakerReapStorm + TestKill9TaakWorkflowRestart flaked once under
+     full-suite parallel load (timing-sensitive kill-9/reaper storm tests — the
+     class the STAGE-E gate itself de-flaked). Pass in isolation
+     (kernel-flaky-tests-pass-isolated.txt) and the clean full run above is green.
+Verified at clean HEAD (my tracked changes stashed) that failure (1) reproduces
+identically ⇒ pre-existing/environmental, not introduced by R14.
+
+--- scripts ---
+17/19 deterministic scripts EXIT=0 (scripts-run.txt). stranger-review.sh EXIT=0
+(verdict finished). m5-eval.sh (156 live-LLM authoring attempts, rate-limits,
+500s+) NOT re-run this turn: the R14 diff touches neither its pure-compute corpus
+(imports no std ⇒ no capabilities, no as-of) nor its MCP authoring path; its
+deterministic harness guards pass in the full suite (gate/m5eval ok) and the live
+MCP door is exercised green by demo-mcp-session.sh + scenario-b-agent-patch.sh.

@@ -1,0 +1,35 @@
+=== RUN scripts/crm-setup.sh @ 04:45:42 ===
+scripts/crm-setup.sh EXIT=0
+=== RUN scripts/demo-admit-rollback.sh @ 04:45:46 ===
+scripts/demo-admit-rollback.sh EXIT=0
+=== RUN scripts/demo-erf-derive.sh @ 04:45:50 ===
+scripts/demo-erf-derive.sh EXIT=0
+=== RUN scripts/demo-kill9-resume.sh @ 04:45:52 ===
+scripts/demo-kill9-resume.sh EXIT=0
+=== RUN scripts/demo-mcp-session.sh @ 04:45:58 ===
+scripts/demo-mcp-session.sh EXIT=0
+=== RUN scripts/demo-reactive.sh @ 04:46:00 ===
+scripts/demo-reactive.sh EXIT=0
+=== RUN scripts/demo-taak.sh @ 04:46:06 ===
+scripts/demo-taak.sh EXIT=0
+=== RUN scripts/drill-bad-epoch-revert.sh @ 04:46:11 ===
+scripts/drill-bad-epoch-revert.sh EXIT=0
+=== RUN scripts/scenario-a-field-add.sh @ 04:46:14 ===
+scripts/scenario-a-field-add.sh EXIT=0
+=== RUN scripts/scenario-a2-settings-form.sh @ 04:46:16 ===
+scripts/scenario-a2-settings-form.sh EXIT=0
+=== RUN scripts/scenario-b-agent-patch.sh @ 04:46:19 ===
+scripts/scenario-b-agent-patch.sh EXIT=0
+=== RUN scripts/scenario-c-deploy-survive.sh @ 04:46:21 ===
+scripts/scenario-c-deploy-survive.sh EXIT=0
+=== RUN scripts/scenario-d-asof-rollback.sh @ 04:46:31 ===
+scripts/scenario-d-asof-rollback.sh EXIT=0
+=== RUN scripts/scenario-d2-asof-data.sh @ 04:46:33 ===
+scripts/scenario-d2-asof-data.sh EXIT=0
+=== RUN scripts/scenario-e-pii-shred.sh @ 04:46:35 ===
+scripts/scenario-e-pii-shred.sh EXIT=0
+=== RUN scripts/scenario-f-operatorplane.sh @ 04:46:37 ===
+scripts/scenario-f-operatorplane.sh EXIT=0
+=== RUN scripts/scenario-g-files-i18n.sh @ 04:46:41 ===
+scripts/scenario-g-files-i18n.sh EXIT=0
+=== ALL_DETERMINISTIC_DONE fail=0 @ 04:46:43 ===

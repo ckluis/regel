@@ -1,0 +1,51 @@
+R14 — the 3 CLI/UX papercuts (docs/claim-evidence.md §3) — BEFORE state
+Captured 2026-07-18T04:16:49Z against real PG 16.13, binary at HEAD (pre-fix).
+Fresh DB regel_r14: migrate-db + genesis + admit examples/greet_v1.ts (app/demo/greet).
+
+================================================================================
+PAPERCUT 1 — CLI --as-of rejects Postgres's timestamptz text form
+================================================================================
+A user copy-pastes a timestamp straight out of psql (`select now();`):
+  Postgres text form = "2026-07-18 00:14:45.760823-04"   (space separator, short "-04" offset)
+
+$ regel eval app/demo/greet '["world"]' --as-of "2026-07-18 00:14:45.760823-04"
+regel eval: bad --as-of: parsing time "2026-07-18 00:14:45.760823-04" as "2006-01-02T15:04:05Z07:00": cannot parse " 00:14:45.760823-04" as "T"
+exit=1
+
+The §3 note says HTTP "?as_of=" accepts both forms. IT DOES NOT — the HTTP door
+uses the SAME time.Parse(RFC3339) and rejects the PG text form identically:
+
+$ curl -s -X POST '.../eval/app/demo/greet?as_of=2026-07-18%2000%3A14%3A45.760823-04' -d '["world"]'
+{"error":"bad as_of: parsing time \"2026-07-18 00:14:45.760823-04\" as \"2006-01-02T15:04:05Z07:00\": cannot parse \" 00:14:45.760823-04\" as \"T\""}
+
+=> Correction: BOTH doors reject the PG form. The fix aligns them by making BOTH
+   accept RFC3339 AND the Postgres timestamptz text form (space sep + short offset).
+
+================================================================================
+PAPERCUT 2 — whole-second as-of can miss a sub-second admission boundary
+================================================================================
+Witnessed live: an RFC3339 instant truncated to whole seconds (below the def's
+microsecond valid_from) resolves to BEFORE the def existed:
+  $ regel eval app/demo/greet '["world"]' --as-of "<whole-second, below valid_from>"
+  {"error":"name does not resolve: app/demo/greet"}
+This is INHERENT to point-in-time reads: valid_from is microsecond-precise, so a
+coarser instant is legitimately before it. Not a bug — see disposition in after.txt
+(RE-NAMED). Scripts already pin µs-precision timestamps (scenario-d).
+
+================================================================================
+PAPERCUT 3 — --declare wants the stripped token (mail.send), not the import path
+================================================================================
+notify.ts imports { send } from "std/mail" and calls it. Capability grant held.
+
+$ regel admit notify.ts --name-prefix app/demo2 --actor engineer:dev --declare mail.send
+  "outcome": "admitted"                                         <- stripped form: OK
+
+$ regel admit notify.ts --name-prefix app/demo3 --actor engineer:dev --declare std/mail.send
+  "outcome": "rejected"
+  "code": "CAP_UNGRANTED",
+  "message": "definition names capability \"mail.send\" but does not declare it"   <- MISLEADING
+  "message": "capability \"std/mail.send\" is declared but not granted to the submitting principal"
+
+The user DID declare it (in import-path form); the message neither accepts that
+form nor reveals that "mail.send" is the expected token. Only difference between
+the two runs is the token form.

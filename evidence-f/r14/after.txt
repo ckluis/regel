@@ -1,0 +1,56 @@
+R14 — the 3 CLI/UX papercuts — AFTER state
+Captured 2026-07-18T04:19:02Z against real PG 16.13, post-fix binary.
+Same DB regel_r14 (app/demo/greet admitted; engineer:dev holds mail.send grant).
+
+Fixes:
+ #1  kernel.ParseAsOf (internal/kernel/asof.go) — one lenient grammar shared by the
+     CLI --as-of and HTTP ?as_of= doors: RFC3339 (Z / ±HH:MM) AND Postgres
+     timestamptz text (space sep, short ±HH offset). Both doors rewired to it.
+ #3  admission normalizeCapability (internal/admission/patch.go) — declaredFor strips
+     a leading std/ so std/mail.send == mail.send; V1 message now names the expected
+     bare token.
+
+================================================================================
+PAPERCUT 1 — FIXED (CLI and HTTP now both accept the Postgres text form)
+================================================================================
+PG form = "2026-07-18 00:14:45.760823-04"
+
+$ regel eval app/demo/greet '["world"]' --as-of "2026-07-18 00:14:45.760823-04"
+"hello, world"
+exit=0
+
+$ regel eval app/demo/greet '["world"]' --as-of "2030-01-01T00:00:00Z"   # RFC3339 still fine
+"hello, world"
+exit=0
+
+$ curl -s -X POST '.../eval/app/demo/greet?as_of=2026-07-18%2000%3A14%3A45.760823-04' -d '["world"]'
+"hello, world"                                                            # HTTP now aligned
+
+$ regel eval app/demo/greet '["world"]' --as-of "not-a-time"             # clean grammar error
+regel eval: bad --as-of: not an as-of instant "not-a-time": want RFC3339 (2006-01-02T15:04:05Z / ...±HH:MM) or Postgres timestamptz text (2006-01-02 15:04:05-04)
+exit=1
+
+================================================================================
+PAPERCUT 2 — RE-NAMED (correct behavior, not a defect)
+================================================================================
+A whole-second as-of below a microsecond valid_from legitimately resolves to
+before the def existed — this is what a point-in-time read MUST do. It is not a
+bug to "fix"; the substrate is µs-precise on purpose. The #1 fix already lets a
+caller pass full µs precision (RFC3339 fractional seconds AND the PG text form
+carry microseconds), so pinning an exact boundary is a copy-paste, not a
+computation. Scripts pin µs timestamps (scenario-d). Disposition: RE-NAMED from
+"papercut" to "correct point-in-time semantics" — no code change, evidence here.
+
+================================================================================
+PAPERCUT 3 — FIXED (both token forms accepted; message reveals the expected form)
+================================================================================
+$ regel admit notify.ts --name-prefix app/demo4 --actor engineer:dev --declare std/mail.send
+  "outcome": "admitted"        # import-path form now accepted
+
+$ regel admit notify.ts --name-prefix app/demo5 --actor engineer:dev --declare mail.send
+  "outcome": "admitted"        # stripped form still accepted
+
+$ regel admit notify.ts --name-prefix app/demo6 --actor engineer:dev    # undeclared
+  "message": "definition names capability \"mail.send\" but does not declare it
+   (declare it as \"mail.send\" — the bare token, e.g. --declare mail.send; a
+   std/ import prefix is stripped)"

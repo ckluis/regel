@@ -505,9 +505,23 @@ durability machinery implemented existing ADR law without deviation.
     i18n pluralization/ICU/locale-negotiation NOT shipped (unconsumed). `test.fake` remains a stub
     (no third consumer — ADR-10 §4 named residue); board card title/badge heuristics stay
     presentation defaults (stranger-approved for the reference CRM).
-14. **R14 UX papercuts** carried in `docs/claim-evidence.md` §3 (CLI `--as-of`
-    strictness, µs-precision boundaries, `--declare` token form + Stage-E
-    additions).
+14. **R14 UX papercuts — DISCHARGED (Stage-F, 2026-07-18, `evidence-f/r14/`)**:
+    the 3 papercuts in `docs/claim-evidence.md` §3, each reproduced against the real
+    CLI/HTTP then fixed. **(1) `--as-of` strictness** — a new `kernel.ParseAsOf`
+    (`internal/kernel/asof.go`) is ONE lenient grammar now shared by the CLI `--as-of`
+    and HTTP `?as_of=` doors: RFC3339 (`Z`/`±HH:MM`) AND Postgres timestamptz text
+    (space separator + short `-04` offset a user copy-pastes out of `psql`), with a
+    grammar-naming error on garbage. Reproduction CORRECTED the §3 note: BOTH doors
+    rejected the PG form identically (not "HTTP accepts both") — they now both accept
+    it (`TestParseAsOfGrammar`). **(3) `--declare` token form** — `declaredFor`
+    normalizes a leading `std/` (`normalizeCapability`, `internal/admission/patch.go`)
+    so `std/mail.send` and `mail.send` name the same capability at every door, and the
+    V1 `named ⊄ declared` message now reveals the expected bare token
+    (`TestDeclaredForNormalizesImportPath`). **(2) whole-second as-of miss — RE-NAMED**
+    from "papercut" to correct point-in-time semantics: a coarse instant below a
+    microsecond `valid_from` MUST resolve to before the def existed; no code change,
+    and the #1 fix already lets a caller pass full µs precision (fractional RFC3339 and
+    the PG text form both carry microseconds). RED/GREEN in `before.txt`/`after.txt`.
 
 15 DEFER-V2 why-safes and the claim map live in `docs/claim-evidence.md`
 (31 claims → 27 test / 14 demo / 6 residue; C24 projectional-editors is the only

@@ -39,7 +39,9 @@ func verifyV1(defs []loweredDef, patch Patch, grants map[string]bool, im *Image)
 			for _, cap := range sortedKeys(named) {
 				if !declared[cap] {
 					diags = append(diags, capUngranted(ld, cap,
-						fmt.Sprintf("definition names capability %q but does not declare it", cap)))
+						fmt.Sprintf("definition names capability %q but does not declare it "+
+							"(declare it as %q — the bare token, e.g. --declare %s; a std/ import "+
+							"prefix is stripped)", cap, cap, cap)))
 				}
 			}
 		}

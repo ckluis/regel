@@ -71,14 +71,25 @@ the only claim whose evidence is residue-ONLY).**
 
 ## §3 UX papercuts (recorded by PHASE R hand-driving; behavior is CORRECT)
 
-1. CLI `--as-of` demands strict RFC3339 offsets (`Z`/`±HH:MM`) and rejects Postgres's
-   `-04` text form — HTTP `?as_of=` accepts both. (Alignment nit, not a correctness bug.)
-2. Whole-second as-of near an admission boundary can miss by sub-second —
-   `valid_from` is microsecond-precise; inherent to point-in-time reads. Scripts pin
+**RESOLVED as R14 (Stage-F, 2026-07-18) — see `spec/gates/STAGE-E.md` §9.14 +
+`evidence-f/r14/{before,after}.txt`. Items 1 and 3 fixed; item 2 re-named as correct
+point-in-time semantics.**
+
+1. ~~CLI `--as-of` demands strict RFC3339 offsets (`Z`/`±HH:MM`) and rejects Postgres's
+   `-04` text form — HTTP `?as_of=` accepts both.~~ **FIXED**: a shared
+   `kernel.ParseAsOf` now makes BOTH the CLI `--as-of` and HTTP `?as_of=` doors accept
+   RFC3339 AND the Postgres timestamptz text form. (Reproduction corrected the note:
+   both doors rejected the `-04` form identically before the fix.)
+2. ~~Whole-second as-of near an admission boundary can miss by sub-second~~ **RE-NAMED
+   (correct behavior)**: `valid_from` is microsecond-precise, so a coarse instant
+   legitimately reads before the boundary — inherent to point-in-time reads, not a
+   defect. The item-1 fix lets a caller pass full µs precision; scripts pin
    µs-precision timestamps (see scenario-d).
-3. `--declare` expects the verifier's stripped capability token (`mail.send`), not the
+3. ~~`--declare` expects the verifier's stripped capability token (`mail.send`), not the
    import path (`std/mail.send`), and the mismatch message does not reveal the
-   expected form.
+   expected form.~~ **FIXED**: declared capabilities are normalized (a leading `std/`
+   is stripped) so both forms name the same capability at every door, and the V1
+   mismatch message now reveals the expected bare token.
 
 Stage-E additions (same class): board card titles use the first text field of the
 resource (derivation heuristic); the as-of session mount is read-only first-paint

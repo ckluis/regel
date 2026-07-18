@@ -1,6 +1,10 @@
 package admission
 
-import "regel.dev/regel/internal/catalog"
+import (
+	"strings"
+
+	"regel.dev/regel/internal/catalog"
+)
 
 // ModuleSrc is one module of a submitted patch: its catalog module path (no
 // extension, e.g. "app/demo") and its TypeScript source.
@@ -78,10 +82,25 @@ type Principal struct {
 func (p Principal) Subject() string { return p.ActorKind + ":" + p.ActorID }
 
 // declaredFor returns the declared capability set for a def catalog name,
-// falling back to the patch-level default.
+// falling back to the patch-level default. Each entry is normalized so a
+// declaration written as the import path (`std/mail.send`) is accepted as the
+// stripped capability token (`mail.send`) the verifier and grants speak in —
+// the two forms are the same capability (STAGE-F R14 papercut 3).
 func (pt Patch) declaredFor(name string) []string {
+	raw := pt.DefaultDeclared
 	if caps, ok := pt.DeclaredCapabilities[name]; ok {
-		return caps
+		raw = caps
 	}
-	return pt.DefaultDeclared
+	out := make([]string, len(raw))
+	for i, c := range raw {
+		out[i] = normalizeCapability(c)
+	}
+	return out
+}
+
+// normalizeCapability strips a leading `std/` import-path prefix from a declared
+// capability so `std/mail.send` and `mail.send` name the same capability. The
+// verifier's named set and the grant table both use the stripped token.
+func normalizeCapability(c string) string {
+	return strings.TrimPrefix(c, "std/")
 }

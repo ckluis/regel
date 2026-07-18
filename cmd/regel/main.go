@@ -109,7 +109,7 @@ func usage() {
         [--actor kind:id] [--declare c1,c2] [--tier trusted|sandbox]
         [--base name=hash ...]
   regel eval NAME [ARGS_JSON]           resolve + evaluate (prints value)
-        [--as-of RFC3339] [--tier sandbox --fuel N]
+        [--as-of TS] [--tier sandbox --fuel N]   TS: RFC3339 or Postgres timestamptz text
   regel grant SUBJECT CAPABILITY        dev helper: insert a grant_row
   regel mcp [--key KEY]                  run the MCP/agent plane over stdio (JSON-RPC 2.0)
   regel approve --for AGENT --hash H...  mint a one-shot product-scope approval token
@@ -592,7 +592,7 @@ func cmdAdmit(args []string) int {
 
 func cmdEval(args []string) error {
 	fs := flag.NewFlagSet("eval", flag.ExitOnError)
-	asOf := fs.String("as-of", "", "RFC3339 as-of instant")
+	asOf := fs.String("as-of", "", "as-of instant: RFC3339 or Postgres timestamptz text")
 	tier := fs.String("tier", "trusted", "trusted|sandbox")
 	fuel := fs.Int64("fuel", 0, "sandbox fuel budget")
 	_ = fs.Parse(permute(args, map[string]bool{"as-of": true, "tier": true, "fuel": true}))
@@ -626,7 +626,7 @@ func cmdEval(args []string) error {
 		req.Fuel = *fuel
 	}
 	if *asOf != "" {
-		t, e := time.Parse(time.RFC3339, *asOf)
+		t, e := kernel.ParseAsOf(*asOf) // R14: accept RFC3339 AND Postgres timestamptz text
 		if e != nil {
 			return fmt.Errorf("bad --as-of: %w", e)
 		}

@@ -95,7 +95,7 @@ func (s *Server) handleEval(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if a := r.URL.Query().Get("as_of"); a != "" {
-		t, e := time.Parse(time.RFC3339, a)
+		t, e := ParseAsOf(a) // R14: same lenient grammar as the CLI --as-of door
 		if e != nil {
 			writeJSON(w, 400, map[string]string{"error": "bad as_of: " + e.Error()})
 			return

@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Regel — the code is rows, the rows are TypeScript</title>
+<style>
+  :root{
+    --paper:#f8f3ea;
+    --paper-deep:#f1eadd;
+    --ink:#1c1811;
+    --muted:#6e6455;
+    --line:#d9cfbd;
+    --orange:#6b4ec2;
+    --orange-ink:#5540a3;
+    --code-bg:#171321;
+    --code-ink:#e2dcf0;
+    --code-dim:#7d7494;
+    --code-key:#b49af5;
+    --code-str:#c9b458;
+    --code-typ:#9fc0a8;
+    --code-com:#6a6180;
+    --display:"Fraunces","Charter","Iowan Old Style",Georgia,serif;
+    --body:"Inter","Helvetica Neue",system-ui,-apple-system,sans-serif;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto}
+    *,*::before,*::after{animation:none!important;transition:none!important}
+  }
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--body);
+    font-size:17px;
+    line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{background:var(--orange);color:#fff}
+  a{color:var(--orange-ink);text-decoration:none;border-bottom:1px solid var(--line)}
+  a:hover{border-bottom-color:var(--orange-ink)}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--orange-ink);outline-offset:3px;border-radius:2px}
+
+  .wrap{max-width:980px;margin:0 auto;padding:0 28px}
+
+  .topbar{
+    border-bottom:1px solid var(--line);
+    background:var(--paper);
+    position:sticky;top:0;z-index:20;
+  }
+  .topbar .wrap{
+    display:flex;align-items:baseline;justify-content:space-between;
+    padding-top:14px;padding-bottom:14px;
+  }
+  .wordmark{font-family:var(--display);font-weight:600;font-size:1.15rem;letter-spacing:-.01em;border:none}
+  .wordmark .dot{color:var(--orange)}
+  .topnav{display:flex;gap:22px;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase}
+  .topnav a{color:var(--muted);border:none}
+  .topnav a:hover{color:var(--orange-ink)}
+  @media(max-width:720px){.topnav{display:none}}
+
+  .hero{padding:84px 0 60px;border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--orange-ink);margin-bottom:26px;display:flex;align-items:center;gap:12px;
+  }
+  .eyebrow::before{content:"";display:inline-block;width:34px;height:2px;background:var(--orange)}
+  h1{
+    font-family:var(--display);font-weight:560;font-variation-settings:"opsz" 72;
+    font-size:clamp(2.5rem,6.4vw,4.4rem);line-height:1.04;letter-spacing:-.022em;
+    max-width:17ch;
+  }
+  h1 em{font-style:italic;color:var(--orange-ink)}
+  .hero p.dek{
+    margin-top:28px;max-width:58ch;font-size:1.12rem;color:var(--muted);line-height:1.7;
+  }
+  .hero p.dek strong{color:var(--ink);font-weight:600}
+
+  .pipeline{
+    margin-top:56px;display:flex;align-items:stretch;gap:0;
+    font-family:var(--mono);font-size:.8rem;flex-wrap:nowrap;max-width:900px;
+  }
+  .pipe-node{
+    border:1px solid var(--line);background:var(--paper-deep);
+    padding:14px 18px;display:flex;flex-direction:column;gap:4px;
+    flex:1 1 0;min-width:0;justify-content:center;
+  }
+  .pipe-node.hot{flex:1.25 1 0}
+  .pipe-node .t{font-weight:700;color:var(--ink)}
+  .pipe-node .s{color:var(--muted);font-size:.68rem;line-height:1.5}
+  .pipe-node.hot{background:var(--orange);border-color:var(--orange)}
+  .pipe-node.hot .t{color:#fff}
+  .pipe-node.hot .s{color:#ded4f8}
+  .pipe-arrow{
+    display:flex;align-items:center;padding:0 12px;color:var(--orange-ink);
+    font-size:1rem;user-select:none;
+  }
+  @media(max-width:720px){
+    .pipeline{flex-direction:column}
+    .pipe-node,.pipe-node.hot{flex:none}
+    .pipe-arrow{padding:6px 0 6px 20px;transform:rotate(90deg);transform-origin:20px center;width:20px}
+  }
+
+  section{padding:72px 0;border-bottom:1px solid var(--line)}
+  .kicker{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--orange-ink);margin-bottom:14px;
+  }
+  h2{
+    font-family:var(--display);font-weight:560;font-size:clamp(1.7rem,3.4vw,2.4rem);
+    letter-spacing:-.015em;line-height:1.15;max-width:26ch;margin-bottom:22px;
+  }
+  section p{max-width:66ch;margin-bottom:18px}
+  section p:last-child{margin-bottom:0}
+  .lede{font-size:1.08rem}
+  .note{
+    border-left:3px solid var(--orange);background:var(--paper-deep);
+    padding:16px 20px;max-width:66ch;margin:26px 0;font-size:.95rem;color:var(--muted);
+  }
+  .note strong{color:var(--ink)}
+
+  pre{
+    background:var(--code-bg);color:var(--code-ink);
+    font-family:var(--mono);font-size:.82rem;line-height:1.62;
+    padding:22px 24px;overflow-x:auto;border-radius:0;
+    margin:0;
+  }
+  .codeblock{margin:30px 0;max-width:860px}
+  .codelabel{
+    display:flex;justify-content:space-between;align-items:center;
+    font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;
+    background:var(--ink);color:#cbbfa8;padding:8px 16px;
+  }
+  .codelabel .lang{color:var(--code-key)}
+  .k{color:var(--code-key)}
+  .s{color:var(--code-str)}
+  .ty{color:var(--code-typ)}
+  .c{color:var(--code-com);font-style:italic}
+  .dim{color:var(--code-dim)}
+  .err{color:#e88070}
+  .ok{color:#8fc98f}
+
+  .duo{display:grid;grid-template-columns:1fr 1fr;gap:0;margin:34px 0;position:relative}
+  .duo .codeblock{margin:0}
+  .duo .seam{
+    position:absolute;left:50%;top:0;bottom:0;width:2px;background:var(--orange);
+    transform:translateX(-1px);z-index:2;
+  }
+  .duo .seamlabel{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;
+    background:var(--orange);color:#fff;font-family:var(--mono);font-size:.66rem;
+    letter-spacing:.1em;padding:5px 10px;text-transform:uppercase;white-space:nowrap;
+  }
+  @media(max-width:860px){
+    .duo{grid-template-columns:1fr}
+    .duo .seam{display:none}
+    .duo .seamlabel{position:static;transform:none;display:inline-block;margin:0}
+    .duo .seamwrap{display:flex;justify-content:center;padding:10px 0}
+  }
+  @media(min-width:861px){.duo .seamwrap{display:contents}}
+
+  .stack{margin:40px 0 10px;max-width:860px}
+  .layer{
+    border:1px solid var(--line);border-bottom:none;background:var(--paper);
+    display:grid;grid-template-columns:170px 1fr;gap:0;
+  }
+  .layer:last-child{border-bottom:1px solid var(--line)}
+  .layer .name{
+    padding:20px 22px;border-right:1px solid var(--line);
+    font-family:var(--display);font-weight:600;font-size:1.25rem;letter-spacing:-.01em;
+    display:flex;flex-direction:column;gap:4px;justify-content:center;
+  }
+  .layer .name .nl{font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--orange-ink);font-weight:500}
+  .layer .body{padding:20px 24px;font-size:.94rem;color:var(--muted)}
+  .layer .body strong{color:var(--ink)}
+  .layer .body .analog{
+    font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--orange-ink);display:block;margin-bottom:6px;
+  }
+  .layer.substrate{background:var(--paper-deep)}
+  .layer.regel-layer{background:var(--ink);color:var(--paper)}
+  .layer.regel-layer .name{color:var(--paper);border-right-color:#3a3226}
+  .layer.regel-layer .body{color:#b8ac95}
+  .layer.regel-layer .body strong{color:var(--paper)}
+  .layer.regel-layer .name .nl,.layer.regel-layer .body .analog{color:#c3aef7}
+  @media(max-width:680px){
+    .layer{grid-template-columns:1fr}
+    .layer .name{border-right:none;border-bottom:1px solid var(--line);flex-direction:row;align-items:baseline;gap:12px}
+    .layer.regel-layer .name{border-bottom-color:#3a3226}
+  }
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+    border:1px solid var(--line);margin:34px 0;max-width:860px}
+  .cell{background:var(--paper);padding:24px 26px}
+  .cell h3{font-family:var(--display);font-weight:600;font-size:1.06rem;margin-bottom:8px;letter-spacing:-.01em}
+  .cell p{font-size:.9rem;color:var(--muted);max-width:none;margin:0}
+  .cell .conf{
+    font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--orange-ink);display:block;margin-bottom:8px;
+  }
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+
+  .edges{margin:30px 0;max-width:860px}
+  .edge{border-top:1px solid var(--line);padding:18px 0}
+  .edge:last-child{border-bottom:1px solid var(--line)}
+  .edge h3{font-family:var(--display);font-weight:600;font-size:1.02rem;letter-spacing:-.01em;margin-bottom:6px}
+  .edge p{font-size:.92rem;color:var(--muted);max-width:72ch;margin:0}
+
+  footer{padding:56px 0 72px}
+  .family{
+    font-family:var(--mono);font-size:.78rem;letter-spacing:.12em;text-transform:lowercase;
+    color:var(--muted);display:flex;gap:18px;flex-wrap:wrap;align-items:baseline;
+  }
+  .family .this{color:var(--orange-ink);font-weight:700}
+  footer p{margin-top:22px;font-size:.85rem;color:var(--muted);max-width:60ch}
+</style>
+</head>
+<body>
+
+<nav class="topbar" aria-label="Page">
+  <div class="wrap">
+    <a class="wordmark" href="#top">regel<span class="dot">.</span></a>
+    <div class="topnav">
+      <a href="#parentage">Parentage</a>
+      <a href="#runs">How it runs</a>
+      <a href="#stack">The stack</a>
+      <a href="#admission">Admission</a>
+      <a href="#honest">Honest</a>
+      <a href="#reality">Reality</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="eyebrow">regel · dutch, “rule” — also “a line of code” · rhymes with “bagel”</div>
+    <h1>The code is rows.<br>The rows are <em>TypeScript</em>.</h1>
+    <p class="dek">
+      Regel fuses two siblings. From <strong>kern</strong>: the application as governed,
+      content-addressed rows in one Postgres — code that enters by admission transaction,
+      pauses as continuations, and runs inside capability environments. From
+      <strong>streng</strong>: the dialect — closed-world strict TypeScript 7, the most fluently
+      machine-written language on earth, checked by a vendored native compiler in milliseconds.
+      One Go kernel. One Postgres. <strong>Deploy is a commit. Rollback is a WHERE clause.
+      And nothing lands unverified</strong> — not from an engineer, a tenant, or an agent.
+    </p>
+
+    <div class="pipeline" aria-label="Admission pipeline">
+      <div class="pipe-node">
+        <span class="t">deal.ts</span>
+        <span class="s">streng dialect · what models write</span>
+      </div>
+      <div class="pipe-arrow" aria-hidden="true">→</div>
+      <div class="pipe-node hot">
+        <span class="t">admit!</span>
+        <span class="s">tsgo 7 + verifiers · in the transaction</span>
+      </div>
+      <div class="pipe-arrow" aria-hidden="true">→</div>
+      <div class="pipe-node">
+        <span class="t">rows</span>
+        <span class="s">content-addressed · catalogued · immortal</span>
+      </div>
+      <div class="pipe-arrow" aria-hidden="true">→</div>
+      <div class="pipe-node">
+        <span class="t">kernel ⇄ pg</span>
+        <span class="s">evaluates · remembers</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="parentage">
+  <div class="wrap">
+    <div class="kicker">Parentage</div>
+    <h2>Each parent's fatal flaw was the other's core strength</h2>
+    <p class="lede">
+      Read side by side, kern and streng were converging and neither noticed. Kern conceded
+      that nothing about code-as-rows requires s-expressions — only a canonical rendering and
+      an AST with a schema. Streng's gate was already an embryonic admission pipeline; its
+      sandbox was already kern's governed evaluation; its epoch was already kern's
+      re-verify-the-world move. What kept them apart was that each carried a flaw the other
+      had solved — <strong>confessed, in both documents, in their own honest edges:</strong>
+    </p>
+
+    <div class="grid2">
+      <div class="cell">
+        <span class="conf">kern confessed</span>
+        <h3>“A new dialect is a small hiring pond.”</h3>
+        <p>Regel's dialect is the largest developer pool and the deepest training corpus in
+        software. There is nothing to learn — only things to subtract. Every model, and a
+        million engineers, are fluent on day one.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">kern confessed</span>
+        <h3>“A dynamic dialect can't say ‘it doesn't compile.’”</h3>
+        <p>Regel puts tsgo — a real static checker, native and instant — inside the insert
+        transaction. The type system kern had to rebuild from verifiers comes off the shelf;
+        the verifiers are freed to check what types can't: capabilities, PII flow, contracts.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">streng conceded</span>
+        <h3>Files and git — the most conservative substrate in the family.</h3>
+        <p>Regel stores the application as content-addressed rows: deploy is a commit,
+        rollback is as-of, the artifact registry is the history tier, and the audit machinery
+        finally covers the code. Git remains — as a deterministic projection, not as truth.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">streng conceded</span>
+        <h3>Only tenants were caged.</h3>
+        <p>In regel, governed evaluation is the whole substrate. An engineer's deploy, a
+        tenant's Settings edit, and an agent's patch pass one gate — the same transaction, the
+        same verifiers, the same audit row. There is no privileged side door called “CI.”</p>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>The one-sentence mind-blow:</strong> the codebase is a database you can SELECT —
+      and its language is the one every model on earth already speaks. Kern built the substrate
+      agents can't hallucinate off of; streng built the dialect agents can't stop writing.
+      Regel is the observation that they were two halves of one system.
+    </div>
+  </div>
+</section>
+
+<section id="runs">
+  <div class="wrap">
+    <div class="kicker">How it runs</div>
+    <h2>The kernel has three jobs. Everything else is rows.</h2>
+    <p>
+      Kern's shape, kept exactly. The kernel — a reactor, the vendored tsgo checker, an owned
+      interpreter with a fuel meter, the verifier suite, and a wire protocol — is the only
+      compiled artifact, and it ships zero business logic. It is to your product what Postgres
+      is to your rows.
+    </p>
+    <div class="grid2">
+      <div class="cell">
+        <h3>admit — code enters by transaction</h3>
+        <p>A patch arrives as TypeScript source. The canonical printer normalizes it to the one
+        rendering; tsgo typechecks it against the catalog; the verifiers — capability audit,
+        PII flow, contracts, catalog parity — run in the insert transaction, with the schema
+        migration if it carries one. Rejected code never becomes code.</p>
+      </div>
+      <div class="cell">
+        <h3>evaluate — two tiers, one language</h3>
+        <p>Admitted definitions run on the kernel's owned interpreter: the strict subset,
+        CPS-transformed so any program can pause. Trusted code runs unmetered; tenant and
+        agent code runs fuel-metered in capability environments — an unauthorized call isn't
+        rejected, it's unnameable.</p>
+      </div>
+      <div class="cell">
+        <h3>resume — everything paused is a row</h3>
+        <p>Workflows, UI sessions, and durable conditions are continuations — expression plus
+        environment, stored with a wake condition. Any node resumes any of them, and a paused
+        workflow resumes against the exact code hashes it started with. As-of for code deletes
+        the workflow-versioning problem.</p>
+      </div>
+      <div class="cell">
+        <h3>remember — one history, both substances</h3>
+        <p>Every version of every row and every version of every definition, in one
+        time-partitioned history tier. “Who changed this workflow, what did it look like, who
+        approved it” is the same query as “who changed this record.” The SOC 2 answer is a
+        SELECT, not a screenshot.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="stack">
+  <div class="wrap">
+    <div class="kicker">The stack</div>
+    <h2>What each parent contributes — and what only the fusion has</h2>
+
+    <div class="stack">
+      <div class="layer regel-layer">
+        <div class="name">Regel <span class="nl">the fusion's own</span></div>
+        <div class="body">
+          <span class="analog">ancestor · unison, executed on the corpus language</span>
+          <strong>Content-addressed TypeScript.</strong> The strict subset has exactly one
+          canonical rendering, so the hash is the identity, names are catalog pointers, renames
+          are metadata, and an agent's patch references exact hashes. Structural diffs are the
+          only diffs. Nobody has done this to the language everyone writes.
+        </div>
+      </div>
+      <div class="layer">
+        <div class="name">Dialect <span class="nl">from streng</span></div>
+        <div class="body">
+          <span class="analog">strict closed-world typescript 7</span>
+          Subtract, never add: no any, no unchecked casts, no eval, no imports outside the
+          world. The corpus is the spec, tsgo is the checker, the editor plane is inherited
+          free, and <strong>the epoch</strong> upgrades dialect, engine, stdlib, and gate as
+          one atomic step.
+        </div>
+      </div>
+      <div class="layer">
+        <div class="name">World <span class="nl">from streng</span></div>
+        <div class="body">
+          <span class="analog">std/ — the batteries, owed by the closed world</span>
+          identity, the two-tier component library (primitives + derived forms, tables,
+          dashboards, operator plane), the workflow engine, resources with vault and history,
+          mail · files · i18n, test. Complete for the B2B envelope, versioned with the epoch,
+          grown by the Rule of Three.
+        </div>
+      </div>
+      <div class="layer">
+        <div class="name">Admission <span class="nl">from kern</span></div>
+        <div class="body">
+          <span class="analog">verifiers in the insert transaction</span>
+          Deploy pipeline, artifact registry, rollback runbook, and guardrail bolt-ons —
+          deleted, replaced by one gate. <strong>“Declared but unenforced” cannot be
+          admitted:</strong> a policy no admitted path consults fails catalog parity and never
+          becomes code.
+        </div>
+      </div>
+      <div class="layer">
+        <div class="name">Continuations <span class="nl">from kern</span></div>
+        <div class="body">
+          <span class="analog">durable execution without replay gymnastics</span>
+          Workflows and sessions serialize as rows; effect and checkpoint commit in one
+          transaction; a failed step signals a <strong>durable condition</strong> whose
+          restarts render as choices for an operator — or an agent. Deploys and node loss
+          drop nothing.
+        </div>
+      </div>
+      <div class="layer">
+        <div class="name">Surface <span class="nl">from kern</span></div>
+        <div class="body">
+          <span class="analog">the mutable surface · no eject cliff</span>
+          Settings is an admission client; a tenant's custom field is a scoped overlay row; the
+          workflow canvas and form designer are projectional editors over the catalog — whatever
+          the UI writes, an engineer can open; whatever an engineer admits, the UI renders back.
+          Config and code are one substance.
+        </div>
+      </div>
+      <div class="layer substrate">
+        <div class="name">Go + Postgres <span class="nl">substrate</span></div>
+        <div class="body">
+          <span class="analog">the only dependencies</span>
+          tsgo 7 vendored (Apache, pinned — a file in the repo), an owned pure-Go interpreter
+          sized to the subset, an owned Postgres wire client, Go's stdlib for HTTP/TLS/crypto,
+          vetted AEAD + KDF for the vault. No cgo, no Node, no npm, no registry — anywhere.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="admission">
+  <div class="wrap">
+    <div class="kicker">Admission</div>
+    <h2>One gate. Engineers, tenants, and agents walk through it equally.</h2>
+    <p>
+      The canonical exchange: an agent submits a patch in the language it knows best, and the
+      database answers — in the transaction — with a verdict. Everything on the left is plain
+      strict TypeScript; everything on the right happens before the row exists.
+    </p>
+
+    <div class="duo">
+      <div class="codeblock">
+        <div class="codelabel"><span>an agent's patch — streng dialect</span><span class="lang">follow-up.ts</span></div>
+        <pre><span class="k">import</span> { workflow, days } <span class="k">from</span> <span class="s">"std/taak"</span>;
+<span class="k">import</span> { sendIntro, sendContract } <span class="k">from</span> <span class="s">"app/crm/mail"</span>;
+
+<span class="k">export const</span> followUp = workflow(
+  <span class="k">async</span> (wf, dealId: <span class="ty">DealId</span>) => {
+    <span class="k">await</span> wf.step(sendIntro(dealId));
+    <span class="k">await</span> wf.sleep(days(<span class="s">3</span>));       <span class="c">// continuation → row</span>
+    <span class="k">const</span> ok = <span class="k">await</span> wf.receive(<span class="ty">Approval</span>);
+    <span class="k">if</span> (ok) <span class="k">await</span> wf.step(sendContract(dealId));
+  },
+  { capabilities: [<span class="s">"crm.read"</span>, <span class="s">"mail.send"</span>] },
+);</pre>
+      </div>
+      <div class="seamwrap"><div class="seam" aria-hidden="true"></div><div class="seamlabel">admit!</div></div>
+      <div class="codeblock">
+        <div class="codelabel"><span>the admission transcript — inside the insert</span><span class="lang">one transaction</span></div>
+        <pre>admit patch-3f9c <span class="dim">by agent:builder-7 via mcp</span>
+
+canonical print   <span class="ok">✓</span> <span class="dim">one rendering · 61 tokens</span>
+tsgo 7            <span class="ok">✓</span> <span class="dim">0 errors · 91 ms</span>
+capability-audit  <span class="ok">✓</span> <span class="dim">crm.read, mail.send — granted</span>
+pii-flow          <span class="ok">✓</span> <span class="dim">no vault value escapes masked</span>
+catalog-parity    <span class="ok">✓</span>  contracts <span class="ok">✓</span>
+
+<span class="ok">→ row 3f9c…</span> catalogued · live · audit-rowed
+<span class="dim">rollback: as-of — the previous app, forever
+rejected code never becomes code.</span></pre>
+      </div>
+    </div>
+
+    <p>
+      The same gate is the product's no-code surface: a tenant admin adding a field from
+      Settings submits an <code style="font-family:var(--mono);font-size:.88em">extendResource</code>
+      form scoped to their org; a workflow drawn on the canvas lands as the same
+      <code style="font-family:var(--mono);font-size:.88em">workflow()</code> definition an
+      engineer would write. And the framework ships its MCP server in the kernel: agents query
+      the catalog, fetch definitions by hash, submit patches, and receive verdicts as
+      structured data. <strong>The IDE is an API, and the API speaks TypeScript.</strong>
+    </p>
+  </div>
+</section>
+
+<section id="honest">
+  <div class="wrap">
+    <div class="kicker">What we won't pretend</div>
+    <h2>What the fusion costs</h2>
+    <div class="edges">
+      <div class="edge">
+        <h3>The continuation bet got harder, not easier.</h3>
+        <p>Kern planned to CPS-transform a Lisp designed for it. Regel must CPS-transform a
+        strict TypeScript subset — async/await, closures, iterators — and serialize the
+        environments stably across years. This is the deepest engineering bet in the family,
+        owned, tested red-path-first, and built before anything else gets clever.</p>
+      </div>
+      <div class="edge">
+        <h3>SBCL is gone, and native compile-at-admission went with it.</h3>
+        <p>The owned interpreter is the tax; the envelope argument (I/O-bound SaaS, heavy
+        lifting in SQL) carries v1, and the AOT lane — verified hot functions compiled to Go,
+        taal's lane — is held in reserve, opened per-function when production says so.</p>
+      </div>
+      <div class="edge">
+        <h3>The condition system is rebuilt, not inherited.</h3>
+        <p>Lisp gave kern restarts as a language feature. Regel engineers the same product
+        truth: a failed step signals a durable condition row whose restarts render as buttons
+        an operator presses. Equivalent behavior, less linguistic elegance — stated plainly.</p>
+      </div>
+      <div class="edge">
+        <h3>Homoiconicity is approximated, not native.</h3>
+        <p>TypeScript is not s-expressions. “Code is data” arrives through the subset's AST
+        schema plus the canonical printer — one rendering, hashable, structurally diffable.
+        That is enough for the catalog, the builders, and admission; it is not the full
+        macro-expansion elegance kern had, and the derivation layer works harder for it.</p>
+      </div>
+      <div class="edge">
+        <h3>TypeScript's unsound corners survive in the trusted tier.</h3>
+        <p>The strict subset bans the lies it can see and derives runtime validators at every
+        boundary, but structural-typing variance holes exist even in strict code. Verifier
+        coverage is still the security boundary — versioned, adversarially tested, and stated
+        as such. Kern's honesty, kept.</p>
+      </div>
+      <div class="edge">
+        <h3>Two parents, one team.</h3>
+        <p>Regel inherits both build burdens: an owned engine <em>and</em> an admission
+        substrate. The staging answer is ruthless: the walking skeleton is admit → row →
+        evaluate → respond, end to end, before a single feature exists — and the deepest bets
+        (printer, continuations, fuel) are proven under kill-tests before the world grows
+        around them.</p>
+      </div>
+    </div>
+
+    <p>
+      The pitch, in one sentence: <strong>your app, your schema, your workflows, your tenants'
+      customizations, and your agents' patches are versioned TypeScript rows in one Postgres,
+      evaluated by one kernel — deploying, auditing, and governing them is one mechanism, in
+      the one language every model on earth already speaks.</strong>
+    </p>
+  </div>
+</section>
+
+<section id="reality">
+  <div class="wrap">
+    <div class="kicker">The reality of the project</div>
+    <h2>It got built. v1 closed with every gate green.</h2>
+    <p class="lede">
+      Between 2026-07-09 and 2026-07-18 this stopped being a concept study. One Go kernel,
+      one real PostgreSQL 16.13, an operator go/no-go gate between every stage, an external
+      twelve-expert review, a fresh-eyes re-verification, and a final residue burn-down that
+      turned twelve open items into machinery — across 20 session strands. Every claim below
+      traces to a red-path test, a runnable demo, or a named residue. Nothing is silent — and
+      when it was done, a council of reviewers was turned loose to find where the prose
+      outruns the proof.
+    </p>
+
+    <div class="grid2">
+      <div class="cell">
+        <span class="conf">Stage A · walking skeleton · green</span>
+        <h3>Admit → row → evaluate → respond, end to end, first.</h3>
+        <p>One binary + Postgres: the full admission pipeline, the owned CEK interpreter at
+        27.1M steps/sec (27× the floor, metering tax ≈0%), and the admit/rollback/as-of demo
+        — before a single feature existed.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">Stage B · the deepest bet · green</span>
+        <h3>Continuations survived real kill&nbsp;-9.</h3>
+        <p>A workflow killed mid-step resumes on a different kernel to the identical result,
+        effects exactly-once. A year-old continuation — under a backdated clock — resumed
+        across an epoch. A 10k wake storm, zero duplicates. Resume p95 ~58ms; a serialized
+        environment is ~199 bytes.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">Stage C · the security boundary · green</span>
+        <h3>Six verifiers, adversarially tested, in the transaction.</h3>
+        <p>V1–V6 red-pathed with a hostile fixture corpus; 13 seeded production mutants all
+        caught. Real tsgo typechecks inside the insert transaction at p95 = 12ms. The MCP
+        agent plane (11 tools) and the byte-identical git projection walk the same gate.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">Stage D · the world as rows · green</span>
+        <h3>std/ is 72 genesis rows; the UI is a fold over the catalog.</h3>
+        <p>Two fresh databases produce byte-identical worlds. The reactive layer ships
+        server-rendered templates with binary SSE deltas — 50k-session storm drained
+        exactly-once in 34s, optimistic echo at 0.0ms perceived latency.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">Stage E · the proof · green</span>
+        <h3>A CRM exists entirely as admitted rows.</h3>
+        <p>Three erf resources, a workflow, a component, a typed SQL read — zero app logic in
+        Go, grep-proven. Five scenarios scripted and passing: tenant field-add, agent patch
+        over MCP, a workflow surviving two deploys mid-flight, rollback observed through the
+        UI, vault crypto-shred with a clean history.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">M5 · agents, measured · green</span>
+        <h3>The agent claims were run against a real model, never mocked.</h3>
+        <p>Authoring: pass@1 = pass@3 = 1.00 on a 52-task suite — pure-computation tasks, the
+        model handed the dialect rules (k pinned per epoch; the retry ceiling is not a dial).
+        Restart decisions: 0.968 accuracy on 31 labeled scenarios — so the agent's restart
+        authority flipped on through its mechanized gate. It proves the governed plane works
+        end to end; the harder corpus of real resources is v2's to run.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">Stage F · residue burn-down · green</span>
+        <h3>Twelve open residues became machinery — and using them found real bugs.</h3>
+        <p>An agent restarted a real parked workflow across the flipped authority; the epoch
+        migrate ran a genuinely new std pair; the settings form, operator-plane live updates,
+        as-of row data, and two std batteries all landed as admitted rows. Chasing them
+        red-path-first surfaced three real defects — a SELECT that could write, a migrate keyed
+        on the wrong column, a template throw that leaked PII — each fixed with the failure
+        witnessed first.</p>
+      </div>
+    </div>
+
+    <p>
+      The discipline held under embarrassment, which is the real test. The first eval run's
+      numbers were harness artifacts — kept as evidence, fixed red-path-first, re-run. An
+      outside reviewer's first verdict on the reference CRM was <em>UNFINISHED</em> — the
+      specifics were fixed and the re-review recorded as rows. Two bugs were found only by
+      <em>using</em> the system, both fixed with the failure witnessed red first.
+    </p>
+
+    <div class="note">
+      <strong>What remains is named, not hidden.</strong> The burn-down discharged every one
+      of the twelve, each with a witnessed-red test, and re-tallied the ledger to 31 claims —
+      30 carry a red-path test, 18 a runnable demo, 4 a residue with a stated why-safe. What
+      it could not finish it re-named forward, not away: the operator plane now wires the
+      restart door but not yet the approve-a-patch action, as-of reconstructs row data but not
+      a row's birth, std grew files and i18n but not charts, and the projectional editors
+      remain the one claim carried by residue alone. The "years" bet on continuation stability
+      is still simulation-proven — real years are unfalsifiable in v1, so a golden corpus makes
+      decode drift release-blocking instead.
+    </div>
+  </div>
+</section>
+
+<section id="council">
+  <div class="wrap">
+    <div class="kicker">The council of reviewers</div>
+    <h2>Then five reviewers went looking for the gap between the prose and the proof.</h2>
+    <p class="lede">
+      A systems architect, a security engineer, a database expert, a product lead, and a
+      designated skeptic each read the specs against the code — not the narrative. Their brief
+      was to find what strains, what is over-claimed, and what breaks. None of them called it a
+      paper architecture; the mechanisms, they agreed, are real engineering that matches its
+      ADRs. All of them found the same fault line: the deepest, most-repeated claims are
+      provisioned but unexercised, and the vision is more confident than the evidence beneath it.
+    </p>
+
+    <div class="grid2">
+      <div class="cell">
+        <span class="conf">Architecture · sound, with caveats</span>
+        <h3>The immortality claim has never crossed a version boundary.</h3>
+        <p>The CEK machine, the hand-rolled Postgres wire client, and the content-addressing are
+        real and match the ADRs. But everything lives at format version 1 — the decoders reject
+        any other — and the "year-old resume across an epoch" test advances the epoch by copying
+        identical manifest roots. "Resume for years across epochs" is a design, not yet a result.
+        And the one Postgres has no failover, replication, or restore drill specified: forever is
+        currently one un-replicated disk.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">Security · holds, with caveats</span>
+        <h3>The admission gate holds; the runtime read boundary leaks.</h3>
+        <p>Vault plaintext really is unreachable, the SELECT-only fix is engine-enforced, the
+        restart flip fails closed. But typed SQL reads carry no injected tenant predicate and
+        there is no row-level security anywhere — cross-tenant isolation rests on the app author
+        remembering a WHERE clause the reference app itself omits. No statement timeout, and an
+        advisory lock can poison a pooled connection. Harden per-tenant row isolation before a
+        second tenant.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">Data · sound, with caveats</span>
+        <h3>One ledger order, welded into everything, unshardable.</h3>
+        <p>Corruption is made unrepresentable rather than policed, and the git fold is genuinely
+        determinism-safe. But a single global admission id underwrites the fold, the projection,
+        and every as-of query — so the substrate cannot shard, and the history, outbox, and
+        continuation tables grow forever with no aging path. The as-of reconstruction can even
+        surface a row created after the queried instant. Decide now, in writing: is v1 one
+        Postgres, one region, by design?</p>
+      </div>
+      <div class="cell">
+        <span class="conf">Product · niche, but viable</span>
+        <h3>You write a schema and get an app — until you need a chart.</h3>
+        <p>A 170-line CRM derives tables, history, policy, forms, REST, MCP tools, and a live UI;
+        durable workflows take no ceremony; PII is a type modifier. Real, differentiated leverage.
+        But the UI renders from a closed vocabulary with no charts, no custom widgets, no
+        third-party embed and no escape hatch — a real product team hits that wall in week two and
+        can only wait for a new kernel epoch. The proof CRM validates the substrate, not yet a
+        product.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">Skeptic · rigorous, with gaps</span>
+        <h3>The agent numbers are perfect because the test is easy.</h3>
+        <p>Exactly-once across a real kill&nbsp;-9 is a database fact; red-path-first is not
+        theater; zero-business-logic-in-Go holds literally. But pass@1 = 1.00 was scored on toy
+        arithmetic — gcd, fizzbuzz — in a dialect the eval configures to forbid the imports,
+        types, and calls that make regel regel, with the decision rubric handed to the model in
+        the prompt. It proves the governed plane works; not that an agent can author a real
+        resource. The storms are cloned rows; the stranger review is Claude judging Claude.</p>
+      </div>
+      <div class="cell">
+        <span class="conf">The through-line</span>
+        <h3>The machinery is real; the durability and agent claims are simulated.</h3>
+        <p>Two reviewers converged on it independently. What is proven is that the mechanisms are
+        correct at version 1, one node, small N, simulated time. What is asserted more confidently
+        than shown is that they hold for years, across format versions, at scale, under a real
+        agent workload. The risk register already says most of this — the honest fix is to make
+        the vision speak in the same voice as its own risks.</p>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>The caveat this page owes you.</strong> The agent-plane numbers — authoring
+      pass@1 = pass@3 = 1.00, restart accuracy 0.968 — were measured on toy pure-arithmetic tasks
+      in a restricted dialect that forbids regel's actual surface, with the rubric in the prompt,
+      against a single model. They show the governed admission and MCP plane works end to end;
+      they do not measure an agent authoring real resources, workflows, or capability-scoped code.
+      "Durable for years," the epoch resume, and the 10k/50k storms are proven under simulated
+      clocks and cloned state — not real elapsed time or real clients. What got built is a genuine,
+      gate-green pilot: one Postgres, small scale, the mechanisms correct. It is not yet the
+      any-scale, lives-forever substrate the top of this page imagines — and the distance between
+      those two is exactly the v2 backlog.
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="family">
+      <span>samen</span><span>·</span>
+      <span>eigen</span><span>·</span>
+      <span>kern</span><span>·</span>
+      <span>taal</span><span>·</span>
+      <span>streng</span><span>·</span>
+      <span class="this">regel</span>
+    </div>
+    <p>
+      Regel — a concept study that got built: kern's governed code-as-rows substrate fused
+      with streng's closed-world strict TypeScript dialect. One kernel, one Postgres, one
+      gate — every line a rule, every rule a row. v1 closed 2026-07-17; the residues burned
+      down and the claims stress-tested by a review council, 2026-07-18. Gate-green, and
+      honest about the distance still to run.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -297,9 +297,29 @@ durability machinery implemented existing ADR law without deviation.
    SELECT-only, not a policy predicate) — policy-predicate injection into std/sql
    reads remains the named later increment; erf reads carry all policy-scoped
    surfaces in v1.
-2. **R2 Settings form**: the tenant field-add drives the HTTP admission door;
-   no point-and-click Settings FORM ships (the gate/scoping/re-derivation are the
-   claim; the form is presentation).
+2. **R2 Settings form — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r2/`)**: a
+   point-and-click Settings form now ships AS ADMITTED ROWS — `crm/settingsform.ts`,
+   a hand-authored `SettingsForm` component lowered to a `component_template` through
+   the SAME §1 `lowerComponent` gate as `AccountCard` (grep-proven: zero non-test Go
+   changed, no app logic in Go — `grep-no-go-app-logic.txt`; only a test file and the
+   two standing scripts changed). It renders the field-name input + type select +
+   Admit button from the closed tier-1 vocabulary (`settings-form-firstpaint.html`),
+   and its captured `(field name, field type)` walk the EXACT SAME HTTP `/admit` door
+   scenario-a proves — same verifiers, same catalog effect: happy `(owner, text)`
+   admits (additive DDL, owner column live, visible in the derived Account form UI).
+   RED / same-door refusals WITNESSED on the form path, by the GATE not ad-hoc form
+   validation: `(territory, geography)` — a type outside the 13-type roster — is
+   refused at the `tsgo` verifier (`TS2322: Type '"geography"' is not assignable to
+   type 'FieldSpec'`), no column leaked; a stale-base concurrent field-add is refused
+   at the `cas` stage (STALE_BASE). Standing proof: `scripts/scenario-a2-settings-form.sh`
+   (exit 0, `scenario-a2.txt`) + `SettingsForm` admitted/asserted in `crm-setup.sh` and
+   the `TestCRMReferenceAppEndToEnd` anchor. ADR-first (BUILD-F, ADR-11 §7): the
+   settings/schema form is documented as a form whose submit drives ADMISSION (not the
+   §7 row-mutation path). NARROWED RESIDUE: the submit is not auto-wired into the ~15KB
+   client's `/session` event bus — a browser reaches `/admit` with a plain form POST;
+   wiring submit-event → server-side admission through the reactive bus (so the client
+   itself drives the field-add) is the remaining increment, deliberately unbuilt to
+   hold the no-new-Go / no-app-logic line.
 3. **R3 as-of mount scope**: read-only first-paint; live steps track head; as-of
    observes SCHEMA/BEHAVIOR (template + code version), not historical row DATA —
    derived-table point-in-time reconstruction from history is unbuilt.

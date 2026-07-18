@@ -60,6 +60,7 @@ func TestCRMReferenceAppEndToEnd(t *testing.T) {
 	admit("activity.ts", nil)
 	admit("followup.ts", []string{"mail.send"})
 	admit("accountcard.ts", nil)
+	admit("settingsform.ts", nil)
 	admit("pipeline.ts", []string{"sql.query"})
 
 	// --- derivations ---------------------------------------------------------
@@ -87,6 +88,13 @@ func TestCRMReferenceAppEndToEnd(t *testing.T) {
 			`SELECT count(*) FROM derived_artifact WHERE resource_name='app/crm/AccountCard' AND pass='component_template'`,
 			nil, &nct); err != nil || nct != 1 {
 			t.Fatalf("AccountCard component_template count=%d err=%v", nct, err)
+		}
+		// SettingsForm (R2 point-and-click settings surface) lowers the same way.
+		var nsf int64
+		if _, err := c.QueryRow(ctx,
+			`SELECT count(*) FROM derived_artifact WHERE resource_name='app/crm/SettingsForm' AND pass='component_template'`,
+			nil, &nsf); err != nil || nsf != 1 {
+			t.Fatalf("SettingsForm component_template count=%d err=%v", nsf, err)
 		}
 	})
 

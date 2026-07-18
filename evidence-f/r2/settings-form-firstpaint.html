@@ -1,0 +1,32 @@
+# R2 evidence — the Settings form FIRST-PAINT HTML (admitted-rows presentation)
+# command: curl .../ui/app/crm/Account/detail/1?component=app/crm/SettingsForm
+# The point-and-click controls (field-name input, type select, Admit button) are
+# server-rendered from the closed tier-1 vocabulary — no raw-HTML hatch.
+# ----------------------------------------------------------------------
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>regel</title>
+</head>
+<body>
+<div id="rg-root" data-session="1a02ef0e-5ae3-4836-b954-29f2c395b0c0" data-seq="0">
+<article class="rg-card">
+<div class="rg-stack">
+<h2 class="rg-heading">Add a field to Account</h2>
+<label class="rg-label">Field name</label>
+<input class="rg-field" data-slot="component.0">
+</input>
+<label class="rg-label">Field type</label>
+<select class="rg-select" data-slot="component.1">
+</select>
+<span class="rg-text">Submitting re-admits Account through the /admit gate</span>
+<button type="button" class="rg-button">Admit field-add</button>
+</div>
+</article>
+</div>
+<script src="/session/client.js">
+</script>
+</body>
+</html>

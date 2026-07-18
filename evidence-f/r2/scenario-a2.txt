@@ -1,0 +1,50 @@
+# R2 evidence — point-and-click Settings form drives the SAME /admit door as scenario-a
+# exact command:
+#   bash scripts/scenario-a2-settings-form.sh
+# real Postgres 16.13, real HTTP /admit door, no mocks. Captured 2026-07-18T02:12:15Z
+# ------------------------------------------------------------------------
+
+### building regel binary
+### recreating database regel_crm_a2
+
+==============================================================
+STEP 0: substrate + genesis + admit Account v1 AND the SettingsForm component (as rows)
+==============================================================
+PASS: SettingsForm admitted as rows -> component_template (same gate as AccountCard, grep-clean of app logic in Go)
+
+==============================================================
+STEP 1: MOUNT the Settings form — the point-and-click surface renders as admitted rows
+==============================================================
+controls rendered: rg-button rg-field rg-select 
+PASS: the point-and-click Settings form renders live over the derived rows (admitted-rows presentation, no raw-HTML hatch)
+
+==============================================================
+STEP 2: HAPPY — the operator picks (owner, text) in the form; SUBMIT walks the SAME /admit door
+==============================================================
+Account head hash the form submits against: r1_gjw0yd4ssgw4qqyzygx287r3734j5f951snmevb141jbxp8ycmdg
+  outcome: admitted | additive: True
+PASS: form-captured (owner, text) admitted through the same HTTP /admit door -> owner column live, Globex intact
+
+==============================================================
+STEP 3: OBSERVE — a fresh Account form mount now renders the owner field the Settings form added
+==============================================================
+PASS: the field the Settings form added is visible in the derived UI (schema evolution end-to-end)
+
+==============================================================
+STEP 4: RED / SAME DOOR — an invalid TYPE captured by the form is refused BY THE GATE, not form validation
+==============================================================
+  outcome: rejected
+  refused-by: tsgo TS2322 - Type '"geography"' is not assignable to type 'FieldSpec'.
+PASS: the gate (tsgo verifier) refused the invalid field type submitted from the form — no ad-hoc form validation, no column leaked
+
+==============================================================
+STEP 5: RED / SAME DOOR — a concurrent field-add on a STALE base is rejected at the cas stage
+==============================================================
+  outcome: stale-base | failed stage: [('cas', 'fail')]
+PASS: the stale-base concurrent field-add was rejected (STALE_BASE, cas stage) — the same optimistic-concurrency refusal scenario-a witnesses
+
+==============================================================
+DEMO OK — R2 point-and-click Settings form ships as admitted rows; its captured values walk the SAME /admit door (happy admits, gate refuses invalid), no app logic in Go
+==============================================================
+
+SCENARIO_EXIT=0

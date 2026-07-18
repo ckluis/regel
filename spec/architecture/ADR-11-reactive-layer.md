@@ -262,6 +262,29 @@ as an ADR-13 §3 SLO calibrated at M4 (R1-06: fan-out lag is a named golden sign
   ("this record changed — review and resubmit"), **preserving the user's draft** in
   unsaved fields. Last-writer-wins is rejected.
 
+**BUILD-F (R2): the settings/schema form — a form whose submit drives ADMISSION, not a
+row mutation.** §7 above is the DATA form: a submit POSTs to the session event bus and the
+kernel runs the derived `R.parse` + a `row_version`-guarded UPDATE of a resource ROW. A
+*settings* form is a distinct, additive surface: a hand-authored component (`SettingsForm`,
+lowered by §1's `lowerComponent` exactly as `AccountCard`) whose point-and-click controls
+capture a `(field name, field type)` and whose submit RE-ADMITS the resource definition
+through the ADR-07 `/admit` door under optimistic concurrency (the current-head hash as
+`--base`) — the SAME door, verifiers, and catalog effect a programmatic field-add walks. The
+form is PRESENTATION over the existing gate: the gate — not the form — decides what admits (a
+type outside the ADR-10 §5 13-type roster is refused at the `tsgo` verifier; a stale base is
+refused at the `cas` stage), so there is no ad-hoc client- or server-side field validation to
+diverge from the gate. This adds ZERO kernel app logic: the form-to-def synthesis
+(`head canonical_text` + the captured field → the re-admitted source) and the `/admit` POST are
+the client's job — a plain form POST — not a new reactive-client duty (§3) or a new session
+event kind (§5). NAMED RESIDUE (narrows STAGE-E R2): the submit is not auto-wired into the
+~15KB client's `/session` event channel (which drives row mutations only); a browser reaches
+`/admit` with a plain POST. Wiring submit-event → server-side admission through the reactive
+bus (so the ~15KB client itself drives the field-add without a separate POST) is the remaining
+increment — deliberately unbuilt to hold the no-new-Go / no-app-logic line. Proven end-to-end
+by `scripts/scenario-a2-settings-form.sh` (evidence-f/r2/): the form renders as admitted rows,
+its captured `(owner, text)` admits through `/admit` (owner column live, visible in the derived
+UI), and its captured `(territory, geography)` is refused BY THE GATE.
+
 **BUILD-D (D3):** the derived `form` template gains ONE trailing form-level `alert` slot;
 validation failures and the concurrent-edit reconcile patch target it (per-field error
 slots are a named scope reduction for D3, not a per-field slot each). A schema pass adds an

@@ -69,6 +69,7 @@ admit_ok crm/contact.ts   app/crm/Contact
 admit_ok crm/activity.ts  app/crm/Activity
 admit_ok crm/followup.ts  app/crm/followup    --declare mail.send
 admit_ok crm/accountcard.ts app/crm/AccountCard
+admit_ok crm/settingsform.ts app/crm/SettingsForm
 admit_ok crm/pipeline.ts  app/crm/activePipeline --declare sql.query
 
 step "2: ASSERT — 3 resources derived (table + history + policy each)"
@@ -103,6 +104,9 @@ echo "  dashboard(Account/Contact/Activity): present  OK"
 CT="$(sql "SELECT count(*) FROM derived_artifact WHERE resource_name='app/crm/AccountCard' AND pass='component_template'")"
 [ "$CT" = "1" ] || fail "AccountCard did not lower to a component_template ($CT)"
 echo "  component_template(app/crm/AccountCard): present  OK"
+SFCT="$(sql "SELECT count(*) FROM derived_artifact WHERE resource_name='app/crm/SettingsForm' AND pass='component_template'")"
+[ "$SFCT" = "1" ] || fail "SettingsForm did not lower to a component_template ($SFCT)"
+echo "  component_template(app/crm/SettingsForm): present  OK  (R2 point-and-click settings surface)"
 
 step "5: ASSERT — workflow + pipeline admitted as catalog definitions"
 for d in followup activePipeline; do

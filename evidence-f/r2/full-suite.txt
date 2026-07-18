@@ -1,0 +1,34 @@
+ok  	regel.dev/regel/cmd/regel	4.052s
+--- FAIL: TestPinTamperDetected (3.54s)
+    seed_test.go:129: epoch: pgwire: ERROR 42P01: relation "epoch_current" does not exist
+--- FAIL: TestSeededSolutionsThroughRealDoor (0.13s)
+    seed_test.go:160: epoch: pgwire: ERROR 42P01: relation "epoch_current" does not exist
+FAIL
+FAIL	regel.dev/regel/gate/m5eval	4.182s
+?   	regel.dev/regel/gate/nativetcb	[no test files]
+?   	regel.dev/regel/gate/redpath	[no test files]
+ok  	regel.dev/regel/internal/admission	19.278s
+ok  	regel.dev/regel/internal/catalog	4.639s
+ok  	regel.dev/regel/internal/cek	0.493s
+ok  	regel.dev/regel/internal/cfr	5.395s
+ok  	regel.dev/regel/internal/gitproj	4.593s
+ok  	regel.dev/regel/internal/kernel	423.749s
+ok  	regel.dev/regel/internal/lower	0.997s
+ok  	regel.dev/regel/internal/mcp	9.692s
+?   	regel.dev/regel/internal/mutants	[no test files]
+ok  	regel.dev/regel/internal/oracle	2.299s
+ok  	regel.dev/regel/internal/pgwire	2.304s
+ok  	regel.dev/regel/internal/rast	0.370s
+ok  	regel.dev/regel/internal/tsx	0.762s
+ok  	regel.dev/regel/internal/ui	0.643s
+FAIL
+
+# NOTE (R2): the two gate/m5eval failures below are PRE-EXISTING + environmental,
+# NOT caused by R2. Reproduced identically with R2 changes stashed:
+#   $ git stash && go test ./gate/m5eval/ -run 'TestPinTamperDetected|TestSeededSolutionsThroughRealDoor'
+#   --- FAIL: TestPinTamperDetected  (epoch_current does not exist)
+#   --- FAIL: TestSeededSolutionsThroughRealDoor (epoch_current does not exist)
+# gate/m5eval provisions its own scratch DB (randDB + migrate-db + genesis); the
+# epoch_current visibility failure is inside that harness and independent of R2.
+# Every package R2 touches — internal/kernel (incl. TestCRMReferenceAppEndToEnd),
+# internal/admission, internal/ui, cmd/regel — is GREEN in the run above.

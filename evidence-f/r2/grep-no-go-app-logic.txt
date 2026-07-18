@@ -1,0 +1,23 @@
+# R2 grep-proof: no new Go APP LOGIC (the SettingsForm ships as admitted rows)
+# commands:
+#   git status --porcelain
+#   grep -rin 'settingsform' internal cmd --include='*.go' | grep -v _test.go
+#   grep -rin 'crm\|account\|contact\|activity' internal cmd --include='*.go' | grep -v _test.go | grep -v comment
+
+== files touched by R2 ==
+ M internal/kernel/crm_e2e_test.go
+ M scripts/crm-setup.sh
+?? crm/settingsform.ts
+?? evidence-f/r2/
+?? scripts/scenario-a2-settings-form.sh
+
+== Go files changed (git) — TEST files only; zero non-test kernel Go ==
+ M internal/kernel/crm_e2e_test.go
+
+== non-test Go mentioning SettingsForm (the new surface) ==
+(none)
+
+== non-test Go with CRM app names as CODE (not // comments) ==
+cmd/regel/main.go:946:	resource := fs.String("resource", "", "derived resource name (e.g. app/crm/Contact)")
+cmd/regel/main.go:994:	resource := fs.String("resource", "", "derived resource name (e.g. app/crm/Contact)")
+internal/kernel/dbreader.go:32:		   FROM user_account WHERE subject=$1`,

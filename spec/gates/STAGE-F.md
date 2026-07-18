@@ -158,6 +158,83 @@ Nothing silent; each carries a why-safe (STAGE-E.md §9, `docs/claim-evidence.md
 
 The DEFER-V2 set (15 why-safes) is unchanged in `docs/claim-evidence.md` §2.
 
+## 6a. Council-sourced v2 backlog (post-close review, 2026-07-18)
+
+A five-lens opus review council (systems architect, security, database, product/DX,
+skeptic) read the specs against the code after close-out. Verdicts: architecture
+sound-with-caveats · security holds-with-caveats · data sound-with-caveats · product
+niche-but-viable · evidence mostly-rigorous-with-gaps. None called it a paper
+architecture; the convergent finding was that the deepest claims (durable-for-years,
+resume-across-epochs, agents-author-code, any-scale) are provisioned but unexercised.
+Net-new items (those not already in §6) are filed here for v2; severity is the council's.
+
+- **F-V2-1 [architect · CRITICAL] Cross-version resume is unexercised.** Everything is
+  `FormatVersion=1`/`SchemaVersion=1`; `cfr/decode.go` rejects any other version and no
+  up-converter exists. The "year-old resume across an epoch" test (`yearold_test.go:55`)
+  advances the epoch by copying identical manifest roots (the test comment concedes it).
+  *v2:* mint a real `r2`/CFR-2 with a semantic delta + one up-converter, drive the golden
+  corpus bit-identically across the boundary, and run a lattice-narrowing `migrate --commit`
+  that blocks a real banned-type continuation.
+- **F-V2-2 [architect · HIGH] No availability/durability architecture for the one
+  Postgres.** Replication/failover/backup are assumed by ADR-03/06, designed by neither; no
+  RPO/RTO, no PITR restore drill. *v2:* specify + drill a streaming-replica + PITR + failover
+  topology with a release-gated restore.
+- **F-V2-3 [security · CRITICAL] Cross-tenant read via `std/sql.query`.** No injected tenant
+  predicate, no row-level security anywhere (`schema.sql` has no `create policy`); the
+  `orgScoped` predicate applies only to the erf path, and `crm/pipeline.ts:15` ships a query
+  with no org filter. (Named narrowly as R1 §6; the council escalates it to CRITICAL —
+  *before a second tenant.*) *v2:* engine-enforced RLS keyed on the authenticated principal's
+  org via a session GUC, or forbid raw `std/sql` in tenant/agent scope.
+- **F-V2-4 [security · HIGH] `std/sql` read DoS + advisory-lock pool poisoning.** `READ ONLY`
+  refuses writes, not expensive reads or locks: no `statement_timeout`, and
+  `pg_advisory_lock` survives COMMIT to poison a pooled connection (`pool.go` does no
+  `DISCARD ALL`). *v2:* `SET LOCAL statement_timeout`/`lock_timeout`, a function allowlist
+  rejecting `pg_advisory_*`/`pg_sleep`/locking, and connection discard after `sql.query`.
+- **F-V2-5 [security · MED→HIGH] V2 pii-taint is intra-patch, not whole-graph.** Soundness
+  across module boundaries rests inductively on the export-boundary check, not structurally;
+  `sql.query` results are untainted; non-vault-column + history sinks are still unmodeled
+  (only the log sink closed in BUILD-E). *v2:* whole-graph taint (fold base-helper return
+  types), taint `sql.query` by column provenance, promote every named residue to a red-path
+  fixture.
+- **F-V2-6 [database · CRITICAL] Single global `admission.id` order is unshardable.** It
+  underwrites the deterministic fold, the git projection, and every as-of query — so the
+  substrate cannot shard. *v2:* decide in writing whether v1 is one-Postgres/one-region by
+  design, or region-scope the ledger id + per-shard fold before customer data lands (cheap on
+  paper now, a re-derivation of the determinism gate later).
+- **F-V2-7 [database · HIGH] History/outbox/continuation are unpartitionable and un-aged.**
+  The I4 GiST exclusion forbids partitioning `name_pointer_history`; `res_*_history`,
+  `outbox`, `channel_message`, `continuation` grow with write volume forever. *v2:* a
+  retention/rollup story for `outbox`/`channel_message`/`done` continuations (no as-of
+  needed); re-evaluate the I4 exclusion vs hash-partitioning on PG17+.
+- **F-V2-8 [database · MED] As-of is sub-uni-temporal.** `asofRowsetPITR` has no creation
+  lower-bound → a row created *after* the queried instant and later modified surfaces as a
+  history-leg phantom (broader than R3's named base-leg half); and `valid_from` means
+  *became-current* in `name_pointer_history` but *stopped-being-current* in `res_*_history` —
+  a trap for the deferred general `std/sql` as-of. *v2:* add an INSERT-trigger creation window
+  (true `valid_from`/`valid_to` per business row) and unify the column semantics.
+- **F-V2-9 [product · CRITICAL] UI expressiveness ceiling.** The closed 25-primitive roster
+  has no charts, no custom widgets, no third-party embed, no escape hatch, and depth-1
+  `props.<field>` binding only — a real product team hits the wall in week two and can only
+  wait for a kernel epoch. *v2:* a governed custom-render capability that preserves the V2
+  masking proof, plus charts + computed/aggregate fields in-scope.
+- **F-V2-10 [product · HIGH] The proof CRM validates the substrate, not a product.** 170 LOC,
+  7-row dataset, no computed fields/aggregates/charts/integration. *v2:* build product #2
+  (the analytics-shaped one already promised) before claiming the component roster closed.
+- **F-V2-11 [skeptic · HIGH] The agent-plane proof is a toy proxy.** pass@1=pass@3=1.00 and
+  restart 0.968 were scored on toy pure-arithmetic tasks (`corpus.go`) in a dialect the eval
+  configures (`drive.go:17`) to forbid imports/classes/stdlib — regel's actual surface — with
+  the rubric handed to the model in-prompt, single model. *v2:* a corpus of real regel
+  definitions (an `erf resource` with `pii()`, a `std/taak` workflow, a capability-gated
+  call), authored rubric-withheld, scored by the independent oracle, across ≥2 models.
+- **F-V2-12 [skeptic · MED] Durability + storm scale are simulated.** "Years"/epoch resume
+  use backdated rows and frozen-then-past-due timers; the 10k/50k storms clone one frame N×
+  (only ~100 real SSE conns). The exactly-once property is genuinely proven; the *load* and
+  *elapsed time* are not. *v2:* honest framing (name the golden-corpus decode-drift regression
+  as THE durability claim) + a smaller-N storm driven entirely through the real front door.
+
+Overlap with §6: F-V2-3 refines R1; F-V2-8 extends R3(a). The rest are net-new. All twelve
+trace to a council report; the source verdicts and the file pointers above are the record.
+
 ## 7. Discipline notes, stated
 
 (i) Red-path-first held for every residue: a captured RED (`evidence-f/<r>/red-path.txt`

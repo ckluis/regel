@@ -337,6 +337,14 @@ R1-06: health surface resolves to ADR-13):
 3. **Execute** the chosen motion. Both are the standard §3 `--commit` shape: dry-run
    scoped to the blast closure, one SERIALIZABLE commit, fences trip, staged binaries
    take over. No bespoke emergency tooling exists, by design (§6).
+   **BUILD-F (R10): the hold inside that commit is SET-BASED.** Fencing the blast
+   closure fail-closed — an `epoch_hold` audit row + a `condition` flip per dependent —
+   executes as one `INSERT … SELECT` over the closure predicate plus one `UPDATE` over
+   the same predicate, so a dependents-heavy revert (thousands of continuations bound to
+   the bad epoch) fences in O(1) round trips, not O(N). The per-row loop this replaced
+   made 2N round trips and made time-to-recovered grow linearly with the blast size;
+   at N=5000 it measured ~10× the set-based fence and blew the fence-cost budget. The
+   fence latency is pinned as `epoch.hold_fence_ms` (ADR-13 §3), red on regression.
 4. **Reconcile.** Definitions admitted under N keep their addresses (O1) and their
    pinned semantics (O2). Any definition the defect may have wrongly admitted is
    superseded through the now-trusted gate; continuations a defective evaluator

@@ -1,0 +1,24 @@
+R10 — hold-fencing cost model. Discharge evidence.
+Real PostgreSQL 16.13 (Homebrew), DSN postgres://clank@localhost:5432/postgres.
+Repo root: /Users/clank/Desktop/projects/regel
+
+Fence under test: admission.RevertEpoch (internal/admission/migrate.go) — the ADR-08 §6a
+bad-epoch revert. Dominant cost = the HOLD: every dependent bound to the bad epoch is
+fenced fail-closed (epoch_hold audit row + status flip to 'condition'). BUILD-F made the
+hold SET-BASED (one INSERT..SELECT + one UPDATE over the blast closure, O(1) round trips)
+in place of the old per-row loop (2N round trips).
+
+N = 5000 dependents (a busy tenant with thousands of parked/live continuations on one
+epoch). Metric = wall-clock latency (ms) of the revert commit that fences them
+("time-to-recovered", ADR-08 §6a). perf_budget row: epoch.hold_fence_ms, budget 120 ms,
+epoch 1, milestone M6 (registered ADR-13 §3, BUILD-F).
+
+Commands:
+  # RED witness — un-batched runaway routed through the SAME budget gate, fails red:
+  R10_RUNAWAY=1 go test ./internal/kernel/ -run TestR10HoldFenceCost -count=1 -v
+  # GREEN — real set-based fence under budget, writes perf_budget row:
+  go test ./internal/kernel/ -run TestR10HoldFenceCost -count=1 -v
+  # Drill unchanged (batched fence keeps fail-closed semantics):
+  go test ./internal/kernel/ -run TestBadEpochRevertHoldsDependents -count=1 -v
+  # Full uncached suite vs real PG:
+  go clean -testcache && go test ./...

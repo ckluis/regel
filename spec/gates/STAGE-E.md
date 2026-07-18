@@ -371,9 +371,21 @@ durability machinery implemented existing ADR law without deviation.
    keyed on the name-pointer, not the definition hash — every std TYPE shares the
    opaque `unknown` genesis body, so a new type reuses an existing hash but needs a
    fresh pointer.
-10. **R10 hold fencing cost model**: held dependents fence via the `condition`
-    status flip + `epoch_hold` audit rows — deliberately no per-claim epoch_hold
-    read on the 50k-storm step path.
+10. **R10 hold fencing cost model — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r10/`)**:
+    the bad-epoch-revert fence's dominant cost (holding dependents fail-closed via an
+    `epoch_hold` audit row + a `condition` status flip) is now MEASURED under a
+    dependents-heavy hold (N=5000 continuations bound to the bad epoch) and BUDGETED.
+    `admission.RevertEpoch` was made SET-BASED (BUILD-F, ADR-08 §6a): one `INSERT …
+    SELECT` + one `UPDATE` over the blast closure — O(1) round trips in N, replacing the
+    per-row loop's 2N. Metric `epoch.hold_fence_ms` (perf_budget row, epoch 1, M6,
+    registered ADR-13 §3): budget **120 ms**, real fence measured **≈36 ms** (best-of-3).
+    RED witnessed through the SAME gate (`red-path.txt`): the un-batched runaway at
+    identical N measures **~355 ms** and "crosses budget 120ms" → FAIL; GREEN
+    (`green-path.txt`) the set-based fence is ~36 ms under budget and writes the row;
+    the fail-closed drill is unchanged (`drill-unchanged.txt`). Permanent gate:
+    `internal/kernel/r10_hold_fence_cost_test.go` (`TestR10HoldFenceCost`) — also asserts
+    the budget is non-decorative (the runaway must exceed it). The 50k-storm step path
+    still carries no per-claim `epoch_hold` read (that read-path exclusion stands).
 11. **R11 golden corpus breadth — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r9-r11/`)**:
     the golden corpus grew from 30 synthetic single-frame blobs to 30 + 3 REAL
     multi-frame continuation shapes (`real_sleep_park`, `real_mail_park`,

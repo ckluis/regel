@@ -480,11 +480,21 @@ ON CONFLICT DO NOTHING`, target, revertTo); err != nil {
 
 	// HOLD the blast: continuations bound to the bad epoch (stamped with it, or
 	// stepped since it released) that are still live. Fail-closed.
-	rows, err := conn.Query(ctx, fmt.Sprintf(`
-SELECT id::text FROM continuation
- WHERE status IN ('sleeping','ready','condition','running')
-   AND (epoch = %d
-        OR updated_at >= (SELECT created_at FROM epoch WHERE n=%d))`, bad, bad))
+	//
+	// R10 (BUILD-F, ADR-08 §6a / ADR-13 §3 `epoch.hold_fence_ms`): the hold is
+	// SET-BASED, not a per-dependent round trip. A dependents-heavy revert (a busy
+	// tenant with thousands of parked/live continuations bound to the bad epoch) must
+	// fence in O(1) round trips inside the single SERIALIZABLE commit, not O(N) — the
+	// per-row loop this replaced made 2N round trips and blew the fence-cost budget at
+	// scale (witnessed red in evidence-f/r10/). The predicate below is the blast
+	// closure; it is evaluated identically for the id enumeration (return value), the
+	// bulk INSERT, and the bulk UPDATE — the flip to 'condition' happens only in the
+	// UPDATE, so all three see the same set.
+	const blastPredicate = `status IN ('sleeping','ready','condition','running')
+   AND (epoch = $1
+        OR updated_at >= (SELECT created_at FROM epoch WHERE n=$1))`
+
+	rows, err := conn.Query(ctx, `SELECT id::text FROM continuation WHERE `+blastPredicate, bad)
 	if err != nil {
 		return nil, err
 	}
@@ -500,15 +510,20 @@ SELECT id::text FROM continuation
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for _, id := range held {
+	if len(held) > 0 {
+		// One INSERT ... SELECT over the blast closure — every held dependent gets its
+		// fail-closed epoch_hold audit row in a single statement.
 		if _, err := conn.Exec(ctx, `
 INSERT INTO epoch_hold (continuation_id, bad_epoch, revert_epoch, reason)
-VALUES ($1,$2,$3,$4) ON CONFLICT (continuation_id, bad_epoch) DO NOTHING`,
-			id, bad, target, fmt.Sprintf("bound to reverted epoch %d", bad)); err != nil {
+SELECT id, $1, $2, $3 FROM continuation WHERE `+blastPredicate+`
+ON CONFLICT (continuation_id, bad_epoch) DO NOTHING`,
+			bad, target, fmt.Sprintf("bound to reverted epoch %d", bad)); err != nil {
 			return nil, err
 		}
+		// One UPDATE flips the whole blast set to 'condition' — the reactor never
+		// resumes them against the reverted world.
 		if _, err := conn.Exec(ctx,
-			`UPDATE continuation SET status='condition', updated_at=now() WHERE id=$1`, id); err != nil {
+			`UPDATE continuation SET status='condition', updated_at=now() WHERE `+blastPredicate, bad); err != nil {
 			return nil, err
 		}
 	}

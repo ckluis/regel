@@ -1,0 +1,5 @@
+=== RUN   TestBadEpochRevertHoldsDependents
+    epoch_migrate_test.go:353: BAD-EPOCH REVERT: dependent ec9aa444-b43 bound to bad epoch 2 HELD fail-closed (epoch_hold + condition), epoch reverted to epoch-1 pair as epoch 3, held work never resumed
+--- PASS: TestBadEpochRevertHoldsDependents (0.66s)
+PASS
+ok  	regel.dev/regel/internal/kernel	1.005s

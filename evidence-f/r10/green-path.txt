@@ -1,0 +1,6 @@
+=== RUN   TestR10HoldFenceCost
+    r10_hold_fence_cost_test.go:135: R10 hold-fence cost @ N=5000 dependents: batched(real)=35.8ms  unbatched(runaway)=354.9ms  budget=120ms  speedup=9.9x
+    r10_hold_fence_cost_test.go:180: perf_budget row: epoch=1 metric=epoch.hold_fence_ms tier=trusted budget=120 measured=35.8 milestone=M6 (batched (real))
+--- PASS: TestR10HoldFenceCost (1.19s)
+PASS
+ok  	regel.dev/regel/internal/kernel	1.507s

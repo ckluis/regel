@@ -156,6 +156,7 @@ normative now; the numbers are the first stake in the ground, not folklore.
 | `pg.select1_latency_ms` | p99 ≤ 100 ms; two consecutive probe failures mark the kernel degraded on its health port | M2 |
 | `pg.serialization_aborts_total` | BUILD-B: `step.abort_rate` (aborts/attempts) ≤ 5% sustained over a 5-min window; measured by the ADR-05 test-9 wake storm; a `perf_budget` row | M2 |
 | `epoch` flip | fence-trip → fleet serving on N ≤ the drain deadline (30 s lease TTL) | M6 |
+| `epoch.hold_fence_ms` | BUILD-F (R10): a bad-epoch revert fences its dependents-heavy blast closure (N=5000 held) in ≤ **120 ms** (measured **≈36 ms**, set-based); a `perf_budget` row (epoch 1, M6), red on regression — an un-batched O(N) hold blows it (~10×) | M6 |
 | `store.scrubber_trips_total` | **Zero.** Any trip pages and opens the ADR-03 §4a runbook — this SLO is never "calibrated" upward | M0 onward |
 | `telemetry.dropped_total` | < 1% of events under a 5-minute sink outage (ring-buffer sizing check) | M2 |
 

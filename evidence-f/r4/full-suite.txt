@@ -1,0 +1,24 @@
+# R4 full uncached suite — go test ./... vs real PG (foreground, serial)
+# command: go test ./... -count=1
+# captured: 2026-07-18T02:58:48Z
+
+ok  	regel.dev/regel/cmd/regel	2.975s
+ok  	regel.dev/regel/gate/m5eval	2.318s
+?   	regel.dev/regel/gate/nativetcb	[no test files]
+?   	regel.dev/regel/gate/redpath	[no test files]
+ok  	regel.dev/regel/internal/admission	19.884s
+ok  	regel.dev/regel/internal/catalog	4.047s
+ok  	regel.dev/regel/internal/cek	1.241s
+ok  	regel.dev/regel/internal/cfr	5.507s
+ok  	regel.dev/regel/internal/gitproj	5.428s
+ok  	regel.dev/regel/internal/kernel	423.931s
+ok  	regel.dev/regel/internal/lower	1.528s
+ok  	regel.dev/regel/internal/mcp	9.850s
+?   	regel.dev/regel/internal/mutants	[no test files]
+ok  	regel.dev/regel/internal/oracle	1.432s
+ok  	regel.dev/regel/internal/pgwire	1.524s
+ok  	regel.dev/regel/internal/rast	0.696s
+ok  	regel.dev/regel/internal/tsx	0.645s
+ok  	regel.dev/regel/internal/ui	0.467s
+
+SUITE-EXIT=0

@@ -1,0 +1,16 @@
+# R4 red/green Go battery — real PG, real HTTP restart door, real SSE (no mocks)
+# command: go test ./internal/kernel/ -run TestR4OperatorPlaneReactiveWritesAndDelta -count=1 -v
+# captured: 2026-07-18T02:53:07Z
+#
+# RED (door-level, not UI): stale expected_hash -> 409 CONDITION_MOVED; unknown restart -> 404 NOT_FOUND;
+#      a refused write pushes NO frame and leaves the condition open.
+# GREEN: operator restart 'approve' resolves the condition through the SAME door.
+# LIVE SSE: a splice frame removes the resolved condition from the inbox (opcond.0) and adds
+#      its pending->approve transition to the approval-delta panel (opdelta.0).
+
+=== RUN   TestR4OperatorPlaneReactiveWritesAndDelta
+--- PASS: TestR4OperatorPlaneReactiveWritesAndDelta (0.86s)
+PASS
+ok  	regel.dev/regel/internal/kernel	1.193s
+
+GO-TEST-EXIT=0

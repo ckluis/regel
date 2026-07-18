@@ -1,0 +1,77 @@
+# R4 evidence — operatorPlane v1.1 live scenario over real regel serve
+# command: bash scripts/scenario-f-operatorplane.sh
+# captured: 2026-07-18T02:52:49Z
+
+### building regel binary
+### recreating database regel_operator_r4
+
+==============================================================
+STEP 0a: migrate-db
+==============================================================
+
+==============================================================
+STEP 0b: genesis
+==============================================================
+
+==============================================================
+STEP 0c: admit a taak.signal workflow (restarts: approve[cap:operator], abort)
+==============================================================
+admitted: app/r4/approve
+
+==============================================================
+STEP 1: start regel serve
+==============================================================
+kernel up (pid 15473)
+
+==============================================================
+STEP 2: start the workflow — it parks on an open durable_condition
+==============================================================
+continuation: 96d9c961-66ee-4269-af38-bc0ce6ac6245
+open condition: 44077508-0697-485b-8453-47f457af02a9
+
+==============================================================
+STEP 3: GET /ui/operatorPlane — a REAL reactive session (X-Regel-Session), 3 panels
+==============================================================
+operator session: 4bb1d520-cf87-4fcc-a320-0b64b907e1ee
+PASS: 3 panels render; the open condition + its restart button + continuation id are shown
+
+==============================================================
+STEP 4: open the operator SSE stream (background curl -N)
+==============================================================
+SSE open on operator session 4bb1d520-cf87-4fcc-a320-0b64b907e1ee
+
+==============================================================
+STEP 5: RED — the restart button walks the door; a STALE-hash write is refused (409 CONDITION_MOVED)
+==============================================================
+refused (stale hash): {"error":"cfr: condition moved (expectedHash mismatch)"}
+
+==============================================================
+STEP 5b: RED — an UNKNOWN restart is refused (404 NOT_FOUND) by the door
+==============================================================
+refused (unknown restart): 404
+PASS: both writes refused BY THE DOOR; condition still open (no state change)
+
+==============================================================
+STEP 6: GREEN — the operator restart 'approve' resolves the condition through the door (200)
+==============================================================
+PASS: condition resolved:approve through the restart door
+
+==============================================================
+STEP 7: the LIVE SSE frame — the resolved condition splices out of the inbox / into the delta panel
+==============================================================
+raw SSE transcript (/var/folders/_6/44y5p5453njbczf2l4nzx0_w0000gn/T/regel-r4-sse.XXXXXX.AGnkTY4bGG):
+id: 1
+data: AQAAAAAAAAABQAM6/wJx8dUCBAhvcGNvbmQuMAECJDQ0MDc3NTA4LTA2OTctNDg1Yi04NDUzLTQ3ZjQ1N2FmMDJhOQAABAlvcGRlbHRhLjABASQ0NDA3NzUwOC0wNjk3LTQ4NWItODQ1My00N2Y0NTdhZjAyYTkA9wI8YXJ0aWNsZSBjbGFzcz0icmctY2FyZCIgZGF0YS1rZXk9IjQ0MDc3NTA4LTA2OTctNDg1Yi04NDUzLTQ3ZjQ1N2FmMDJhOSI+PHNwYW4gY2xhc3M9InJnLXRleHQiIGRhdGEtc2xvdD0ib3BkZWx0YS4xIzQ0MDc3NTA4LTA2OTctNDg1Yi04NDUzLTQ3ZjQ1N2FmMDJhOSI+YXBwLmFwcHJvdmFsPC9zcGFuPjxzcGFuIGNsYXNzPSJyZy1iYWRnZSIgZGF0YS1zbG90PSJvcGRlbHRhLjIjNDQwNzc1MDgtMDY5Ny00ODViLTg0NTMtNDdmNDU3YWYwMmE5Ij5hcHByb3ZlPC9zcGFuPjxzcGFuIGNsYXNzPSJyZy10ZXh0IiBkYXRhLXNsb3Q9Im9wZGVsdGEuMyM0NDA3NzUwOC0wNjk3LTQ4NWItODQ1My00N2Y0NTdhZjAyYTkiPm9wZXJhdG9yPC9zcGFuPjwvYXJ0aWNsZT4=
+
+PASS: a post-resolution SSE frame decodes to the live operator splice (opdelta + condition id)
+
+==============================================================
+STEP 8: a fresh mount shows the approve transition in the approval-delta panel
+==============================================================
+PASS: approval-delta panel renders the pending->approve transition
+
+==============================================================
+DEMO OK — operatorPlane v1.1: reactive session, live SSE splice, approval delta, write-through-door (red then green)
+==============================================================
+
+SCENARIO-EXIT=0

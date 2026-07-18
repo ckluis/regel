@@ -645,19 +645,51 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon, com
 		subs                  []subKey
 		rowVersion            string
 		rows                  []ui.RowData
-		earlyOP               *mountResult // operatorPlane early return (read-only, no continuation)
+		subsOverride          []subKey     // operatorPlane subscribes to substrate "resources"
+		earlyOP               *mountResult // operatorPlane read-only fallback (empty catalog: no def to root a session)
 	)
 	if rerr := serveReadSnapshot(ctx, conn, func() error {
-		// BUILD-E D2: the operatorPlane is a GLOBAL operator surface, not backed by a
-		// derived resource — a dedicated server-rendered read of the live substrate
-		// tables (durable_condition inbox + gate_refusal ledger). Read-only in v1 (no
-		// SSE/continuation row; named cut in operatorplane.go).
+		// STAGE-F R4: the operatorPlane is a GLOBAL operator surface, not backed by a
+		// derived resource — a dedicated read of the live substrate tables
+		// (durable_condition inbox + gate_refusal ledger + approval delta). v1.1 makes
+		// it a REAL reactive session: it subscribes to the durable_condition/gate_refusal
+		// "resources", so the SAME ADR-11 §6 invalidation loop re-renders it live and the
+		// re-render→diff→frame path pushes a splice frame onto its SSE stream. The
+		// continuation + subscription write happens in the generic block below, so the
+		// operator session rides the identical §5 mount machinery a resource view uses.
 		if strings.Trim(view, "/") == "operatorPlane" {
-			opHTML, herr := s.renderOperatorPlane(ctx, conn)
-			if herr != nil {
-				return herr
+			panels, perr := s.operatorPanels(ctx, conn)
+			if perr != nil {
+				return perr
 			}
-			earlyOP = &mountResult{SessionID: admission.NewUUID(), EventSeq: 0, HTML: opHTML}
+			var keys map[string][]string
+			html, keys = renderOperatorPanels(panels)
+			// The operator plane is kernel chrome with no backing definition, but a
+			// reactive session needs a continuation, whose root_def_hash FKs definition.
+			// Bind any existing definition hash as the INERT root (a chrome session is
+			// stepped by runOperatorStep, never replays root code) — genesis always seeds
+			// std defs, so this resolves. If the catalog is somehow empty, fall back to a
+			// read-only mount (the v1 behavior) rather than fail the mount.
+			var opDef string
+			opFound, derr := conn.QueryRow(ctx, `SELECT hash FROM definition ORDER BY hash LIMIT 1`, nil, &opDef)
+			if derr != nil {
+				return derr
+			}
+			if !opFound {
+				earlyOP = &mountResult{SessionID: admission.NewUUID(), EventSeq: 0, HTML: html}
+				return nil
+			}
+			sess = &sessionCFR{
+				View: "operatorPlane", Kind: "operator", Resource: "operatorPlane",
+				DefHash: opDef, Principal: principal, Horizon: horizon,
+				Draft: map[string]string{}, UILocal: map[string]string{}, BoardKeys: keys,
+			}
+			// Subscribe to the substrate tables this plane reads (horizon "*"): a
+			// condition resolution / refusal invalidation under that key wakes the plane.
+			subsOverride = []subKey{
+				{Resource: "durable_condition", Key: horizonKey("*")},
+				{Resource: "gate_refusal", Key: horizonKey("*")},
+			}
 			return nil
 		}
 
@@ -709,12 +741,20 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon, com
 	if earlyOP != nil {
 		return *earlyOP, nil
 	}
-	sess.LastSnap = snapOf(state)
-	sess.setDigest(ui.FullDigest(sess.LastSnap))
-	sess.RowVersion = rowVersion
-	sess.RowKeys = keysOfRows(rows)
-	if sess.Kind == "board" {
-		sess.BoardKeys = boardKeysFromRows(vm.Board, rows)
+	if sess.Kind == "operator" {
+		// R4: the operator plane's baseline (per-list key sequence) is already in
+		// sess.BoardKeys; its subscriptions are the substrate-table overrides. Its
+		// live diff is splice-only (runOperatorStep), so no scalar snapshot is kept.
+		sess.LastSnap = map[string]string{}
+		subs = subsOverride
+	} else {
+		sess.LastSnap = snapOf(state)
+		sess.setDigest(ui.FullDigest(sess.LastSnap))
+		sess.RowVersion = rowVersion
+		sess.RowKeys = keysOfRows(rows)
+		if sess.Kind == "board" {
+			sess.BoardKeys = boardKeysFromRows(vm.Board, rows)
+		}
 	}
 
 	frames, err := sess.frames()

@@ -1,0 +1,37 @@
+# R4 grep-proof: NO new Go APP logic (CRM/operator business rules).
+# The operatorPlane is fixed kernel CHROME over substrate tables; v1.1 rides
+# existing plumbing (ADR-11 reactive session/diff/frame/SSE + the restart door).
+# captured: 2026-07-18T02:53:25Z
+
+## (a) Non-test Go files changed by R4 (git diff --stat, excluding _test.go):
+ internal/kernel/handlers.go      |   7 ++
+ internal/kernel/operatorplane.go | 198 +++++++++++++++++++++++++++++++++------
+ internal/kernel/session.go       |  70 +++++++++++---
+ internal/kernel/session_step.go  |   6 ++
+ internal/mcp/tools.go            |   4 +
+ 5 files changed, 240 insertions(+), 45 deletions(-)
+
+## (b) The operatorPlane touches ONLY substrate tables — never a res_ (CRM) table.
+##     (grep for res_ / CRM resource names in the changed kernel chrome: expect none)
+grep -nE 'res_[a-z]|account|contact|pipeline|deal|followup' internal/kernel/operatorplane.go
+  (none — chrome reads durable_condition / gate_refusal / restart only)
+
+## (c) Every write walks an EXISTING door — no new admission/restart authority added.
+##     R4 diff introduces zero new gate/verifier/capability logic; it only:
+##       - renders continuation_id so the button targets POST /continuation/{id}/restart
+##       - emits the ADR-11 §6 invalidation NOTIFY the reactive layer already defines
+grep -n 'ResolveConditionFenced\|notifyInvalidate\|pg_notify' internal/kernel/handlers.go internal/mcp/tools.go
+internal/kernel/handlers.go:422:	// cfr.ResolveConditionFenced the MCP condition.restart tool calls.
+internal/kernel/handlers.go:423:	out, rerr := cfr.ResolveConditionFenced(r.Context(), conn, condID, req.Restart, req.ExpectedHash,
+internal/kernel/handlers.go:435:	_ = notifyInvalidate(r.Context(), conn, "durable_condition", condID, "*")
+internal/mcp/tools.go:17:// is cfr.ResolveConditionFenced. No tool is stubbed to a fake verdict.
+internal/mcp/tools.go:366:	out, err := cfr.ResolveConditionFenced(ctx, conn, a.ConditionID, a.RestartName, a.ExpectedHash,
+internal/mcp/tools.go:373:	_, _ = conn.Exec(ctx, `SELECT pg_notify('regel_invalidate', $1)`,
+
+## (d) The CRM stays entirely admitted rows: no CRM .ts logic moved into Go.
+git diff --name-only HEAD -- crm/ internal/
+internal/kernel/handlers.go
+internal/kernel/operatorplane.go
+internal/kernel/session.go
+internal/kernel/session_step.go
+internal/mcp/tools.go

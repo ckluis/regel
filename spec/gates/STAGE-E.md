@@ -323,8 +323,32 @@ durability machinery implemented existing ADR law without deviation.
 3. **R3 as-of mount scope**: read-only first-paint; live steps track head; as-of
    observes SCHEMA/BEHAVIOR (template + code version), not historical row DATA —
    derived-table point-in-time reconstruction from history is unbuilt.
-4. **R4 operatorPlane v1 is read-only** (no SSE/approval-delta/impersonation
-   panels); hand-authored component lowering renders `props.<field>` depth-1.
+4. **R4 operatorPlane v1.1 — DISCHARGED (partial) (Stage-F, 2026-07-17, `evidence-f/r4/`)**:
+   the read-only plane is promoted to a REAL reactive ADR-11 session with ZERO new Go
+   APP logic (grep-proven, `grep-no-go-app-logic.txt`: `internal/kernel/operatorplane.go`
+   reads only substrate tables — durable_condition/gate_refusal/restart — never a `res_`
+   CRM table; the CRM stays entirely admitted rows). THREE additions, all riding existing
+   machinery: (1) **SSE live updates** — `/ui/operatorPlane` now mounts a continuation +
+   subscriptions to the durable_condition/gate_refusal "resources", so the SAME ADR-11 §6
+   invalidation loop re-renders it and pushes a splice frame onto its SSE stream; a restart
+   resolution (either door) emits the §6 `regel_invalidate` NOTIFY that wakes the plane
+   (witnessed frame in `scenario-f-operatorplane.txt` step 7 + `red-green-go-battery.txt`).
+   (2) **Approval-delta panel** — projects the pending→approve/abort/refuse transitions from
+   the durable_condition resolution rows (+ resolved_by). (3) **Write actions** — panel 1's
+   restart button is REAL: the inbox carries each row's continuation_id and the write walks
+   the EXISTING restart door (`POST /continuation/{id}/restart` / MCP `condition.restart`) —
+   no new authority. RED witnessed at the DOOR (not UI): stale `expectedHash` ⇒ 409
+   `CONDITION_MOVED`, unknown restart ⇒ 404 `NOT_FOUND`, refused writes change no state and
+   push no frame; GREEN restart resolves the condition. Standing proof:
+   `scripts/scenario-f-operatorplane.sh` (exit 0) + `TestR4OperatorPlaneReactiveWritesAndDelta`.
+   ADR-first (BUILD-F, ADR-12 §7). RE-NAMED RESIDUE (not silent): only the restart-door write
+   class is wired — the admission-door approve-a-pending-patch write (mint the §6 one-shot
+   token FROM the plane) is NOT, and panel-2's richer capability/PII/DDL BLAST-RADIUS delta
+   beside pending green Verdicts, plus panel-3 masked-impersonation / reveal-grant mint and
+   panel-4 catalog/audit browse, remain unbuilt (why-safe: those add NEW surfaces/authority
+   over the admission + reveal-grant doors; the restart-door class was landable without new
+   Go app logic, the rest are the next increment). Component lowering still renders
+   `props.<field>` depth-1.
 5. **R5 M5 §3a suite size — DISCHARGED (run 3, 2026-07-17, §4a)**: corpus
    expanded 15 → 52 under a new pin (k=3 refrozen against the new hash);
    pass@1 = pass@3 = 1.00 on N=52 ≥ 50, non-partial — all three §3a legs GREEN.

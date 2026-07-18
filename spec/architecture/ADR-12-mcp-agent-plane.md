@@ -394,6 +394,32 @@ four panels:
 Deferred, named: bulk condition operations, custom operator dashboards, agent-facing
 approval delegation, metrics beyond condition/audit browse.
 
+<!-- BUILD-F: R4 — operatorPlane v1.1 (STAGE-F, evidence-f/r4/). v1 shipped panels 1-2
+     server-rendered READ-ONLY (no SSE, no working restart POST). v1.1 promotes the plane
+     to a REAL reactive ADR-11 session WITHOUT adding CRM/operator business rules to Go
+     (grep-proven, internal/kernel/operatorplane.go touches only substrate tables):
+       • SSE LIVE — the /ui/operatorPlane mount now creates a continuation + subscriptions
+         to the durable_condition/gate_refusal "resources", so the SAME ADR-11 §6
+         invalidation loop re-renders it and pushes a splice frame onto its SSE stream. A
+         restart resolution (either door) emits the §6 `regel_invalidate` NOTIFY for
+         `durable_condition`, which is what wakes the plane. The chrome session's
+         continuation root_def_hash binds an existing (inert) definition hash — a chrome
+         session is stepped by runOperatorStep, never replays root code.
+       • WRITE — panel 1's restart button is now REAL: the inbox carries each row's
+         continuation_id, and the write walks the EXISTING restart door
+         (POST /continuation/{id}/restart / MCP condition.restart) — no new authority. RED
+         witnessed at the DOOR: stale expectedHash ⇒ 409 CONDITION_MOVED, unknown restart
+         ⇒ 404 NOT_FOUND, refused writes change no state and push no frame; GREEN resolves.
+       • APPROVAL-DELTA — a panel projecting the pending→resolved transitions
+         (durable_condition.resolved_restart = approve/abort/refuse + resolved_by), the
+         delta sourced from the condition/verdict rows.
+     STILL DEFERRED (re-named residues, not silent): panel-2's richer capability/PII/DDL
+     BLAST-RADIUS delta beside pending green Verdicts + the admission-door approve action
+     (mint the §6 one-shot token from the plane) — the restart-door write class is wired,
+     the admission-door approve write class is not; and panel 3 (masked impersonation /
+     reveal-grant mint) + panel 4 (catalog/audit browse) remain unbuilt. -->
+
+
 **Restart-decision competence — accuracy floor gates the agent's restart authority.** <!-- R1-13: restart-decision accuracy gate; red ⇒ agent condition.restart ships disabled -->
 The `expectedHash` fence guarantees resuming the *right row*, not the *right decision*: a
 hash-valid, capability-valid, **semantically-wrong** `condition.restart {restart_name, args}`

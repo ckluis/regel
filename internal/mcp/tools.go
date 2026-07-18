@@ -368,6 +368,10 @@ func (s *Server) toolConditionRestart(ctx context.Context, conn *pgwire.Conn, p 
 	if err != nil {
 		return map[string]any{"status": "refused", "code": restartErrCode(err), "detail": err.Error()}, nil
 	}
+	// R4 (ADR-11 §6): publish the dependency-exact invalidation so operatorPlane
+	// sessions subscribed to durable_condition re-render live off this resolution.
+	_, _ = conn.Exec(ctx, `SELECT pg_notify('regel_invalidate', $1)`,
+		"durable_condition\x1f"+a.ConditionID+"\x1f*")
 	return map[string]any{"status": outcomeStatus(out)}, nil
 }
 

@@ -427,6 +427,13 @@ WHERE continuation_id = $1 AND status = 'open' ORDER BY signaled_at DESC LIMIT 1
 		return
 	}
 
+	// R4 (ADR-11 §6): the resolution committed, so publish the dependency-exact
+	// invalidation for this condition — the operatorPlane sessions subscribed to
+	// durable_condition re-render live (the resolved row leaves the inbox, its
+	// pending→resolved transition lands in the approval-delta panel). Domain-agnostic
+	// reactive plumbing; the resolution already walked the restart door above.
+	_ = notifyInvalidate(r.Context(), conn, "durable_condition", condID, "*")
+
 	switch out.Kind {
 	case cek.OutDone:
 		writeJSON(w, 200, valueToJSON(out.Value))

@@ -127,6 +127,12 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 	if err != nil {
 		return cek.Outcome{}, nil, err
 	}
+	// STAGE-F R4: the operatorPlane re-renders off the substrate tables, not a derived
+	// resource — its step re-reads the three panels and splice-diffs each list against
+	// the last-sent key sequence, riding the identical §5 re-render→diff→frame path.
+	if sess.Kind == "operator" {
+		return s.runOperatorStep(ctx, conn, sessionID, atSeq, sess)
+	}
 	vm, err := loadViewMeta(ctx, conn, sess.Resource, nil)
 	if err != nil {
 		return cek.Outcome{}, nil, err

@@ -1,0 +1,19 @@
+# R4 — all standing scripts exit 0 (captured 2026-07-18T03:08:07Z)
+# 15 non-LLM scripts run green (incl. new scenario-f-operatorplane.sh);
+# m5-eval.sh + stranger-review.sh not run (require real 'claude -p' LLM; untouched by R4 diff).
+
+demo-reactive: EXIT 0
+demo-mcp-session: EXIT 0
+demo-taak: EXIT 0
+demo-kill9-resume: EXIT 0
+demo-admit-rollback: EXIT 0
+demo-erf-derive: EXIT 0
+drill-bad-epoch-revert: EXIT 0
+scenario-a-field-add: EXIT 0
+scenario-a2-settings-form: EXIT 0
+scenario-b-agent-patch: EXIT 0
+scenario-c-deploy-survive: EXIT 0
+scenario-d-asof-rollback: EXIT 0
+scenario-e-pii-shred: EXIT 0
+crm-setup: EXIT 0
+scenario-f-operatorplane: EXIT 0

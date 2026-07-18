@@ -31,19 +31,32 @@ import (
 // #16) fires and the CLI door / test exits nonzero. The canary NEVER mutates —
 // it is detection only; repair is the self-certifying byte-restore (ADR-02 §5.5).
 //
-// BUILD-E RESIDUE (why-safe): the pipeline leg is scoped to PRODUCT-scope app
-// definitions (name NOT LIKE 'std/%', scope_kind=0). std natives carry KNativeBody
-// nodes the ADR-01 grammar has no lowering production for (image.go), so they are
-// structurally un-relowerable by construction and covered by the encoder leg alone;
-// overlay-scope re-lowering (a per-scope resolver) is the same seam at a different
-// scope and rides the product proof. Every definition, std or app, gets the
-// encoder leg — so a tampered AST anywhere still screams.
+// BUILD-F R8 (STAGE-E §9 residue discharge): the pipeline leg now re-lowers app
+// definitions at EVERY scope — product AND every overlay scope (org/team/user/
+// package heads). Before this, the pipeline leg filtered `scope_kind=0 AND
+// scope_id=''`, so an overlay-scoped def (an agent/tenant patch that shadows the
+// product def for its own sandbox scope) was covered by the encoder leg alone: a
+// text↔AST seam drift on an overlay-only def — its stored AST hashing fine but its
+// canonical_text no longer re-lowering to that address — passed SILENTLY (witnessed
+// in migrate_test.go TestOverlayScopeCanaryReLower). The overlay leg re-lowers with
+// the SAME resolver admission itself uses (lowerPatch): product-scope resolution
+// with an external caller module — overlay-scope import resolution is a Stage-B
+// residue, so admission lowers overlay defs at product scope today and the canary
+// re-lowers them identically (the same seam). When Stage-B lands real per-scope
+// import resolution, both change together.
+//
+// std natives carry KNativeBody nodes the ADR-01 grammar has no lowering production
+// for (image.go), so they are structurally un-relowerable by construction and
+// covered by the encoder leg alone (name LIKE 'std/%' is still excluded from the
+// pipeline leg). Every definition, std or app, at every scope, gets the encoder
+// leg — so a tampered AST anywhere still screams.
 
 // CanaryFinding is one (address, leg) alarm payload (ADR-02 §5).
 type CanaryFinding struct {
 	Hash    string `json:"hash"`
 	Name    string `json:"name,omitempty"`
-	Leg     string `json:"leg"` // "encoder" | "pipeline"
+	Scope   string `json:"scope,omitempty"` // "kind:id" of the pointer re-lowered ("0:" = product)
+	Leg     string `json:"leg"`             // "encoder" | "pipeline"
 	Message string `json:"message"`
 }
 
@@ -77,19 +90,28 @@ func WorldRehashCanary(ctx context.Context, conn *pgwire.Conn, im *Image) ([]Can
 		}
 	}
 
-	// --- pipeline leg: product-scope app definitions (current heads) ---
+	// --- pipeline leg: app definitions at EVERY scope (current heads) ---
+	// BUILD-F R8: product AND overlay heads (scope_kind/scope_id carried), std
+	// excluded (un-relowerable native bodies). A def pointed at from multiple
+	// scopes is re-lowered once per pointer — an overlay-only def (unreachable
+	// from product) is now inspected where before it was pipeline-leg-invisible.
 	prows, err := conn.Query(ctx, `
-SELECT p.name, d.hash, d.canonical_text
+SELECT p.name, p.scope_kind, p.scope_id, d.hash, d.canonical_text
   FROM name_pointer p JOIN definition d ON d.hash = p.hash
- WHERE p.scope_kind = 0 AND p.scope_id = '' AND p.name NOT LIKE 'std/%'`)
+ WHERE p.name NOT LIKE 'std/%'
+ ORDER BY p.scope_kind, p.scope_id, p.name`)
 	if err != nil {
 		return nil, err
 	}
-	type approw struct{ name, hash, text string }
+	type approw struct {
+		name, hash, text string
+		scopeKind        int
+		scopeID          string
+	}
 	var apps []approw
 	for prows.Next() {
 		var a approw
-		if err := prows.Scan(&a.name, &a.hash, &a.text); err != nil {
+		if err := prows.Scan(&a.name, &a.scopeKind, &a.scopeID, &a.hash, &a.text); err != nil {
 			prows.Close()
 			return nil, err
 		}
@@ -100,7 +122,10 @@ SELECT p.name, d.hash, d.canonical_text
 	}
 	for _, a := range apps {
 		if msg := checkDefPipelineLeg(ctx, conn, a.name, a.hash, a.text); msg != "" {
-			findings = append(findings, CanaryFinding{Hash: a.hash, Name: a.name, Leg: "pipeline", Message: msg})
+			findings = append(findings, CanaryFinding{
+				Hash: a.hash, Name: a.name, Scope: scopeKey(Scope{Kind: a.scopeKind, ID: a.scopeID}),
+				Leg: "pipeline", Message: msg,
+			})
 		}
 	}
 

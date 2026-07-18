@@ -528,9 +528,10 @@ func cmdAdmit(args []string) int {
 	actor := fs.String("actor", "engineer:dev", "authenticated principal kind:id")
 	declare := fs.String("declare", "", "comma-separated declared capabilities")
 	tier := fs.String("tier", "trusted", "trusted|sandbox")
+	scope := fs.String("scope", "product", "target scope: product | org.ID | team.ID | user.ID | package.ID")
 	var bases multiFlag
 	fs.Var(&bases, "base", "expected head, name=hash (repeatable)")
-	_ = fs.Parse(permute(args, map[string]bool{"name-prefix": true, "actor": true, "declare": true, "tier": true, "base": true}))
+	_ = fs.Parse(permute(args, map[string]bool{"name-prefix": true, "actor": true, "declare": true, "tier": true, "scope": true, "base": true}))
 
 	files := fs.Args()
 	if len(files) == 0 || *namePrefix == "" {
@@ -538,8 +539,12 @@ func cmdAdmit(args []string) int {
 		return 2
 	}
 
+	// BUILD-F R8: a non-product --scope admits an OVERLAY-scoped head (the canary's
+	// pipeline leg now re-lowers these too). Non-agent principals keep Stage-A scope
+	// semantics (checkScopePolicy gates only agents), so an engineer can seed one.
+	sk, sid := scopeParts(*scope)
 	patch := admission.Patch{
-		TargetScope: admission.Scope{Kind: 0, ID: ""},
+		TargetScope: admission.Scope{Kind: sk, ID: sid},
 		BaseHashes:  map[string]string{},
 		Tier:        map[string]string{},
 	}

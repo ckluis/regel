@@ -305,9 +305,27 @@ durability machinery implemented existing ADR law without deviation.
    REFUSED and the condition stays open with zero trace; GREEN in
    `evidence-f/r7/green-path.txt`. The deep path now rides REAL frames on the
    Stage-B/D restart machinery, not synthetic ones.
-8. **R8 canary pipeline leg** scoped to product-scope app defs (std native bodies
-   are un-relowerable by construction; the encoder leg covers ALL defs, so tamper
-   anywhere screams). Overlay scope rides the product proof.
+8. **R8 canary pipeline leg — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r8/`)**:
+   the world-rehash canary's pipeline leg now re-lowers app defs at EVERY scope —
+   product AND every overlay scope (org/team/user/package heads), std still excluded
+   (un-relowerable native bodies). Before, the leg filtered `scope_kind=0 AND
+   scope_id=''`, so an overlay-only def (an agent/tenant patch shadowing product for
+   its own sandbox scope) was covered by the encoder leg alone and a text↔AST seam
+   drift on it — stored AST hashing fine, canonical_text no longer re-lowering to
+   that address — passed SILENTLY. The leg re-lowers with the SAME resolver admission
+   uses (product-scope resolution, external caller — overlay import resolution is the
+   Stage-B residue, so admission lowers overlay defs at product scope today and the
+   canary matches). RED witnessed first (`cli-witness.txt` step 5): the OLD canary
+   binary runs GREEN (exit 0) over a tampered overlay def — the blindness; step 6 the
+   EXTENDED binary runs RED (exit 1) over the SAME state, naming the overlay hash +
+   `scope:2:org1` on the pipeline leg (caught), green over healthy overlay in steps
+   3/7. Permanent regression: `internal/admission/migrate_test.go`
+   (`TestOverlayScopeCanaryReLower`, `go-test.txt`) proves the old product-only query
+   never SELECTs the overlay def, the encoder leg stays silent on the untampered AST,
+   and only the new pipeline coverage catches it. `regel admit --scope org.ID` added
+   (the enabling CLI door for overlay admission; non-agent principals keep Stage-A
+   scope semantics). No ADR change: ADR-02 §5 already mandates replay of "every
+   historical definition" — this brings the implementation up to that law.
 9. **R9 migrate-in-drill std pair — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r9-r11/`)**:
    the epoch-migrate drill now runs across a GENUINELY NEW std pair. The real std
    delta is `std/text.Slug` (`admission.BuildImageEpoch2`) — type-only, so it moves

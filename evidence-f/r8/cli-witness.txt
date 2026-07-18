@@ -1,0 +1,54 @@
+# R8 CLI witness — overlay-scoped def drift through the REAL `regel canary` door
+# Commands (exact):
+#   go build -o regel-new         ./cmd/regel     # extended pipeline leg (all scopes) + `admit --scope`
+#   go build -o regel-oldcanary   ./cmd/regel     # HEAD:internal/admission/canary.go (product-only pipeline leg) + `admit --scope`
+#   bash r8-cli-drive.sh                           # (driver reproduced inline below the banner)
+# Captured: 2026-07-17 — real PostgreSQL 16.13 (fresh throwaway DB, dropped at end)
+#
+# WITNESS: step 5 shows the OLD canary GREEN (exit 0) over a tampered overlay def
+#   (the blindness R8 names); step 6 shows the EXTENDED canary RED (exit 1) over the
+#   SAME state, naming the overlay hash + scope 2:org1 on the pipeline leg (caught);
+#   step 3 and step 7 show the extended canary GREEN over the healthy overlay state.
+# ---------------------------------------------------------------------------------
+### 1. bootstrap + genesis (fresh real PG DB regel_r8_1077)
+migrate-db: substrate applied
+genesis: epoch 1 pinned — std_manifest_root=6b9586523907575f dispatch_attestation=5dac87d4c124ccba
+
+### 2. admit an OVERLAY-scoped def through the real door: --scope org.org1
+  "outcome": "admitted",
+    "app/ov/ov": "r1_x3fpex1dkj0ccn8n1a8zx4epha38dnbh7f21jax7r5g3t829p9ng"
+-- name_pointer scope for app/ov/ov (proof it is overlay, not product):
+app/ov/ov  scope=2:org1
+
+### 3. canary GREEN over the healthy overlay state (extended binary)
+canary: GREEN — every stored definition rehashes to its address (both legs)
+   [exit=0]
+
+### 4. TAMPER the overlay def's canonical_text ONLY (AST untouched) — return 99 -> return 7
+   canonical_text now: export function ov(): number { return 7; }
+
+### 5. RED WITNESS — the OLD canary (product-only pipeline leg) is BLIND to the overlay drift
+canary: GREEN — every stored definition rehashes to its address (both legs)
+   [exit=0  <- 0 = GREEN over bad state = the blindness R8 names]
+
+### 6. CAUGHT — the EXTENDED canary re-lowers the overlay def and screams
+{"count":1,"event":"store.scrubber_tripped","pairs":[{"hash":"r1_x3fpex1dkj0ccn8n1a8zx4epha38dnbh7f21jax7r5g3t829p9ng","name":"app/ov/ov","scope":"2:org1","leg":"pipeline","message":"canonical_text re-lowers to r1_2mjm1nsjq22e0, not its address r1_x3fpex1dkj0cc (parse/lower drift)"}],"ts":"2026-07-17T21:30:16.032327Z"}
+{
+  "canary": "RED",
+  "findings": [
+    {
+      "hash": "r1_x3fpex1dkj0ccn8n1a8zx4epha38dnbh7f21jax7r5g3t829p9ng",
+      "name": "app/ov/ov",
+      "scope": "2:org1",
+      "leg": "pipeline",
+      "message": "canonical_text re-lowers to r1_2mjm1nsjq22e0, not its address r1_x3fpex1dkj0cc (parse/lower drift)"
+    }
+  ]
+}
+   [exit=1  <- nonzero = RED = caught]
+
+### 7. HEAL (restore return 99) — extended canary returns to GREEN
+canary: GREEN — every stored definition rehashes to its address (both legs)
+   [exit=0]
+
+### done — DB regel_r8_1077 dropped

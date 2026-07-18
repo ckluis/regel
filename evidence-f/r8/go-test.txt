@@ -1,0 +1,20 @@
+# R8 Go regression — the extended world-rehash canary re-lowers OVERLAY-scoped defs
+# Command (exact):
+#   go clean -testcache && go test ./internal/admission/ -run 'TestOverlayScopeCanaryReLower|TestWorldRehashCanaryGreenThenTamper' -count=1 -v
+# Captured: 2026-07-17 — real PostgreSQL 16.13
+#
+# TestOverlayScopeCanaryReLower: admits an overlay-scoped def (scope 2:org1) through the
+#   real gate; asserts the OLD product-only pipeline query never SELECTs it (permanent
+#   blindness proof); tampers its canonical_text ONLY (AST intact, so the encoder leg is
+#   blind); asserts the EXTENDED pipeline leg CATCHES it (finding names hash, leg=pipeline,
+#   scope=2:org1) while the encoder leg stays silent; heals and returns to green.
+# ---------------------------------------------------------------------------------
+=== RUN   TestWorldRehashCanaryGreenThenTamper
+{"count":1,"event":"store.scrubber_tripped","pairs":[{"hash":"r1_gar5sx27gvrgc7hkstdxdy7x5p0f3d3dny87qhxkw1sqek9rxaf0","leg":"encoder","message":"stored AST does not decode: rast: truncated TLV stream"}],"ts":"2026-07-17T21:30:36.080212Z"}
+--- PASS: TestWorldRehashCanaryGreenThenTamper (0.16s)
+=== RUN   TestOverlayScopeCanaryReLower
+{"count":1,"event":"store.scrubber_tripped","pairs":[{"hash":"r1_x3fpex1dkj0ccn8n1a8zx4epha38dnbh7f21jax7r5g3t829p9ng","name":"app/ov/ov","scope":"2:org1","leg":"pipeline","message":"canonical_text re-lowers to r1_2mjm1nsjq22e0, not its address r1_x3fpex1dkj0cc (parse/lower drift)"}],"ts":"2026-07-17T21:30:36.247981Z"}
+--- PASS: TestOverlayScopeCanaryReLower (0.17s)
+PASS
+ok  	regel.dev/regel/internal/admission	0.741s
+=== GOTEST_EXIT=0 ===

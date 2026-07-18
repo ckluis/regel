@@ -57,5 +57,7 @@
 
 - Stage F Workstream A: **DONE** 2026-07-17 — R7 DISCHARGED (real-frame agent restart via MCP door, red RESTART_DISABLED zero-trace, bfb9bbe); R9+R11 DISCHARGED (real std pair 6b9586→b2e0ac, latent migrate bug fixed: delta keys on name pointer not def hash; corpus 30→33 floor ratcheted, 6aa0fc1); R8 DISCHARGED (canary pipeline leg now re-lowers overlay-scoped defs, blindness witnessed then caught, b62404e). Evidence: evidence-f/{r7,r8,r9-r11}/. Zero BUILD-F ADR changes needed. 1 session cut survived (20 strands).
 
+- Stage F Workstream B: **DONE** 2026-07-17 — R1 DISCHARGED (25-case std/sql adversarial family; found+fixed real write-bypass: SELECT nextval()/setval() ran in autocommit, now every read wrapped READ ONLY txn so PG refuses; ADR-10 §4 boundary; 769719a). R10 DISCHARGED (revert fence was per-row 2N loop → set-based INSERT…SELECT+UPDATE ~10×; perf_budget epoch.hold_fence_ms 36ms/120ms gated, runaway red at 359ms; ADR-08 §6a + ADR-13 §3; dea3181; re-named: no per-claim hold read on 50k-storm path). R12 DISCHARGED (V2 catch-binder taint: provablyCleanThrow relaxes reference-free throws, each guarded by hostile that stays red; BONUS fixed latent template-throw escape; re-named: non-pii var-interp template stays conservative; 2d141f9). Evidence evidence-f/{r1,r10,r12}/.
+
 ## Next
-- Stage F Workstream B in flight, strictly serial: R1 → R10 → R12. Then C (R2/R4/R3/R13/R14), then D close-out.
+- Stage F Workstream C in flight, strictly serial: R2 → R4 → R3 → R13 → R14. Each lands as ADMITTED ROWS, not Go. Then D close-out.

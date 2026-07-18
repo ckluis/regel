@@ -458,14 +458,18 @@ func (w *v2walk) walkStmt(st *rast.Node) {
 		}
 	case rast.KTry:
 		// Kids = [tryBlock, catch|None, finallyBlock|None]. The catch binder is
-		// tainted CONSERVATIVELY when the try block throws any non-literal value —
-		// a thrown pii value re-enters scope through it.
+		// tainted when the try block throws a value that could carry pii: a thrown
+		// value re-enters scope through the binder. R12 (STAGE-F) tightened the old
+		// literal-atom-only trigger to provablyCleanThrow — a throw built ENTIRELY
+		// from literals (no variable/call/member reference) cannot carry a vault
+		// value, so its catch binder stays clean; anything else keeps the binder
+		// tainted, fail-closed.
 		w.walkStmt(st.Kids[0])
 		if !st.Kids[1].IsNone() {
 			c := st.Kids[1] // KCatch: U bit0 hasParam; Kids=[pattern|None, block]
 			base := len(w.env)
 			if c.U&1 == 1 {
-				pii := throwsNonLiteral(st.Kids[0])
+				pii := throwsPossiblyPii(st.Kids[0])
 				var ids []*rast.Node
 				collectBindIds(c.Kids[0], &ids)
 				for _, b := range ids {
@@ -481,21 +485,108 @@ func (w *v2walk) walkStmt(st *rast.Node) {
 	}
 }
 
-// throwsNonLiteral reports whether any KThrow under n throws a non-literal
-// expression (the conservative catch-binder taint trigger: only literal throws
-// are provably pii-free without cross-scope resolution).
-func throwsNonLiteral(n *rast.Node) bool {
+// throwsPossiblyPii reports whether any KThrow under n throws a value that is NOT
+// provably pii-free — the R12 (STAGE-F) catch-binder taint trigger. It replaces
+// the old throwsNonLiteral (any non-literal-atom throw tainted the binder), which
+// falsely rejected safe composite-literal throws (a concat/template of literals)
+// AND — because it treated EVERY template as a literal — let a pii-interpolated
+// template throw through clean (a latent escape). The precise trigger taints iff
+// some throw is not provablyCleanThrow.
+func throwsPossiblyPii(n *rast.Node) bool {
 	if n == nil {
 		return false
 	}
-	if n.Kind == rast.KThrow && len(n.Kids) > 0 && !isLiteralNode(n.Kids[0]) {
+	if n.Kind == rast.KThrow && len(n.Kids) > 0 && !provablyCleanThrow(n.Kids[0]) {
 		return true
 	}
 	for _, k := range n.Kids {
-		if throwsNonLiteral(k) {
+		if throwsPossiblyPii(k) {
 			return true
 		}
 	}
+	return false
+}
+
+// provablyCleanThrow reports whether a thrown expression is provably pii-free
+// WITHOUT any scope/environment resolution. It is true only when the expression's
+// AST contains ZERO reference forms — no KLocal, KRef, KSelfRef, KName, KCall,
+// KMember or KIndex — anywhere. Vault/pii values enter an expression ONLY through
+// those forms (a bound name, a pii-returning call, or a field read), so an
+// expression built purely from literals and literal-composites cannot evaluate to
+// a vault value in ANY scope. This is a sound over-approximation of "clean": it
+// may call a genuinely-clean throw unclean (keeping the binder conservatively
+// tainted), but it NEVER calls a possibly-pii throw clean. Fail-closed by default.
+func provablyCleanThrow(n *rast.Node) bool {
+	if n == nil {
+		return false
+	}
+	switch n.Kind {
+	case rast.KNum, rast.KBigInt, rast.KStr, rast.KBool, rast.KNull, rast.KUndefined, rast.KRegex:
+		return true // atomic literal — no references
+	case rast.KTemplate:
+		// A template is clean iff every interpolated part is clean; KStrPart chunks
+		// are literal text. (Fixes the old blanket-clean-template escape.)
+		if len(n.Kids) == 0 || n.Kids[0] == nil {
+			return true
+		}
+		for _, part := range n.Kids[0].Kids {
+			if part.Kind == rast.KStrPart {
+				continue
+			}
+			if !provablyCleanThrow(part) {
+				return false
+			}
+		}
+		return true
+	case rast.KBinary, rast.KUnary, rast.KCond, rast.KTypeof, rast.KAsConst:
+		// Operators over clean operands stay clean (string concat / arithmetic /
+		// ternary of literals). A KBinary result over literal operands carries no
+		// reference. Every child must be clean.
+		for _, k := range n.Kids {
+			if !provablyCleanThrow(k) {
+				return false
+			}
+		}
+		return true
+	case rast.KSatisfy:
+		// Kids = [expr, type]; only the value child matters (the type is inert).
+		return len(n.Kids) > 0 && provablyCleanThrow(n.Kids[0])
+	case rast.KArray:
+		// Kids = [KList of elements]; every element must be clean.
+		if len(n.Kids) == 0 || n.Kids[0] == nil {
+			return true
+		}
+		for _, el := range n.Kids[0].Kids {
+			if el.Kind == rast.KSpread {
+				return false // a spread pulls from a reference — conservatively unclean
+			}
+			if !provablyCleanThrow(el) {
+				return false
+			}
+		}
+		return true
+	case rast.KObject:
+		// Every property VALUE must be clean; any spread ({...ref}) or computed key
+		// ({[ref]: …}) pulls from a reference and is unclean. Walk the raw prop list
+		// directly — objProps() drops spreads, which would hide {...owner}.
+		if len(n.Kids) == 0 || n.Kids[0] == nil {
+			return true // {}
+		}
+		for _, p := range n.Kids[0].Kids {
+			if p == nil || p.Kind != rast.KProp { // KSpread or unexpected
+				return false
+			}
+			if p.U&1 == 1 { // computed key
+				return false
+			}
+			if len(p.Kids) < 2 || !provablyCleanThrow(p.Kids[1]) {
+				return false
+			}
+		}
+		return true
+	}
+	// KLocal / KRef / KSelfRef / KName / KCall / KMember / KIndex / KAwait / … :
+	// any reference form (or anything unrecognized) is conservatively unclean.
 	return false
 }
 

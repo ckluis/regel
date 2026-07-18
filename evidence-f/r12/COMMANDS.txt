@@ -1,0 +1,49 @@
+R12 — V2 catch-binder taint precision. Discharge evidence.
+Real PostgreSQL 16.13 (Homebrew), DSN postgres://clank@localhost:5432/postgres.
+Repo root: /Users/clank/Desktop/projects/regel
+
+WHAT R12 WAS (STAGE-E.md §9.12): V2's catch-binder taint over-approximated. The old
+trigger `throwsNonLiteral` tainted the catch binder whenever the try block threw
+ANYTHING that was not a bare literal atom (KNum/KStr/KBool/…). Two defects fell out:
+  (a) FALSE REJECTION: a throw of a composite built only from literals — a concat
+      ("err-" + "42") or a template — carries no vault value, yet the catch binder
+      was tainted and a boundary sink over it was refused (safe code rejected).
+  (b) LATENT ESCAPE: `throwsNonLiteral` leaned on isLiteralNode, which treated EVERY
+      template as a literal — so `throw `+"`err ${owner}`"+` produced a CLEAN binder and
+      write(e) ADMITTED a real pii leak.
+
+THE FIX (internal/admission/flow.go): replaced `throwsNonLiteral` with
+`throwsPossiblyPii`, driven by a new `provablyCleanThrow(expr)` predicate. A throw is
+provably clean iff its AST contains ZERO reference forms (no KLocal/KRef/KSelfRef/
+KName/KCall/KMember/KIndex) anywhere — literals, and literal-composites (KBinary/
+KUnary/KCond/KTypeof/KArray/KObject/KTemplate over clean parts). Vault values enter an
+expression ONLY through those reference forms, so a reference-free throw cannot carry
+pii in ANY scope — no env/De-Bruijn resolution needed. Fail-closed: any reference (or
+unrecognized node, or object spread / computed key / array spread) is unclean.
+
+SOUNDNESS: provablyCleanThrow is a sound over-approximation of "clean" — it may call a
+genuinely-clean throw unclean (binder stays conservatively tainted), but NEVER calls a
+possibly-pii throw clean. No real pii escape is admitted.
+
+Commands:
+  # BEFORE (production reverted via `git stash push -- internal/admission/flow.go`,
+  # current tests): shows the false rejection + the latent escape, red.
+  go test ./internal/admission/ -run TestR12 -count=1 -v      > before.txt
+  # AFTER (fix applied): all five pass.
+  go test ./internal/admission/ -run TestR12 -count=1 -v      > after.txt
+  # Mutation / verifier_coverage gate still green (V2 mutants still killed):
+  go test ./internal/admission/ -run 'TestAdversarialHarness|TestC4V2|TestV2' -count=1 -v
+  # Full uncached suite vs real PG:
+  go clean -testcache && go test ./...                        > full-suite.txt
+
+BOTH DIRECTIONS (see before.txt / after.txt):
+  RELAXATION (was-red-now-green):
+    TestR12SafeBinaryThrowCatchAdmits   before: FAIL "rejected … PII_ESCAPE"  after: PASS (admitted)
+    TestR12SafeTemplateThrowCatchAdmits before: PASS (admitted)               after: PASS (admitted)
+  GUARDING HOSTILE (stays red):
+    TestR12HostileBinaryThrowCatchRejects   before: PASS (rejected)  after: PASS (rejected)  ← `"err: " + owner` leak refused
+    TestR12HostileTemplateThrowCatchRejects before: FAIL (ADMITTED!) after: PASS (rejected)  ← closes the template escape
+  NAMED RESIDUE (stays conservative, fail-closed):
+    TestR12VarInterpTemplateStaysConservative  after: PASS (rejected) ← `err ${n}` (n a clean number)
+      still tainted; proving n non-pii needs env-resolved taint, which the syntactic
+      predicate deliberately does not do. Sound; the stated remaining conservatism.

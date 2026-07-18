@@ -1,0 +1,18 @@
+ok  	regel.dev/regel/cmd/regel	3.482s
+ok  	regel.dev/regel/gate/m5eval	3.956s
+?   	regel.dev/regel/gate/nativetcb	[no test files]
+?   	regel.dev/regel/gate/redpath	[no test files]
+ok  	regel.dev/regel/internal/admission	20.109s
+ok  	regel.dev/regel/internal/catalog	3.406s
+ok  	regel.dev/regel/internal/cek	1.498s
+ok  	regel.dev/regel/internal/cfr	5.363s
+ok  	regel.dev/regel/internal/gitproj	4.897s
+ok  	regel.dev/regel/internal/kernel	424.809s
+ok  	regel.dev/regel/internal/lower	1.836s
+ok  	regel.dev/regel/internal/mcp	9.804s
+?   	regel.dev/regel/internal/mutants	[no test files]
+ok  	regel.dev/regel/internal/oracle	1.757s
+ok  	regel.dev/regel/internal/pgwire	1.614s
+ok  	regel.dev/regel/internal/rast	0.332s
+ok  	regel.dev/regel/internal/tsx	0.574s
+ok  	regel.dev/regel/internal/ui	0.591s

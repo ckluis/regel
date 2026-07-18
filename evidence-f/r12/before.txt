@@ -1,0 +1,16 @@
+=== RUN   TestR12SafeBinaryThrowCatchAdmits
+    r12_catch_binder_test.go:50: binary-of-literals throw logged in catch was rejected (false positive): "rejected" diags=[{StageOrVerifier:V2 Code:PII_ESCAPE Severity:error Subject:app/r12/safebin/safeBin Loc:{DefHash:r1_xqseh37wcht46vm3nkbqbbcxzdehapgj7tbreff47xnhv9n7ga30 Span:} Message:a vault value flows unmasked into the boundary sink std/log.write; mask() or take a reveal-grant first Fix:mask() the value at the boundary, take a reveal-grant, or route it through the vault; never sink or immortalize a vault value}]
+--- FAIL: TestR12SafeBinaryThrowCatchAdmits (0.20s)
+=== RUN   TestR12HostileBinaryThrowCatchRejects
+--- PASS: TestR12HostileBinaryThrowCatchRejects (0.13s)
+=== RUN   TestR12HostileTemplateThrowCatchRejects
+    r12_catch_binder_test.go:118: pii-interpolated template throw admitted (ESCAPE): "admitted" diags=[]
+--- FAIL: TestR12HostileTemplateThrowCatchRejects (0.13s)
+=== RUN   TestR12SafeTemplateThrowCatchAdmits
+--- PASS: TestR12SafeTemplateThrowCatchAdmits (0.13s)
+=== RUN   TestR12VarInterpTemplateStaysConservative
+    r12_catch_binder_test.go:183: var-interpolation template expected conservatively rejected, got "admitted" diags=[]
+--- FAIL: TestR12VarInterpTemplateStaysConservative (0.12s)
+FAIL
+FAIL	regel.dev/regel/internal/admission	1.114s
+FAIL

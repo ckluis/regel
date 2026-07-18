@@ -1,0 +1,12 @@
+=== RUN   TestR12SafeBinaryThrowCatchAdmits
+--- PASS: TestR12SafeBinaryThrowCatchAdmits (0.20s)
+=== RUN   TestR12HostileBinaryThrowCatchRejects
+--- PASS: TestR12HostileBinaryThrowCatchRejects (0.13s)
+=== RUN   TestR12HostileTemplateThrowCatchRejects
+--- PASS: TestR12HostileTemplateThrowCatchRejects (0.13s)
+=== RUN   TestR12SafeTemplateThrowCatchAdmits
+--- PASS: TestR12SafeTemplateThrowCatchAdmits (0.13s)
+=== RUN   TestR12VarInterpTemplateStaysConservative
+--- PASS: TestR12VarInterpTemplateStaysConservative (0.13s)
+PASS
+ok  	regel.dev/regel/internal/admission	1.104s

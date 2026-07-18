@@ -399,9 +399,21 @@ durability machinery implemented existing ADR law without deviation.
     `r11-golden.txt`). The `-regen` generator was scoped to `k*.cfr` so a synthetic
     regen never wipes the real blobs. (`continuation_coverage` DB table still unused;
     the committed file manifests are the floor.)
-12. **R12 V2 catch-binder taint is conservative** (non-literal throw ⇒ tainted);
-    literal throws stay clean — a stated over-approximation, fail-closed
-    direction.
+12. **R12 V2 catch-binder taint — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r12/`)**:
+    the old trigger `throwsNonLiteral` tainted the catch binder on ANY non-literal-atom
+    throw — falsely rejecting safe composite-literal throws (a concat/template of
+    literals), AND (via `isLiteralNode` treating every template as literal) letting a
+    pii-interpolated template throw through CLEAN (a latent escape, captured admitted in
+    `before.txt`). Replaced with `throwsPossiblyPii` + `provablyCleanThrow` (flow.go): a
+    throw is clean iff its AST has ZERO reference forms (no KLocal/KRef/KCall/KMember/…),
+    so it cannot carry a vault value in ANY scope — env-independent, fail-closed. Both
+    directions witnessed: `TestR12SafeBinaryThrowCatchAdmits` was-red-now-green;
+    `TestR12HostileBinaryThrowCatchRejects` (`"err: " + owner`) and
+    `TestR12HostileTemplateThrowCatchRejects` (`` `err ${owner}` ``, previously admitted)
+    stay red. Adversarial harness (V2 mutants) + C4/V2 suites green. RE-NAMED residue: a
+    template interpolating a NON-pii VARIABLE (`` `err ${n}` ``) stays conservatively
+    rejected (`TestR12VarInterpTemplateStaysConservative`) — proving `n` clean needs
+    env-resolved taint the syntactic predicate deliberately omits; sound, never admits pii.
 13. **R13 std envelope**: `files`/`i18n` batteries are stubs-with-shape;
     `test.fake` remains a stub; board card title/badge heuristics are presentation
     defaults (stranger-approved for the reference CRM).

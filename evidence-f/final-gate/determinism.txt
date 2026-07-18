@@ -1,0 +1,13 @@
+cmd: go test -v -run TestGateA_TwoFreshDBReproducibility|TestBuildImageDeterministic ./internal/admission/ + TestDeterminismReleaseGate ./internal/gitproj/ (HEAD 59c5fe6)
+--- genesis two-fresh-DB byte-identical ---
+=== RUN   TestGateA_TwoFreshDBReproducibility
+--- PASS: TestGateA_TwoFreshDBReproducibility (0.39s)
+=== RUN   TestBuildImageDeterministic
+--- PASS: TestBuildImageDeterministic (0.00s)
+PASS
+ok  	regel.dev/regel/internal/admission	0.723s
+--- git projection two-fold byte-identical ---
+=== RUN   TestDeterminismReleaseGate
+--- PASS: TestDeterminismReleaseGate (0.52s)
+PASS
+ok  	regel.dev/regel/internal/gitproj	0.859s

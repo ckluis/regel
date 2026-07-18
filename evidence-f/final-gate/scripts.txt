@@ -1,0 +1,19 @@
+cmd: run 17 deterministic scripts at HEAD 59c5fe6; m5-eval.sh + stranger-review.sh excluded (live-LLM / operator-scheduled)
+PASS exit0  crm-setup.sh
+PASS exit0  demo-admit-rollback.sh
+PASS exit0  demo-erf-derive.sh
+PASS exit0  demo-kill9-resume.sh
+PASS exit0  demo-mcp-session.sh
+PASS exit0  demo-reactive.sh
+PASS exit0  demo-taak.sh
+PASS exit0  drill-bad-epoch-revert.sh
+PASS exit0  scenario-a-field-add.sh
+PASS exit0  scenario-a2-settings-form.sh
+PASS exit0  scenario-b-agent-patch.sh
+PASS exit0  scenario-c-deploy-survive.sh
+PASS exit0  scenario-d-asof-rollback.sh
+PASS exit0  scenario-d2-asof-data.sh
+PASS exit0  scenario-e-pii-shred.sh
+PASS exit0  scenario-f-operatorplane.sh
+PASS exit0  scenario-g-files-i18n.sh
+=== deterministic scripts fail flag: 0 (count=17) ===

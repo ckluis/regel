@@ -1,0 +1,19 @@
+cmd: go clean -testcache && go test -p 1 ./... (serialized, clean env, HEAD 59c5fe6)
+ok  	regel.dev/regel/cmd/regel	2.076s
+ok  	regel.dev/regel/gate/m5eval	2.178s
+?   	regel.dev/regel/gate/nativetcb	[no test files]
+?   	regel.dev/regel/gate/redpath	[no test files]
+ok  	regel.dev/regel/internal/admission	17.146s
+ok  	regel.dev/regel/internal/catalog	1.264s
+ok  	regel.dev/regel/internal/cek	0.534s
+ok  	regel.dev/regel/internal/cfr	2.519s
+ok  	regel.dev/regel/internal/gitproj	2.263s
+ok  	regel.dev/regel/internal/kernel	422.789s
+ok  	regel.dev/regel/internal/lower	0.444s
+ok  	regel.dev/regel/internal/mcp	6.775s
+?   	regel.dev/regel/internal/mutants	[no test files]
+ok  	regel.dev/regel/internal/oracle	0.281s
+ok  	regel.dev/regel/internal/pgwire	0.538s
+ok  	regel.dev/regel/internal/rast	0.212s
+ok  	regel.dev/regel/internal/tsx	0.434s
+ok  	regel.dev/regel/internal/ui	0.207s

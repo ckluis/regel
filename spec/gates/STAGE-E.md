@@ -320,9 +320,33 @@ durability machinery implemented existing ADR law without deviation.
    wiring submit-event → server-side admission through the reactive bus (so the client
    itself drives the field-add) is the remaining increment, deliberately unbuilt to
    hold the no-new-Go / no-app-logic line.
-3. **R3 as-of mount scope**: read-only first-paint; live steps track head; as-of
-   observes SCHEMA/BEHAVIOR (template + code version), not historical row DATA —
-   derived-table point-in-time reconstruction from history is unbuilt.
+3. **R3 as-of ROW DATA — DISCHARGED (Stage-F, 2026-07-17, `evidence-f/r3/`)**: the
+   `?as_of=` mount now reconstructs historical ROW DATA, not only SCHEMA/BEHAVIOR. A
+   generic substrate helper (`asofRowsetPITR` + `asofDisplayCols` in
+   `internal/kernel/session.go` — grep-proven domain-agnostic: it reads only physical
+   table/column identifiers off `derived_resource`, zero CRM logic, zero new Go app
+   logic) builds a point-in-time subquery over `res_<slug>_history`: for each id, the
+   EARLIEST history row with `valid_from > asOf` (the OLD image live at asOf) else the
+   current base row. Threaded behind the existing mount through erfRead/erfList/
+   aggregateDashboard (detail, form, component, table, board, dashboard); resync/live
+   steps still track head (documented, unchanged). RED witnessed first
+   (`red-path.txt`, pre-R3 binary): "as-of T0 mount served the CURRENT value
+   'technology' — historical row DATA is NOT reconstructed". GREEN
+   (`scripts/scenario-d2-asof-data.sh`, exit 0, `green-path.txt`): `?as_of=T0` detail =
+   manufacturing/120000 (historical) while live = technology/999000; a row DELETEd
+   after T0 reconstructs as-of and is absent live; `?as_of=now` collapses to head.
+   **PII across as-of proven (`green-path.txt` step 6-7):** `?as_of=T0` is BEFORE a
+   crypto-shred yet the pii email stays MASKED and the plaintext is grep-ABSENT — the
+   history table has no pii column to resurrect (hard structural guarantee, not a
+   runtime check; anchored by `TestR3AsOfPIIStaysMasked`). Go anchors
+   `TestR3AsOfRowDataReconstruction` + `TestR3AsOfPIIStaysMasked` (`go-test.txt`).
+   ADR-first (BUILD-F, ADR-03 §3 "As-of ROW DATA reconstruction"). RE-NAMED residue
+   (why-safe): (a) the history trigger fires only on UPDATE/DELETE, so a row INSERTed
+   after asOf and never modified surfaces via the base leg — creation time untracked, an
+   INSERT-window is the later increment; (b) arbitrary `std/sql.query` as-of over
+   history is unbuilt (today it pins a REPEATABLE READ snapshot of the LIVE table); the
+   erf read/list/dashboard paths — every policy-scoped surface v1 renders — carry the
+   reconstruction.
 4. **R4 operatorPlane v1.1 — DISCHARGED (partial) (Stage-F, 2026-07-17, `evidence-f/r4/`)**:
    the read-only plane is promoted to a REAL reactive ADR-11 session with ZERO new Go
    APP logic (grep-proven, `grep-no-go-app-logic.txt`: `internal/kernel/operatorplane.go`

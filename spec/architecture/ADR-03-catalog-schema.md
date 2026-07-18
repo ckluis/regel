@@ -330,6 +330,35 @@ First hit wins (total shadow). As-of resolution is the identical query against
 `name_pointer_history` with `valid_from <= :t AND (valid_to IS NULL OR valid_to > :t)`;
 the GiST exclusion guarantees exactly one hash per (name, scope) at any instant.
 
+**As-of ROW DATA reconstruction (BUILD-F: R3).** The name-pointer as-of above rolls
+back *schema/behavior* (which code/template version was live at `:t`). The symmetric
+question — what *row values* a resource held at `:t` — is answered by the same "history
+is the substance" stance, against the per-resource business-row history table
+(`res_<slug>_history`, derived per ADR-10 §4). That table's `valid_from` records the
+instant a row STOPPED being current (the trigger writes the OLD image AFTER
+UPDATE/DELETE), i.e. it is a valid-*until* marker, so point-in-time reconstruction of
+row `id` at `:t` is:
+
+- the EARLIEST history row for that id with `valid_from > :t` — its OLD image is exactly
+  the value that was live at `:t` and was later superseded; else
+- the current base row, when no post-`:t` history exists (unchanged since before `:t`).
+
+A row DELETEd after `:t` still reconstructs (its DELETE history row carries the
+last-live image); a row deleted before `:t` is absent from both legs. **PII is
+structurally safe across as-of:** the history table mirrors only NON-pii columns (a
+pii field is vault-routed, no base/history column), so as-of reconstruction has no
+column from which to resurrect a shredded/masked value — a vault-shredded field stays
+shredded at any `:t`, before or after the shred. This is a hard guarantee (absent
+column), not a runtime check. **Soft edge (named):** the history trigger fires only on
+UPDATE/DELETE, so a row INSERTed after `:t` and never modified has no history window and
+surfaces via the base leg — creation time is not tracked; as-of over a stable
+pre-existing corpus is exact, a create-after-`:t` row is the deliberate omission (an
+INSERT-time history window is the later increment). The reconstruction is GENERIC
+substrate plumbing (`asofRowsetPITR` over identifiers derived from `derived_resource`,
+no business rule) and is served behind the existing `?as_of=` mount for the erf
+read/list/dashboard paths; arbitrary `std/sql.query` as-of over history is the named
+next increment (today it pins a REPEATABLE READ snapshot of the live table).
+
 **Visibility (R1-12: `private` is resolved, not just documented).** §2 mints
 `visibility='private'` pointers for non-exported top-level helpers, "resolvable only from
 within the module." Without a predicate the single resolver — which by design is the

@@ -150,7 +150,7 @@ func (s *Server) runSessionStep(ctx context.Context, conn *pgwire.Conn, sessionI
 		}
 	}
 
-	_, next, subs, _, rows, err := renderView(ctx, conn, vm, sess, mc)
+	_, next, subs, _, rows, err := renderView(ctx, conn, vm, sess, mc, nil)
 	if err != nil {
 		return cek.Outcome{}, nil, err
 	}

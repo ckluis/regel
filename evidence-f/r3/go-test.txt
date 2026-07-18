@@ -1,0 +1,10 @@
+=== RUN   TestAsOfMountRendersHistoricalSchema
+--- PASS: TestAsOfMountRendersHistoricalSchema (0.46s)
+=== RUN   TestAsOfMountBeforeAnyAdmissionFails
+--- PASS: TestAsOfMountBeforeAnyAdmissionFails (0.16s)
+=== RUN   TestR3AsOfRowDataReconstruction
+--- PASS: TestR3AsOfRowDataReconstruction (0.16s)
+=== RUN   TestR3AsOfPIIStaysMasked
+--- PASS: TestR3AsOfPIIStaysMasked (0.16s)
+PASS
+ok  	regel.dev/regel/internal/kernel	1.304s

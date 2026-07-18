@@ -263,7 +263,7 @@ func (s *Server) resyncSession(ctx context.Context, sessionID string) (resyncRes
 		if merr != nil {
 			return merr
 		}
-		html, state, _, _, _, err = renderView(ctx, conn, vm, sess, mc)
+		html, state, _, _, _, err = renderView(ctx, conn, vm, sess, mc, nil)
 		return err
 	}); rerr != nil {
 		return resyncResult{}, rerr

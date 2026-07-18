@@ -1,0 +1,34 @@
+STAGE-F R3 — as-of ROW DATA (point-in-time reconstruction) — evidence
+=====================================================================
+Real PostgreSQL 16.13. All captures below are real command output.
+
+FILES
+  red-path.txt    RED witness (pre-R3 binary): ?as_of=T0 detail mount serves the
+                  CURRENT row value, not the historical one — the residue.
+  green-path.txt  GREEN end-to-end (post-R3): scripts/scenario-d2-asof-data.sh,
+                  exit 0 — historical vs current row DATA, deleted-row
+                  reconstruction, ?as_of=now collapses to head, and PII stays
+                  masked across as-of (before the shred).
+  go-test.txt     Go anchors (real PG): TestR3AsOfRowDataReconstruction,
+                  TestR3AsOfPIIStaysMasked, TestAsOfMount* (schema leg intact).
+
+EXACT COMMANDS
+  # RED (pre-R3 binary built from HEAD before the R3 change):
+  git stash   # or build from the parent commit; then:
+  go build -o /tmp/regel-preR3 ./cmd/regel
+  bash evidence-f/r3/red-witness.sh /tmp/regel-preR3       # -> red-path.txt
+    (seed Globex industry=manufacturing; capture T0; UPDATE industry=technology;
+     ?as_of=T0 detail mount STILL renders 'technology' = RED)
+
+  # GREEN (post-R3):
+  bash scripts/scenario-d2-asof-data.sh                    # -> green-path.txt ; exit 0
+
+  # Go anchors, uncached, real PG:
+  go test ./internal/kernel/ -run 'TestR3AsOf|TestAsOfMount' -count=1 -v   # -> go-test.txt
+
+RECONSTRUCTION (generic substrate, ADR-03 BUILD-F)
+  internal/kernel/session.go: asofRowsetPITR + asofDisplayCols build a point-in-time
+  subquery over res_<slug>_history: for each id, the earliest history row with
+  valid_from > asOf (the OLD image live at asOf), else the current base row. Threaded
+  through erfRead/erfList/aggregateDashboard behind the existing ?as_of= mount. PII
+  columns are structurally absent from history, so as-of can never resurrect them.

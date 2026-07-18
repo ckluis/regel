@@ -1,0 +1,11 @@
+seeded Globex id=1 industry=manufacturing arr=120000
+boundary T0 = 2026-07-18T03:23:10.505759Z
+post-T0 UPDATE: industry=technology arr=999000 (history row written by trigger)
+history rows: 1
+
+=== LIVE detail mount (expect technology) ===
+technology
+=== AS-OF T0 detail mount (SHOULD be manufacturing; pre-R3 shows...) ===
+technology
+
+RED CONFIRMED: as-of T0 mount served the CURRENT value 'technology' — historical row DATA is NOT reconstructed (residue R3).

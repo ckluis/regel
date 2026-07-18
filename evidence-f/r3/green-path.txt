@@ -1,0 +1,49 @@
+### building regel binary
+### recreating database regel_crm_asof_data
+
+==============================================================
+STEP 0: substrate + genesis + admit Account/Contact; seed rows; seal Ada's pii email
+==============================================================
+seeded Globex#1 (manufacturing/120000), Initech#2, Contact Ada#1 (role=champion, email sealed)
+
+==============================================================
+STEP 1: capture boundary T0 (the pre-change world instant)
+==============================================================
+boundary T0 = 2026-07-18T03:22:56.816963Z
+
+==============================================================
+STEP 2: DATA changes AFTER T0 — UPDATE Globex + Ada, DELETE Initech, SHRED Ada email
+==============================================================
+post-T0: Globex→technology/999000 · Ada.role→blocker · Initech DELETED · Ada.email crypto-shredded
+history rows: account=2 contact=1
+
+==============================================================
+STEP 3: serve; Account DETAIL — live shows current, ?as_of=T0 reconstructs historical
+==============================================================
+PASS: live detail = technology / 999000 (current)
+PASS: as-of T0 detail = manufacturing / 120000 (HISTORICAL, point-in-time reconstructed)
+
+==============================================================
+STEP 4: ?as_of=<now> returns CURRENT (no stale historical bleed)
+==============================================================
+PASS: as-of NOW = current (technology) — the reconstruction collapses to head at the present instant
+
+==============================================================
+STEP 5: Account TABLE — as-of T0 reconstructs the DELETED row; live omits it
+==============================================================
+PASS: live table shows Globex, omits deleted Initech
+PASS: as-of T0 table reconstructs the pre-change roster (Globex@manufacturing + deleted Initech)
+
+==============================================================
+STEP 6: PII across as-of — ?as_of=T0 is BEFORE the shred, email STAYS MASKED, plaintext ABSENT
+==============================================================
+PASS: as-of T0 contact = role 'champion' (historical) · email MASKED · plaintext ABSENT even before the shred
+
+==============================================================
+STEP 7: the plaintext never lived in history either (structural PII exclusion)
+==============================================================
+PASS: history table has NO email column and NO plaintext — as-of reconstruction structurally cannot leak pii
+
+==============================================================
+DEMO OK — as-of ROW DATA reconstructed point-in-time: historical values behind ?as_of=T0, current behind live/?as_of=now, deleted rows reconstructed, and PII stays masked across as-of (history-excludes-PII holds)
+==============================================================

@@ -262,31 +262,128 @@ type subKey struct {
 func rowIDKey(id, horizon string) string { return "rowId:" + id + "@" + horizon }
 func horizonKey(hz string) string        { return "horizon:" + hz }
 
-// erfRead is the point-read native (ADR-11 §6): it reads ONE row of a resource by
-// id under the policy predicate (org-scoped), building RenderData for a detail/form
-// render and recording (resource, key=rowId) into the subscription set. Returns
-// ok=false when the row is absent or outside the session's horizon (policy denies).
-func erfRead(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, rowID, horizon string, subs *[]subKey) (ui.RenderData, string, bool, error) {
-	*subs = append(*subs, subKey{Resource: vm.Resource, Key: rowIDKey(rowID, horizon)})
-	sel := []string{"id::text", "coalesce(row_version,0)::text"}
-	names := []string{}
+// --- as-of ROW DATA reconstruction (STAGE-F R3, ADR-03 BUILD-F) ---------------
+//
+// asofDisplayCols returns the physical non-pii display columns for a resource's
+// fields, paired with the field names, in the SAME projection order the live erf
+// reads use (displayColumn). PII fields have no display column (they live only in
+// the vault) so they are absent here — which is exactly why as-of DATA can never
+// resurrect a shredded/PII value: there is no historical column to read.
+func asofDisplayCols(vm *viewMeta) (physCols, fieldNames []string) {
 	for _, f := range vm.Fields {
 		col := displayColumn(f)
 		if col == "" {
 			continue
 		}
-		sel = append(sel, "coalesce("+quoteIdent(col)+"::text,'')")
-		names = append(names, f.Name)
+		physCols = append(physCols, col)
+		fieldNames = append(fieldNames, f.Name)
 	}
-	where := "id=$1"
-	args := []any{rowID}
-	if vm.hasOrg() {
-		where += " AND org=$2"
-		args = append(args, horizon)
+	return physCols, fieldNames
+}
+
+// asofRowsetPITR builds a point-in-time (as-of) subquery over a derived resource's
+// non-pii history — GENERIC substrate plumbing: it knows only physical table/column
+// identifiers derived from the derived_resource shape, never any business rule. It
+// reconstructs, for every id, the row values that were LIVE at instant asOf:
+//
+//   - the trigger-history rows hold the OLD (pre-supersession) values with valid_from
+//     = the moment they stopped being current; so the EARLIEST history row recorded
+//     strictly after asOf is exactly the value that was live at asOf;
+//   - if a row has no post-asOf history, its current base row is unchanged since
+//     before asOf and is used directly;
+//   - a row deleted after asOf still reconstructs (its DELETE history row carries the
+//     last-live value); a row deleted before asOf is absent from both legs (correct).
+//
+// PII columns are structurally absent from history (Stage-D history-excludes-PII), so
+// this subquery cannot carry a vault/PII value at any instant — the live mask governs
+// historical renders identically to live ones.
+//
+// LIMITATION (documented, ADR-03 BUILD-F): the history trigger fires only on
+// UPDATE/DELETE, so a row INSERTed after asOf and never modified has no history and
+// surfaces via the base leg — row creation time is not tracked. as-of over a stable
+// pre-existing corpus is exact; a create-after-asOf row is the named soft edge.
+//
+// orgPos/asofPos are the caller's $N placeholders; the returned string is a
+// parenthesized subquery yielding (id, <physCols…>) suitable as a FROM source.
+func asofRowsetPITR(hist, base string, physCols []string, hasOrg bool, orgPos, asofPos string) string {
+	quoted := make([]string, len(physCols))
+	for i, c := range physCols {
+		quoted[i] = quoteIdent(c)
 	}
-	sqlStr := "SELECT " + strings.Join(sel, ", ") + " FROM " + quoteIdent(vm.Table) + " WHERE " + where
-	dests := make([]any, len(sel))
-	vals := make([]string, len(sel))
+	cols := strings.Join(quoted, ", ")
+	colsList := ""
+	if cols != "" {
+		colsList = ", " + cols
+	}
+	histOrg, baseOrg := "", ""
+	if hasOrg {
+		histOrg = " AND org = " + orgPos
+		baseOrg = "org = " + orgPos + " AND "
+	}
+	return "(WITH cand AS (\n" +
+		"  SELECT DISTINCT ON (id) id" + colsList + "\n" +
+		"  FROM " + hist + "\n" +
+		"  WHERE valid_from > " + asofPos + "::timestamptz" + histOrg + "\n" +
+		"  ORDER BY id, valid_from ASC, history_id ASC\n" +
+		")\n" +
+		"SELECT id" + colsList + " FROM cand\n" +
+		"UNION ALL\n" +
+		"SELECT id" + colsList + " FROM " + base + " b\n" +
+		"  WHERE " + baseOrg + "NOT EXISTS (SELECT 1 FROM cand WHERE cand.id = b.id))"
+}
+
+// erfRead is the point-read native (ADR-11 §6): it reads ONE row of a resource by
+// id under the policy predicate (org-scoped), building RenderData for a detail/form
+// render and recording (resource, key=rowId) into the subscription set. Returns
+// ok=false when the row is absent or outside the session's horizon (policy denies).
+func erfRead(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, rowID, horizon string, asOf *time.Time, subs *[]subKey) (ui.RenderData, string, bool, error) {
+	*subs = append(*subs, subKey{Resource: vm.Resource, Key: rowIDKey(rowID, horizon)})
+	var sqlStr string
+	var args []any
+	var ncols int
+	names := []string{}
+	if asOf != nil {
+		// R3: reconstruct this row's values as they were live at asOf from the
+		// non-pii trigger history (row_version is not historised — an as-of view is
+		// read-only, so it reports 0). Same projection order/masking as the live read.
+		physCols, fieldNames := asofDisplayCols(vm)
+		names = fieldNames
+		args = []any{*asOf}
+		asofPos, orgPos := "$1", ""
+		if vm.hasOrg() {
+			args = append(args, horizon)
+			orgPos = "$2"
+		}
+		args = append(args, rowID)
+		idPos := fmt.Sprintf("$%d", len(args))
+		sub := asofRowsetPITR(quoteIdent(vm.Table+"_history"), quoteIdent(vm.Table), physCols, vm.hasOrg(), orgPos, asofPos)
+		outSel := []string{"id::text", "'0'::text"}
+		for _, c := range physCols {
+			outSel = append(outSel, "coalesce("+quoteIdent(c)+"::text,'')")
+		}
+		sqlStr = "SELECT " + strings.Join(outSel, ", ") + " FROM " + sub + " t WHERE t.id = " + idPos + " LIMIT 1"
+		ncols = len(outSel)
+	} else {
+		sel := []string{"id::text", "coalesce(row_version,0)::text"}
+		for _, f := range vm.Fields {
+			col := displayColumn(f)
+			if col == "" {
+				continue
+			}
+			sel = append(sel, "coalesce("+quoteIdent(col)+"::text,'')")
+			names = append(names, f.Name)
+		}
+		where := "id=$1"
+		args = []any{rowID}
+		if vm.hasOrg() {
+			where += " AND org=$2"
+			args = append(args, horizon)
+		}
+		sqlStr = "SELECT " + strings.Join(sel, ", ") + " FROM " + quoteIdent(vm.Table) + " WHERE " + where
+		ncols = len(sel)
+	}
+	dests := make([]any, ncols)
+	vals := make([]string, ncols)
 	for i := range dests {
 		dests[i] = &vals[i]
 	}
@@ -309,25 +406,42 @@ func erfRead(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, rowID, horizo
 // the policy predicate (org-scoped rows only) for a table render, recording
 // (resource, key=horizon) into the subscription set — the horizon key the policy
 // filter uses, so invalidation respects policy for free.
-func erfList(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, horizon string, subs *[]subKey) ([]ui.RowData, error) {
+func erfList(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, horizon string, asOf *time.Time, subs *[]subKey) ([]ui.RowData, error) {
 	*subs = append(*subs, subKey{Resource: vm.Resource, Key: horizonKey(horizon)})
 	sel := []string{"id::text"}
 	names := []string{}
+	var physCols []string
 	for _, f := range vm.Fields {
 		col := displayColumn(f)
 		if col == "" {
 			continue
 		}
 		sel = append(sel, "coalesce("+quoteIdent(col)+"::text,'')")
+		physCols = append(physCols, col)
 		names = append(names, f.Name)
 	}
-	sqlStr := "SELECT " + strings.Join(sel, ", ") + " FROM " + quoteIdent(vm.Table)
-	args := []any{}
-	if vm.hasOrg() {
-		sqlStr += " WHERE org=$1"
-		args = append(args, horizon)
+	var sqlStr string
+	var args []any
+	if asOf != nil {
+		// R3: list the rows as they were live at asOf — point-in-time reconstruction
+		// over the non-pii history (same masking, PII structurally absent).
+		args = []any{*asOf}
+		asofPos, orgPos := "$1", ""
+		if vm.hasOrg() {
+			args = append(args, horizon)
+			orgPos = "$2"
+		}
+		sub := asofRowsetPITR(quoteIdent(vm.Table+"_history"), quoteIdent(vm.Table), physCols, vm.hasOrg(), orgPos, asofPos)
+		sqlStr = "SELECT " + strings.Join(sel, ", ") + " FROM " + sub + " t ORDER BY t.id"
+	} else {
+		sqlStr = "SELECT " + strings.Join(sel, ", ") + " FROM " + quoteIdent(vm.Table)
+		args = []any{}
+		if vm.hasOrg() {
+			sqlStr += " WHERE org=$1"
+			args = append(args, horizon)
+		}
+		sqlStr += " ORDER BY id"
 	}
-	sqlStr += " ORDER BY id"
 	rows, err := conn.Query(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, err
@@ -361,16 +475,28 @@ func erfList(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, horizon strin
 // path — the same SELECT-only read discipline std/sql.query enforces via dbReader,
 // issued kernel-side because the subscription-recording read lives in this loop
 // (BUILD-E marker: ADR-10 §4/§7, ADR-11 §6).
-func aggregateDashboard(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, horizon string, subs *[]subKey) (map[string]string, error) {
+func aggregateDashboard(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, horizon string, asOf *time.Time, subs *[]subKey) (map[string]string, error) {
 	*subs = append(*subs, subKey{Resource: vm.Resource, Key: horizonKey(horizon)})
 	out := map[string]string{}
 	where := ""
 	args := []any{}
-	if vm.hasOrg() {
+	tbl := quoteIdent(vm.Table)
+	if asOf != nil {
+		// R3: aggregate over the as-of reconstructed rowset (point-in-time), so the
+		// dashboard tiles report the counts/sums that were live at asOf. The subquery
+		// already scopes org via its own params; the outer WHERE stays empty.
+		physCols, _ := asofDisplayCols(vm)
+		args = []any{*asOf}
+		asofPos, orgPos := "$1", ""
+		if vm.hasOrg() {
+			args = append(args, horizon)
+			orgPos = "$2"
+		}
+		tbl = asofRowsetPITR(quoteIdent(vm.Table+"_history"), quoteIdent(vm.Table), physCols, vm.hasOrg(), orgPos, asofPos) + " t"
+	} else if vm.hasOrg() {
 		where = " WHERE org=$1"
 		args = append(args, horizon)
 	}
-	tbl := quoteIdent(vm.Table)
 	var total int64
 	if _, err := conn.QueryRow(ctx, "SELECT count(*) FROM "+tbl+where, args, &total); err != nil {
 		return nil, err
@@ -495,12 +621,13 @@ func boardKeysFromRows(t *ui.Template, rows []ui.RowData) map[string][]string {
 // renderView produces the first-paint state (slot snapshot + display map), the
 // subscription set, and (for a table) the ordered row data — reading live derived
 // tables through erf.read/list.
-func renderView(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, sess *sessionCFR, mc *ui.MaskCtx) (html string, state map[string]ui.Materialized, subs []subKey, rowVersion string, rows []ui.RowData, err error) {
+func renderView(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, sess *sessionCFR, mc *ui.MaskCtx, asOf *time.Time) (html string, state map[string]ui.Materialized, subs []subKey, rowVersion string, rows []ui.RowData, err error) {
 	t := vm.template(sess.Kind)
 	if sess.Kind == "table" || sess.Kind == "board" {
 		// board is a table read grouped by state (BUILD-E D2): erf lists the same
-		// horizon rows; RenderFirstPaint groups them into the states columns.
-		rowsData, lerr := erfList(ctx, conn, vm, sess.Horizon, &subs)
+		// horizon rows; RenderFirstPaint groups them into the states columns. R3: an
+		// as-of mount lists the point-in-time reconstructed rows, not the live head.
+		rowsData, lerr := erfList(ctx, conn, vm, sess.Horizon, asOf, &subs)
 		if lerr != nil {
 			return "", nil, nil, "", nil, lerr
 		}
@@ -512,7 +639,7 @@ func renderView(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, sess *sess
 		// BUILD-E D2: the dashboard aggregates over the resource (counts by
 		// state/select member, sums over money) via horizon-scoped SELECT-only
 		// reads, subscribing on the horizon so a mutation re-aggregates it live.
-		aggFields, aerr := aggregateDashboard(ctx, conn, vm, sess.Horizon, &subs)
+		aggFields, aerr := aggregateDashboard(ctx, conn, vm, sess.Horizon, asOf, &subs)
 		if aerr != nil {
 			return "", nil, nil, "", nil, aerr
 		}
@@ -532,7 +659,7 @@ func renderView(ctx context.Context, conn *pgwire.Conn, vm *viewMeta, sess *sess
 		t = ct
 	}
 
-	data, rv, ok, rerr := erfRead(ctx, conn, vm, sess.RowID, sess.Horizon, &subs)
+	data, rv, ok, rerr := erfRead(ctx, conn, vm, sess.RowID, sess.Horizon, asOf, &subs)
 	if rerr != nil {
 		return "", nil, nil, "", nil, rerr
 	}
@@ -733,7 +860,7 @@ func (s *Server) mountSession(ctx context.Context, view, principal, horizon, com
 			RowID: rowID, Principal: principal, Horizon: horizon,
 			Draft: map[string]string{}, UILocal: map[string]string{},
 		}
-		html, state, subs, rowVersion, rows, err = renderView(ctx, conn, vm, sess, mc)
+		html, state, subs, rowVersion, rows, err = renderView(ctx, conn, vm, sess, mc, asOf)
 		return err
 	}); rerr != nil {
 		return mountResult{}, rerr

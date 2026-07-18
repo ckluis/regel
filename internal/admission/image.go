@@ -277,6 +277,19 @@ func buildImage(epoch int, extra []rosterEntry, extraStubs map[string]string) *I
 		rosterEntry{module: "std/erf", export: "Row", defKind: rast.DefType, catKind: "type"},
 		rosterEntry{module: "std/erf", export: "read", defKind: rast.DefNative, catKind: "function", native: nativeStub, effectClass: "read"},
 		rosterEntry{module: "std/erf", export: "list", defKind: rast.DefNative, catKind: "function", native: nativeStub, effectClass: "read"},
+		// std/files (ADR-10 §3 SHIP minimal, BUILD-F R13): attach a file to an
+		// account. put() records a content-addressed `files.put` external-effect
+		// intent (effect class external, like log.write — no capability); delivery
+		// rides the existing outbox/FileSink door. Ships as a MODULE, NOT a `file`
+		// field type (the closed §5 roster stays at 13). File is the returned handle.
+		rosterEntry{module: "std/files", export: "File", defKind: rast.DefType, catKind: "type"},
+		rosterEntry{module: "std/files", export: "put", defKind: rast.DefNative, catKind: "function", native: cek.StdFilesPut, effectClass: "external"},
+		// std/i18n (ADR-10 §3 SHIP minimal, BUILD-F R13): the translation-rows surface
+		// deferred at Stage-D. t() is a PURE total lookup (no capability, no effect)
+		// with a fixed fallback chain; Bundle is the locale→key→string record type.
+		// Locale FORMATTING stays on the money/date semantic types (not this module).
+		rosterEntry{module: "std/i18n", export: "Bundle", defKind: rast.DefType, catKind: "type"},
+		rosterEntry{module: "std/i18n", export: "t", defKind: rast.DefNative, catKind: "function", native: cek.StdI18nT},
 	)
 	// std/ui: the closed 25 tier-1 semantic components (ADR-10 §7). Each is a native
 	// constructor returning a plain {component, props, children} record over the
@@ -521,6 +534,20 @@ func moduleStubs() map[string]string {
 		"/std/erf.ts": "export type Row = { readonly __erf: string };\n" +
 			"export declare const read: (resource: string, id: string) => Row;\n" +
 			"export declare const list: (resource: string) => Row[];\n",
+		// std/files L0 (BUILD-F R13, ADR-10 §3): attach a file to an account. File is
+		// the content-addressed handle (id = SHA-256(content)); put spools the intent.
+		"/std/files.ts": "export type File = {\n" +
+			"  readonly id: string;\n" +
+			"  readonly name: string;\n" +
+			"  readonly contentType: string;\n" +
+			"  readonly size: number;\n" +
+			"  readonly account: string;\n" +
+			"};\n" +
+			"export declare const put: (account: string, name: string, contentType: string, content: string) => File;\n",
+		// std/i18n L0 (BUILD-F R13, ADR-10 §3): the translation-rows surface. Bundle is
+		// locale → (key → string); t() is a pure lookup with a fixed fallback chain.
+		"/std/i18n.ts": "export type Bundle = { readonly [locale: string]: { readonly [key: string]: string } };\n" +
+			"export declare const t: (bundle: Bundle, locale: string, key: string) => string;\n",
 		// std/ui L0 (BUILD-D, ADR-10 §7): the closed 25 tier-1 components. Each is a
 		// constructor over {component, props, children}; the roster is generated so
 		// the stub can never drift from cek.UITier1.

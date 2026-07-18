@@ -1,0 +1,46 @@
+### building regel binary
+### recreating database regel_crm_r13
+
+==============================================================
+STEP 0: substrate + genesis (16-battery roster: std/files + std/i18n now SHIP)
+==============================================================
+PASS: std/files (2 rows: File+put) + std/i18n (2 rows: Bundle+t) are genesis name_pointers
+
+==============================================================
+STEP 1: admit Account + crm/attach.ts — the batteries now RESOLVE (was RED, see before.txt)
+==============================================================
+PASS: app/crm/attach admitted (imports std/files.put + std/i18n.t resolve)
+
+==============================================================
+STEP 2: seed one Account (Globex)
+==============================================================
+seeded: Globex
+
+==============================================================
+STEP 3: serve with a FileSink spool + the outbox dispatcher
+==============================================================
+kernel up: serve: outbox delivery → file spool /var/folders/_6/44y5p5453njbczf2l4nzx0_w0000gn/T/regel-r13-spool.XXXXXX.rrrGfLfEhW (hermetic; effectively-once)
+
+==============================================================
+STEP 4: attach a document in locale=es → std/i18n localizes the NAME, std/files content-addresses it
+==============================================================
+spooled artifact (es): /var/folders/_6/44y5p5453njbczf2l4nzx0_w0000gn/T/regel-r13-spool.XXXXXX.rrrGfLfEhW/3faaa800-346f-4696-8d27-6b3c8b5c2c16_1_0.json
+{"class":"files.put","dedup_key":"3faaa800-346f-4696-8d27-6b3c8b5c2c16:1:0","delivered_at":"2026-07-18T03:57:34.291289Z","payload":{"account":"Globex","content":"Globex master services agreement — signed 2026.","contentType":"text/plain","id":"fbf2eb6664f198fe7882003f4a84e8698b9fc91f207099c7b3c085666839c2a7","name":"Contrato.txt","size":49}}
+
+PASS(es): name=Contrato.txt (i18n) · content spooled (download) · id=SHA-256(content)=fbf2eb6664f198fe… (content-addressed)
+
+==============================================================
+STEP 5: attach in locale=en → the SAME lookup yields Contract.txt (locale the scenario sets drives it)
+==============================================================
+PASS(en): name=Contract.txt (i18n) · same content ⇒ same id (content-addressing is a function of bytes)
+
+==============================================================
+STEP 6: a missing-locale key falls back deterministically (i18n fixed fallback chain)
+==============================================================
+PASS(fr): unknown locale fell back through the fixed chain (fr → en) → Contract.txt — never empty, never a crash
+
+==============================================================
+DEMO OK — R13: the CRM consumes std/files + std/i18n (promoted DEFER→SHIP as genesis rows):
+  · std/i18n.t localized the attachment name per the locale the caller set (es/en), with a deterministic fallback
+  · std/files.put spooled a durable, readable, CONTENT-ADDRESSED artifact through the same outbox/FileSink door mail rides
+==============================================================

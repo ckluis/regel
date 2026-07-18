@@ -1,0 +1,9 @@
+# R13 GREEN — genesis determinism + manifest-root/attestation re-verification (promoted 16-battery roster)
+# date: 2026-07-18T03:58:28Z  PG 16.13
+# two fresh DBs booted on the SAME promoted binary:
+OLD std-manifest-root (14 batteries): 6b9586523907575f6a3418247a889353ea9e51a800ce5bed8c3cd2856e296323
+NEW std-manifest-root (16 batteries): e45baaa9ab0e7e65bacffe27a303edff1201252ad19a9eff680a31a45e864060   (A==B: IDENTICAL)
+OLD dispatch-attestation:             5dac87d4c124ccba322497769e9bdc10195c7a8afee3a3b65aa269c64de0a04a
+NEW dispatch-attestation:             7e01e93aa836b3a4efe2d76a2860dbf83b85614ec455f48bb7579410defa15bd   (A==B: IDENTICAL)
+std name_pointer count: 75 → 79 (+4: std/files.File, std/files.put, std/i18n.Bundle, std/i18n.t)
+definition-set digest A==B: IDENTICAL

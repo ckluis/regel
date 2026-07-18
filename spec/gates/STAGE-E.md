@@ -482,9 +482,29 @@ durability machinery implemented existing ADR law without deviation.
     template interpolating a NON-pii VARIABLE (`` `err ${n}` ``) stays conservatively
     rejected (`TestR12VarInterpTemplateStaysConservative`) — proving `n` clean needs
     env-resolved taint the syntactic predicate deliberately omits; sound, never admits pii.
-13. **R13 std envelope**: `files`/`i18n` batteries are stubs-with-shape;
-    `test.fake` remains a stub; board card title/badge heuristics are presentation
-    defaults (stranger-approved for the reference CRM).
+13. **R13 std envelope — `files`/`i18n` DISCHARGED (Stage-F, 2026-07-18, `evidence-f/r13/`)**:
+    both batteries promoted DEFER → SHIP as epoch-1 genesis rows (NativeBody→Go by hash),
+    Rule-of-Three-scoped to EXACTLY what the reference CRM's new `crm/attach` workflow consumes
+    (`scenario-g-files-i18n.sh`). `std/files` = `{File, put}`: `put(account,name,contentType,
+    content)` records a `files.put` external-sink intent (effect class `external`, no capability
+    — V2's non-capability sink arm guards pii into it) delivered effectively-once through the
+    SAME outbox/FileSink door mail rides, returning a CONTENT-ADDRESSED handle (`id =
+    SHA-256(content)`). `std/i18n` = `{Bundle, t}`: `t(bundle,locale,key)` is a pure/total
+    translation lookup with a fixed fallback chain (`[locale][key]` → `["en"][key]` → key). Ships
+    as MODULES, NOT a `file` field type (closed §5 roster stays at 13). Red-then-green witnessed:
+    `before.txt` = admission REFUSED (`IMPORT_UNRESOLVED` for both imports, stub world);
+    `after.txt` = admitted + run, spooled artifact carries the locale-localized name
+    (`Contrato.txt`/`Contract.txt`) + content + `id`=SHA-256(content). Genesis two-fresh-DB
+    determinism re-verified (`genesis-determinism.txt`): identical root/attestation/def-set across
+    two fresh DBs; std-manifest-root `6b958652…` → `e45baaa9…`, H_dispatch `5dac87d4…` →
+    `7e01e93a…`, std pointers 75 → 79 (+4). No M5-corpus edit ⇒ no eval-pin interaction
+    (`scripts/m5-eval.sh` green, epoch=1, corpus hash untouched). Uncached `go test ./...` green;
+    all 19 scripts exit 0. RE-NAMED residues (Rule-of-Three, why-safe): `files.get`/`files.list`,
+    an in-substrate blob table + HTTP download endpoint, and capability-gating `files.put` are
+    NOT shipped (unconsumed; "download" today = read the spool artifact's `payload.content`);
+    i18n pluralization/ICU/locale-negotiation NOT shipped (unconsumed). `test.fake` remains a stub
+    (no third consumer — ADR-10 §4 named residue); board card title/badge heuristics stay
+    presentation defaults (stranger-approved for the reference CRM).
 14. **R14 UX papercuts** carried in `docs/claim-evidence.md` §3 (CLI `--as-of`
     strictness, µs-precision boundaries, `--declare` token form + Stage-E
     additions).

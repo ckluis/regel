@@ -137,12 +137,43 @@ exercise. Each SHIP names its worst failure → containment (grafted from red-pa
 | `std/contract` | SHIP | (grammar-owed: pre/post combinators, ADR-02 §3) purity enforced by V4 |
 | `std/mime` | DEFER | arrives as a capability-gated binding until the third product |
 | `std/csv` | DEFER | import-as-dry-run is v2; first Rule-of-Three candidate |
-| `std/files` | DEFER | no reference-app consumer; widens the mask/validate surface |
-| `std/i18n` | DEFER (translation rows) | locale **formatting** still ships, carried inside the `money`/`date`/`datetime` semantic types — not as a module |
+| `std/files` | **SHIP (minimal: `files.put`)** — BUILD-F R13 | attachment content exfiltrated / silently lost → `files.put` is an **external sink** (effect class `external`, no capability): V2 treats it as a boundary (a Vault value into it, unmasked, is rejected) and the ADR-05 §7 step transaction spools the intent effectively-once through the same outbox/FileSink door mail rides. The handle is **content-addressed** (`id = SHA-256(content)`), so a corrupted/substituted blob is detectable. Consumed by `crm/attach` (scenario-g). |
+| `std/i18n` | **SHIP (minimal: `i18n.t` translation lookup)** — BUILD-F R13 | wrong-locale or missing-key label → `i18n.t(bundle, locale, key)` is a **pure, total** lookup with a fixed fallback chain (`bundle[locale][key]` → `bundle["en"][key]` → the key itself), so a missing translation degrades to a deterministic, never-crashing default rather than an empty/garbage render. Locale **formatting** still rides the `money`/`date`/`datetime` semantic types (unchanged); this module adds only the **translation-rows** surface (the part deferred at Stage-D). Consumed by `crm/attach` (scenario-g: the localized attachment name). |
 | mail templates | DEFER | v1 sends plain bodies |
 
 `all`/`race` live in `std/taak` with ADR-05 §5 join semantics; outside workflows they may
 complete inline when every branch resolves without a deferred wake (ADR-04 §2).
+
+**BUILD-F (R13) — `std/files` and `std/i18n` promoted DEFER → SHIP, minimal, red-pathed by a
+real consumer.** The Stage-E gate carried both as stubs-with-shape (residue R13). Rule-of-Three
+governs promotion: each ships EXACTLY the surface the reference CRM's new `crm/attach` workflow
+(scenario-g) consumes, and no more.
+- **`std/files` = `{ File, put }`.** `put(account, name, contentType, content) → File` records a
+  `files.put` external-effect intent (effect class `external`, like `log.write` — no capability)
+  and returns a **content-addressed** `File { id = SHA-256(content), name, contentType, size,
+  account }`. It ships as a MODULE (natives dispatched by hash), NOT as a `file` field type — the
+  closed §5 field-type roster stays at 13 (the `file`/`attachment` field type remains a
+  derivation-totality escape, still excluded). Delivery rides the EXISTING ADR-05 §7 outbox /
+  ADR-06 §5 FileSink door mail uses: the spooled artifact carries the content + id, so
+  "attach → durable, readable artifact" is real and effectively-once. **Deliberately NOT shipped
+  (named residues, Rule-of-Three):** `files.get`/`files.list` natives, an in-substrate blob
+  table + HTTP download endpoint, and capability-gating `files.put` — none is consumed by the
+  scenario. Download today = read the spool artifact's `payload.content`.
+- **`std/i18n` = `{ Bundle, t }`.** `t(bundle, locale, key) → string` is a PURE, total
+  translation lookup with a fixed fallback chain (`bundle[locale][key]` → `bundle["en"][key]` →
+  the key literal). This is the **translation-rows** surface Stage-D deferred; locale FORMATTING
+  is unchanged (still rides the `money`/`date`/`datetime` semantic types, not this module).
+  **Deliberately NOT shipped:** pluralization, ICU message syntax, locale-negotiation, and
+  translation-rows-as-catalog-rows — the app supplies its own bundle literal; none of the rest
+  is consumed.
+- Both are epoch-1 genesis roster adds: four new std `name_pointer`s (75 → 79) +
+  `NativeBody`/type hashes move the std-manifest-root (`6b958652…` → `e45baaa9…`), and both new
+  natives (`files.put`, `i18n.t`) enter the dispatch table, so `H_dispatch` also changes
+  (`5dac87d4…` → `7e01e93a…`); `i18n.t` is a PURE native (no effect/capability) but is still in
+  the dispatch bijection, so it too contributes to the attestation. Two-fresh-DB genesis
+  determinism (byte-identical definition set + identical root/attestation across two fresh
+  Postgres) + the dispatch bijection / attestation boot-refusals re-verified. No M5 corpus edit
+  ⇒ no eval-pin interaction (the pin is keyed on the on-disk M5 corpus hash + k, untouched).
 
 BUILD-C (increment C2 — the governance-vocabulary slice the V2/V4/V5 verifiers need is
 added minimal, behind the same seam, mirroring not inventing):
@@ -303,7 +334,7 @@ semantics and marking `board`/`badge` derivability.
 
 **Excluded from v1, each with its reason:** `multiselect` (not a 14th semantic type —
 ships as verifier-checked sugar over `relation` when the reference app earns it; see
-below), `file`/`attachment` (std/files deferred), `json` (an escape hatch from derivation
+below), `file`/`attachment` (the field TYPE stays excluded — a derivation-totality escape; **BUILD-F R13** ships `std/files` as a MODULE with `files.put`, NOT as a 14th field type, so the closed field-type roster is untouched), `json` (an escape hatch from derivation
 totality), `richtext`/`markdown` (rendering surface with no v1 consumer), `percent`,
 `duration`, `geo`, `id`-as-declared-field (every resource derives its typed key
 automatically), `computed` (deferred with aggregates). Every exclusion is deletable

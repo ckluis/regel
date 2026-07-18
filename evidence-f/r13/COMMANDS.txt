@@ -1,0 +1,34 @@
+# R13 — std envelope: promote `std/files` and `std/i18n` DEFER → SHIP (Stage-F)
+# Real PostgreSQL 16.13, no mocks. All output in this dir is CAPTURED, not narrated.
+#
+# EXACT COMMANDS (run from repo root /Users/clank/Desktop/projects/regel):
+#
+# --- RED (before.txt): batteries as stubs → the CRM consumer is REFUSED --------
+#   git stash push internal/admission/image.go internal/cek/stdworld.go \
+#                  gate/nativetcb/corpus.go spec/architecture/ADR-10-std-world.md
+#   go build -o $REDBIN ./cmd/regel                 # pre-promotion binary (14 batteries)
+#   REGEL_PG_DSN=…/regel_r13_red $REDBIN migrate-db && $REDBIN genesis
+#   $REDBIN admit crm/attach.ts --name-prefix app/crm --actor engineer:dev
+#     → outcome=rejected, code=IMPORT_UNRESOLVED for std/files.put AND std/i18n.t
+#   git stash pop                                   # restore the promotion
+#
+# --- GREEN (after.txt): batteries SHIP as genesis rows → consumer admits + runs -
+#   bash scripts/scenario-g-files-i18n.sh
+#     → genesis ships std/files (File+put) + std/i18n (Bundle+t) as name_pointers
+#     → admit crm/attach.ts succeeds; attach(Globex, locale, content) via /workflow
+#     → spooled files.put artifact: name localized per locale (Contrato.txt/Contract.txt),
+#       content present (download), id == SHA-256(content) (content-addressed)
+#
+# --- genesis-determinism.txt: two-fresh-DB byte-identical re-verification -------
+#   for DB in regel_r13_deta regel_r13_detb: create + migrate-db + genesis (same binary)
+#   compare epoch.std_manifest_root, epoch.dispatch_attestation, and the
+#   SHA-256 of (SELECT string_agg(hash ORDER BY hash) FROM definition) across A and B
+#     → all IDENTICAL; root 6b958652… → e45baaa9…; attestation 5dac87d4… → 7e01e93a…
+#
+# Files touched by the promotion:
+#   spec/architecture/ADR-10-std-world.md   (BUILD-F R13: DEFER→SHIP, exact surface)
+#   internal/cek/stdworld.go                (StdFilesPut, StdI18nT + i18nLookup)
+#   internal/admission/image.go             (roster entries + L0 stubs for both modules)
+#   gate/nativetcb/corpus.go                (std/files.put authority-inventory disposition)
+#   crm/attach.ts                           (the CRM consumer — the red path)
+#   scripts/scenario-g-files-i18n.sh        (the scenario that exercises it)

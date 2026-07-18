@@ -1,0 +1,75 @@
+# R13 RED PATH — std/files + std/i18n as stubs (DEFER): the CRM consumer is REFUSED
+# command: <pre-change binary> admit crm/attach.ts --name-prefix app/crm --actor engineer:dev
+# date: 2026-07-18T03:56:24Z   PG: 16.13   binary: HEAD (14-battery roster, before R13 promotion)
+# OLD std-manifest-root (epoch n=1, pre-promotion): 6b9586523907575f6a3418247a889353ea9e51a800ce5bed8c3cd2856e296323
+# OLD dispatch-attestation (H_dispatch):            5dac87d4c124ccba322497769e9bdc10195c7a8afee3a3b65aa269c64de0a04a
+# OLD std name_pointer count:                       75
+# VERDICT: outcome=rejected — IMPORT_UNRESOLVED for both std/files.put and std/i18n.t (no genesis rows exist)
+
+{
+  "outcome": "rejected",
+  "admitted": false,
+  "hashes": {},
+  "stages": [
+    {
+      "stage": "lower",
+      "status": "fail",
+      "ms": 1
+    }
+  ],
+  "diagnostics": [
+    {
+      "stage_or_verifier": "lower",
+      "code": "IMPORT_UNRESOLVED",
+      "severity": "error",
+      "subject": "app/crm",
+      "loc": {
+        "span": "app/crm:1:10"
+      },
+      "message": "import \"std/files.put\" does not resolve in the catalog",
+      "fix": "import does not resolve against std/ or app/ in the catalog"
+    },
+    {
+      "stage_or_verifier": "lower",
+      "code": "IMPORT_UNRESOLVED",
+      "severity": "error",
+      "subject": "app/crm",
+      "loc": {
+        "span": "app/crm:2:10"
+      },
+      "message": "import \"std/i18n.t\" does not resolve in the catalog",
+      "fix": "import does not resolve against std/ or app/ in the catalog"
+    },
+    {
+      "stage_or_verifier": "lower",
+      "code": "IMPORT_UNRESOLVED",
+      "severity": "error",
+      "subject": "app/crm",
+      "loc": {
+        "span": "app/crm:3:15"
+      },
+      "message": "import \"std/files.File\" does not resolve in the catalog",
+      "fix": "import does not resolve against std/ or app/ in the catalog"
+    }
+  ],
+  "refusal_id": "711282d3-06ff-4396-ab4d-1953fe1fb608",
+  "epoch": 1,
+  "base_snapshot": "2026-07-18T03:56:06.896475Z",
+  "delta": {
+    "capabilities": {
+      "requested": null,
+      "granted": null,
+      "added_vs_base": null
+    },
+    "pii_surface": {
+      "touched": null,
+      "added_vs_base": null
+    },
+    "ddl_surface": {
+      "statements": null,
+      "additive": false,
+      "added_vs_base": null
+    }
+  },
+  "seeders": null
+}

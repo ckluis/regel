@@ -226,6 +226,9 @@ var AuthorityInventory = []Disposition{
 	{Native: "std/taak.schedule",
 		CaughtBy:   "the ADR-05 §7 step transaction: the cron.schedule effect materializes its durable cron task row inside the committing step (atomic with the checkpoint), and the reactor's cron driver claims each due tick exactly once (FOR UPDATE SKIP LOCKED + atomic run_at advance)",
 		TrustedFor: "the recurring-spawn authority: a scheduled cron row fires its target workflow every interval under the system principal — the schedule content (interval, target) is trusted as the scheduling workflow authored it; each fired workflow's own effects remain exactly-once by the step transaction"},
+	{Native: "std/files.put",
+		CaughtBy:   "V2 pii-flow non-capability external-sink arm over the caller (isBoundarySink keys on the declared `external` effect class, same arm as log.write — a Vault value routed into the attachment content, unmasked, is rejected) + the ADR-10 §6 effect-order conformance gate guards the `external` declaration + the ADR-05 §7 step transaction spools the intent effectively-once (outbox row + deliver task commit atomically)",
+		TrustedFor: "the attachment egress authority: a grant-gated REVEALED value legitimately handed to files.put is trusted not to be re-exfiltrated — V2 bounds the unmasked-Vault-in path, not the post-reveal authority (same statement as the capability egress sinks). BUILD-F R13: files.put ships as a content-addressed spool intent (id = SHA-256(content)); a real durable blob store + download endpoint + files.get/list are named residues (not consumed by the reference CRM)"},
 	// --- irreducible kernel/crypto/derivation authority (class-level) ----------
 	{Native: "std/crypto.aeadSeal",
 		CaughtBy:   "",

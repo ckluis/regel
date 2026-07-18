@@ -258,3 +258,95 @@ func StdLogWrite(h *Host, args []Value) (Value, *NativePark) {
 	h.RecordEffect("log.write", map[string]any{"message": msg})
 	return undef(), nil
 }
+
+// --- std/files: minimal attachment surface (ADR-10 §3 SHIP, BUILD-F R13) ------
+
+// StdFilesPut is files.put(account, name, contentType, content) → File. It records
+// a `files.put` external-effect intent (effect class external, ADR-10 §6 — no
+// capability, like log.write): the ADR-05 §7 step transaction spools the intent
+// effectively-once through the same outbox / ADR-06 §5 FileSink door mail.send
+// rides, so the delivered spool artifact carries the content and is the durable,
+// readable attachment. The returned File handle is CONTENT-ADDRESSED — its id is
+// hex(SHA-256(content)) — so a substituted/corrupted blob is detectable and the
+// same bytes attach to the same id (idempotent by construction). Because files.put
+// is a declared external SINK, V2 rejects a Vault value routed into `content`
+// unmasked over the caller's AST (same arm as log.write), so pii cannot leak into
+// an attachment. No real durable blob store / download endpoint at this floor —
+// the spool artifact is the honest minimal storage (named residue, ADR-10 §3).
+func StdFilesPut(h *Host, args []Value) (Value, *NativePark) {
+	account, name, contentType, content := "", "", "", ""
+	if len(args) > 0 {
+		account = toStr(args[0])
+	}
+	if len(args) > 1 {
+		name = toStr(args[1])
+	}
+	if len(args) > 2 {
+		contentType = toStr(args[2])
+	}
+	if len(args) > 3 {
+		content = toStr(args[3])
+	}
+	sum := sha256.Sum256([]byte(content))
+	id := hex.EncodeToString(sum[:])
+	size := len(content)
+	h.RecordEffect("files.put", map[string]any{
+		"id":          id,
+		"account":     account,
+		"name":        name,
+		"contentType": contentType,
+		"size":        size,
+		"content":     content,
+	})
+	r := newRecord()
+	r.set("id", strVal(id))
+	r.set("name", strVal(name))
+	r.set("contentType", strVal(contentType))
+	r.set("size", f64(float64(size)))
+	r.set("account", strVal(account))
+	return recVal(r), nil
+}
+
+// --- std/i18n: minimal translation-rows surface (ADR-10 §3 SHIP, BUILD-F R13) --
+
+// StdI18nT is i18n.t(bundle, locale, key) → string: a PURE, TOTAL translation
+// lookup (no capability, no effect). bundle is a record of locale → (record of
+// key → string). The fallback chain is fixed and deterministic:
+//
+//	bundle[locale][key]  →  bundle["en"][key]  →  the key literal
+//
+// so a missing locale or key degrades to a stable default and never crashes or
+// renders empty. This is the ADR-10 §3 "translation rows" surface (the part
+// deferred at Stage-D); locale FORMATTING stays on the money/date semantic types.
+func StdI18nT(_ *Host, args []Value) (Value, *NativePark) {
+	if len(args) < 3 || args[0].Tag != TagRecord {
+		if len(args) >= 3 {
+			return strVal(toStr(args[2])), nil
+		}
+		return strVal(""), nil
+	}
+	bundle := args[0].rec()
+	locale := toStr(args[1])
+	key := toStr(args[2])
+	if s, ok := i18nLookup(bundle, locale, key); ok {
+		return strVal(s), nil
+	}
+	if s, ok := i18nLookup(bundle, "en", key); ok {
+		return strVal(s), nil
+	}
+	return strVal(key), nil // last-resort default: the key itself
+}
+
+// i18nLookup returns bundle[locale][key] as a string when both nestings resolve to
+// a record then a string value; ok=false routes the caller to the next fallback.
+func i18nLookup(bundle *RecordObj, locale, key string) (string, bool) {
+	lv, ok := bundle.get(locale)
+	if !ok || lv.Tag != TagRecord {
+		return "", false
+	}
+	sv, ok := lv.rec().get(key)
+	if !ok || sv.Tag != TagStr {
+		return "", false
+	}
+	return sv.S, true
+}

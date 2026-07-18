@@ -55,5 +55,7 @@
 
 - STAGE F (residue burn-down v1→v1.1): **OPEN** 2026-07-17 — operator GO on ALL FOUR workstreams (A depth-of-proof R7/R9+R11/R8; B hardening R1/R10/R12; C product surface R2/R4/R3/R13/R14; D close-out claim-evidence + FINAL.md + STAGE-F.md + final gate). Human stranger-review re-record stays OPERATOR-SCHEDULED.
 
+- Stage F Workstream A: **DONE** 2026-07-17 — R7 DISCHARGED (real-frame agent restart via MCP door, red RESTART_DISABLED zero-trace, bfb9bbe); R9+R11 DISCHARGED (real std pair 6b9586→b2e0ac, latent migrate bug fixed: delta keys on name pointer not def hash; corpus 30→33 floor ratcheted, 6aa0fc1); R8 DISCHARGED (canary pipeline leg now re-lowers overlay-scoped defs, blindness witnessed then caught, b62404e). Evidence: evidence-f/{r7,r8,r9-r11}/. Zero BUILD-F ADR changes needed. 1 session cut survived (20 strands).
+
 ## Next
-- Stage F Phase 1 (Workstream A) in flight, strictly serial: R7 → R9+R11 → R8. Then B, C, D per the Stage-F session prompt.
+- Stage F Workstream B in flight, strictly serial: R1 → R10 → R12. Then C (R2/R4/R3/R13/R14), then D close-out.
